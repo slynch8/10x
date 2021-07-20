@@ -3,9 +3,13 @@
 
 www.10xeditor.com
 
+10x is a new IDE/Editor from PureDev Software, written by Stewart Lynch.
+
 This repository is purely for 10x bug tracking
 
-10x is a new IDE/Editor from PureDev Software, written by Stewart Lynch.
+You can report feature requests here but please check the Roadmap first: https://www.10xeditor.com/roadmap.htm
+
+
 
 To find out more or download 10x please visit www.10xeditor.com
 
