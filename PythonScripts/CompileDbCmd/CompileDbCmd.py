@@ -55,4 +55,3 @@ def CompDbReload():
         ParseCompDb()
 
 N10X.Editor.AddOnWorkspaceOpenedFunction(ParseCompDb)
-ParseCompDb()
