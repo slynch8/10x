@@ -25,7 +25,7 @@ def ParseCompDb():
     compdb_path = os.path.normpath(compdb_path)
     
     if os.path.isfile(compdb_path):
-        print('[CompileCmdSupport.py]: Parsing compilation database: ' + compdb_path)
+        print('[CompileDbCmd.py]: Parsing compilation database: ' + compdb_path)
         start : float = time.perf_counter()
         with open(compdb_path, 'r') as f:
             compiledb_data = json.load(f)
@@ -33,7 +33,7 @@ def ParseCompDb():
 
         for compile_entry in compiledb_data:
             compile_entries[compile_entry['file']] = CompileEntry(compile_entry['directory'], compile_entry['command'])
-        print('[CompileCmdSupport.py]: Parse time: %fs' % (time.perf_counter() - start))
+        print('[CompileDbCmd.py]: Parse time: %fs' % (time.perf_counter() - start))
 
 def CompDbCompile():
     cur_filename:str = N10X.Editor.GetCurrentFilename()
