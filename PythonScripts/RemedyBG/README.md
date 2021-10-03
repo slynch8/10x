@@ -1,9 +1,10 @@
-# RemedyBG debugger sync 
+# RemedyBG debugger integration 
 
 ## Usage
-First, Launch RemedyBG and open your debug session. Then in 10x, Run `RemedyBGStartSync` command, it will detect the opened RemedyBG instance on your machine. After that, all your breakpoints in 10x, will be synced with your RemedyBG session.
+Select your active project, Run `RemedyBGStart` command, it will either launch a new RemedyBG session or detect the opened RemedyBG instance on your machine. After that, all your breakpoints in 10x, will be synced with your RemedyBG session. When you stat
 
 ## Commands
-- **RemedyBGStartSync**: Detects running RemedyBG instance and starts syncing breakpoints.
-- **RemedyBGStopSync**: Stops syncing breakpoints
+- **RemedyBGStart**: Detects running RemedyBG instance and starts syncing breakpoints.
+- **RemedyBGStop**: Stops debugging session. It will also close RemedyBG instance and removes all breakpoints
+- **RemedyBGRun**: Executes debug
 
