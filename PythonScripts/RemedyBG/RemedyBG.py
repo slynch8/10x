@@ -83,9 +83,13 @@ def RemedyBGStart():
         remedybg_exe = N10X.Editor.GetSetting("RemedyBG.Path")
         if not remedybg_exe:
             remedybg_exe = REMEDYBG_PROCESS
-        workspace_exe = N10X.Editor.GetWorkspaceExePath()
-        p = subprocess.Popen([remedybg_exe, workspace_exe], 
-                            shell=False, stdin=None, stdout=None, stderr=None, close_fds=True, creationflags=DETACHED_PROCESS)
+        
+        debug_cmd = N10X.Editor.GetDebugCommand()
+        debug_args = N10X.Editor.GetDebugCommandArgs()
+        debug_cwd = N10X.Editor.GetDebugCommandCwd()
+
+        p = subprocess.Popen(remedybg_exe + ' "' + debug_cmd + '" ' + debug_args, 
+                             shell=False, stdin=None, stdout=None, stderr=None, close_fds=True, creationflags=DETACHED_PROCESS, cwd=debug_cwd)
         if p.pid:
             remedybg_path = remedybg_exe
             remedybg_proc_id = p.pid
