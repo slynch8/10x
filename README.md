@@ -1,7 +1,7 @@
 # 10x Editor 
-![10x_logo](https://10xeditor.com/images/10x_title.png)
+![10x_logo](logo.png)
 
-10x is a new code editor from PureDev Software, written by Stewart Lynch. [www.10xeditor.com](www.10xeditor.com) 
+10x is a new code editor from *[PureDev Software](https://puredevsoftware.com/)*, written by Stewart Lynch. [www.10xeditor.com](www.10xeditor.com) 
 
 This repository is mainly for 10x bug and feature tracking. It also contains python scripts contributed by the community.
 
