@@ -10,6 +10,9 @@ WINDOWSH_NAME:str = 'WindowsHModular-master'
 CH_URL:str = 'https://github.com/eliphatfs/c-std-headers/archive/refs/heads/main.zip'
 CH_NAME:str = 'c-std-headers-main'
 
+VULKANH_URL:str = 'https://github.com/KhronosGroup/Vulkan-Headers/archive/refs/heads/main.zip'
+VULKANH_NAME:str = 'Vulkan-Headers-main'
+
 def _InstallHeaders(url, name, include_subdir):
     if N10X.Editor.GetWorkspaceOpenComplete()[0]:
         headers_tempfile = os.path.join(tempfile.gettempdir(), tempfile.gettempprefix() + name + '.zip')
@@ -27,3 +30,6 @@ def InstallHeadersWindows():
 
 def InstallHeadersC():
     _InstallHeaders(CH_URL, CH_NAME, 'include')
+
+def InstallHeadersVulkan():
+    _InstallHeaders(VULKANH_URL, VULKANH_NAME, os.path.join('include', 'vulkan'))
