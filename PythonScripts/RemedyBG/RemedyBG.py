@@ -19,6 +19,7 @@ remedybg_active_project:str = None
 remedybg_breakpoints:RemedyBGBreakpoint = []
 remedybg_update_timer_start:float = 0
 remedybg_run_after_build = False
+remedybg_run_to_cursor_after_build = False
 
 def _RemedyBGFindProcess()->bool:
     global remedybg_path
@@ -182,6 +183,48 @@ def RemedyBGRun():
     else:
         _RemedyBGStartDebug()
 
+def _RemedyBGRunToCursor():
+    if remedybg_started and remedybg_proc_id != 0:
+        filename = N10X.Editor.GetCurrentFilename()
+        line_index = N10X.Editor.GetCursorPos()[1]
+        subprocess.Popen([remedybg_path, "run-to-cursor", filename, str(line_index + 1)], 
+                    shell=False, stdin=None, stdout=None, stderr=None, close_fds=True, creationflags=DETACHED_PROCESS)
+
+def RemedyBGRunToCursor(*, deny_rebuild=False):
+    """
+    Provides RunToCursor behaviour from VisualStudio/RemedyBG (Control + F10)
+    Command also:
+      rebuilds the workspace if BuildBeforeStartDebugging is set
+      tries to launch the debugger
+      syncs the breakpoints
+
+    deny_rebuild option can be passed to the function to ignore settings
+    this allows you to have 2 bindings. For example:
+      Control F10 to run and rebuild
+      Control Shift F10 to run without rebuild
+    """
+    global remedybg_run_to_cursor_after_build
+    if not remedybg_started:
+        print('[RemedyBG.py]: remedybg session is not started, starting a new session ...')
+        RemedyBGStart()
+        time.sleep(0.1)
+
+    if remedybg_started and remedybg_proc_id == 0:
+        _RemedyBGExecuteProcess()
+        _RemedyBGSyncCurrentBreakpoints()
+        time.sleep(0.1)
+
+    build_before_debug = True if \
+        (N10X.Editor.GetSetting("BuildBeforeStartDebugging") and N10X.Editor.GetSetting("BuildBeforeStartDebugging")[0] == 't') else False
+    if deny_rebuild:
+        build_before_debug = False
+
+    if build_before_debug:
+        remedybg_run_to_cursor_after_build = True
+        N10X.Editor.ExecuteCommand('BuildActiveWorkspace')
+    else:
+        _RemedyBGRunToCursor()
+
 def _RemedyBGUpdate():
     global remedybg_update_timer_start
     global remedybg_active_project
@@ -206,9 +249,13 @@ def _RemedyBGUpdate():
 
 def _RemedyBGBuildFinished(result):
     global remedybg_run_after_build
+    global remedybg_run_to_cursor_after_build
     if remedybg_run_after_build and result:
         _RemedyBGStartDebug()
+    if remedybg_run_to_cursor_after_build and result:
+        _RemedyBGRunToCursor()
     remedybg_run_after_build = False
+    remedybg_run_to_cursor_after_build = False
 
 N10X.Editor.AddOnWorkspaceOpenedFunction(_RemedyBGOnWorkspaceOpened)
 N10X.Editor.AddBreakpointAddedFunction(_RemedyBGAddBreakpoint)
