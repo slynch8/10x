@@ -8,9 +8,13 @@ import N10X
 # To enable Vim editing set Vim to true oin the 10x settings file
 #
 #------------------------------------------------------------------------
+g_VimEnabled = False
 g_CommandMode = False
 
 g_PrevCommand = None
+g_RepeatCount = None
+
+g_VisualMode = False
 
 #------------------------------------------------------------------------
 def EnableInsertMode():
@@ -29,7 +33,60 @@ def EnableCommandMode():
 		N10X.Editor.ResetCursorBlink()
 
 #------------------------------------------------------------------------
+# Misc
+
+#------------------------------------------------------------------------
+def IsCommandPrefix(c):
+	return \
+		c == "c" or \
+		c == "d" or \
+		c == "g" or \
+		c == ">" or \
+		c == "<" or \
+		c == "y"
+
+#------------------------------------------------------------------------
+def GetRepeatCount():
+	global g_RepeatCount
+	if g_RepeatCount == None:
+		return 1
+	else:
+		return g_RepeatCount
+
+#------------------------------------------------------------------------
+def RepeatedCommand(command, reset_visial_mode=True):
+	for i in range(GetRepeatCount()):
+		if callable(command):
+			command()
+		else:
+			N10X.Editor.ExecuteCommand(command)
+
+	if reset_visial_mode:
+		global g_VisualMode
+		g_VisualMode = False
+
+#------------------------------------------------------------------------
+def RepeatedEditCommand(command):
+	N10X.Editor.PushUndoGroup()
+	RepeatedCommand(command)
+	N10X.Editor.PopUndoGroup()
+
+#------------------------------------------------------------------------
 # Command Functions
+
+#------------------------------------------------------------------------
+# NOTE: Vim tries to maintain the x position, but not sure of the exact rules.
+# This screws up when the x coordinate does not exist, but is workable.
+def MoveToStartOfFile():
+	cursor_pos = N10X.Editor.GetCursorPos()
+	N10X.Editor.SetCursorPos((cursor_pos[0], 0))
+
+#------------------------------------------------------------------------
+def MoveToEndOfFile():
+	cursor_pos = N10X.Editor.GetCursorPos()
+	line_count = N10X.Editor.GetLineCount()
+
+	N10X.Editor.SetCursorPos((cursor_pos[0], line_count-1))
 
 #------------------------------------------------------------------------
 def MoveToStartOfLine():
@@ -55,11 +112,12 @@ def GetWordEnd():
 	cursor_pos = N10X.Editor.GetCursorPos()
 	line = N10X.Editor.GetLine(cursor_pos[1])
 	i = cursor_pos[0]
-	is_word_char = IsWordChar(line[i])
-	while i < len(line):
-		if IsWordChar(line[i]) != is_word_char:
-			break
-		i += 1
+	if i < len(line):
+		is_word_char = IsWordChar(line[i])
+		while i < len(line):
+			if IsWordChar(line[i]) != is_word_char:
+				break
+			i += 1
 	return i
 
 #------------------------------------------------------------------------
@@ -85,69 +143,192 @@ def HandleCommandModeChar(c):
 		command = g_PrevCommand + c
 		g_PrevCommand = None
 
+	global g_RepeatCount
+	is_repeat_key = False
+
+	global g_VisualMode
+
 	if command == "i":
 		EnableInsertMode()
-	
+
+	elif IsCommandPrefix(command):
+		g_PrevCommand = command
+
+	elif c >= '1' and c <= '9' or (c == '0' and g_RepeatCount != None):
+		if g_RepeatCount == None:
+			g_RepeatCount = int(c)
+		else:
+			g_RepeatCount = 10 * g_RepeatCount + int(c)
+		is_repeat_key = True
+
+	elif command == ":":
+		N10X.Editor.ExecuteCommand("ShowCommandPanel")
+		N10X.Editor.SetCommandPanelText(":")
+
+	elif command == "v":
+		if g_VisualMode:
+			g_VisualMode = False
+			N10X.Editor.ClearSelection()
+		else:
+			g_VisualMode = True
+
 	elif command == "dd":
-		N10X.Editor.ExecuteCommand("Cut")
+		RepeatedEditCommand("Cut")
 
 	elif command == "yy":
 		N10X.Editor.ExecuteCommand("Copy")
 
-	elif command == "p":
-		N10X.Editor.ExecuteCommand("Paste")
-
-	elif \
-		command == "c" or \
-		command == "d" or \
-		command == "y":
-		g_PrevCommand = command
+	elif command == "P":
+		RepeatedEditCommand("Paste")
 
 	elif command == "h":
-		N10X.Editor.ExecuteCommand("MoveCursorLeft")
-	
+		n10x_command = lambda:N10X.Editor.SendKey("Left", shift=g_VisualMode)
+		RepeatedCommand(n10x_command, reset_visial_mode=False);
+
 	elif command == "l":
-		N10X.Editor.ExecuteCommand("MoveCursorRight")
-	
+		n10x_command = lambda:N10X.Editor.SendKey("Right", shift=g_VisualMode)
+		RepeatedCommand(n10x_command, reset_visial_mode=False);
+
 	elif command == "k":
-		N10X.Editor.ExecuteCommand("MoveCursorUp")
-	
+		n10x_command = lambda:N10X.Editor.SendKey("Up", shift=g_VisualMode)
+		RepeatedCommand(n10x_command, reset_visial_mode=False);
+
 	elif command == "j":
-		N10X.Editor.ExecuteCommand("MoveCursorDown")
+		n10x_command = lambda:N10X.Editor.SendKey("Down", shift=g_VisualMode)
+		RepeatedCommand(n10x_command, reset_visial_mode=False);
 
 	if command == "0":
 		MoveToStartOfLine()
-		
+
 	elif command == "$":
 		MoveToEndOfLine()
 
 	elif command == "b":
-		N10X.Editor.ExecuteCommand("MoveCursorPrevWord")
+		RepeatedCommand("MoveCursorPrevWord")
 
 	elif command == "w":
-		N10X.Editor.ExecuteCommand("MoveCursorNextWord")
-	
+		RepeatedCommand("MoveCursorNextWord")
+
 	elif command == "cw":
 		CutToEndOfWordAndInsert()
+
+	elif command == "I":
+		MoveToStartOfLine();
+		N10X.Editor.ExecuteCommand("MoveCursorNextWord")
+		EnableInsertMode();
+
+	elif command == "a":
+		# NOTE: this bugs when trying pressing it at the end of a line.
+		# It shouldn't go to the next line, it should just go to the last possible position.
+		# This might be a byproduct of not using a block cursor in insertmode, where you
+		# actually can't go to the position after the last char.
+		N10X.Editor.ExecuteCommand("MoveCursorRight");
+		EnableInsertMode();
+
+	elif command == "A":
+		MoveToEndOfLine();
+		EnableInsertMode();
+
+	elif command == "e":
+		cursor_pos = N10X.Editor.GetCursorPos()
+		N10X.Editor.SetCursorPos((GetWordEnd(), cursor_pos[1]))
+
+	elif command == "p":
+		# In vim, the cursor should "stay with the line."
+		# Doing this for P seems to do some weird selection thing.
+		N10X.Editor.ExecuteCommand("MoveCursorDown");
+		N10X.Editor.ExecuteCommand("Paste")
+		N10X.Editor.ExecuteCommand("MoveCursorUp");
+
+	elif command == "*":
+		RepeatedCommand("FindInFileNextCurrentWord")
+
+	elif command == "#":
+		RepeatedCommand("FindInFilePrevCurrentWord")
+
+	elif command == "O":
+		N10X.Editor.ExecuteCommand("InsertLine");
+		EnableInsertMode();
+
+	# NOTE: This changes the cursor position, so if you undo, the cursor returns to the wrong
+	# place (1 down from where it should be).
+	elif command == "o":
+		N10X.Editor.ExecuteCommand("MoveCursorDown");
+		N10X.Editor.ExecuteCommand("InsertLine");
+		EnableInsertMode();
+
+	elif command == "gd":
+		N10X.Editor.ExecuteCommand("GotoSymbolDefinition");
+
+	# NOTE: in vim, this loops.
+	elif command == "gt":
+		N10X.Editor.ExecuteCommand("NextPanelTab");
+
+	elif command == "gT":
+		N10X.Editor.ExecuteCommand("PrevPanelTab");
+
+	elif command == "gg":
+		MoveToStartOfFile();
+
+	elif command == "G":
+		MoveToEndOfFile();
+
+	# NOTE: undo is pretty buggy with P/p stuff -- cursor position gets messed up.
+	elif command == "u":
+		RepeatedCommand("Undo")
+
+	elif command == ">>":
+		RepeatedCommand("IndentLine")
+
+	elif command == "<<":
+		RepeatedCommand("UnindentLine")
+
+	elif command == "x":
+		RepeatedEditCommand("Delete")
+
+	# reset repeat count
+	if (not is_repeat_key) and (not IsCommandPrefix(command)):
+		g_RepeatCount = None
 
 #------------------------------------------------------------------------
 def HandleCommandModeKey(key, shift, control, alt):
 
-	if key == "Left":
-		N10X.Editor.ExecuteCommand("MoveCursorLeft")
-	
-	elif key == "Right":
-		N10X.Editor.ExecuteCommand("MoveCursorRight")
-	
-	elif key == "Up":
-		N10X.Editor.ExecuteCommand("MoveCursorUp")
-	
-	elif key == "Down":
-		N10X.Editor.ExecuteCommand("MoveCursorDown")
+	handled = True
+
+	if key == "H" and alt:
+		N10X.Editor.ExecuteCommand("MovePanelFocusLeft")
+
+	elif key == "L" and alt:
+		N10X.Editor.ExecuteCommand("MovePanelFocusRight")
+
+	elif key == "J" and alt:
+		N10X.Editor.ExecuteCommand("MovePanelFocusDown")
+
+	elif key == "K" and alt:
+		N10X.Editor.ExecuteCommand("MovePanelFocusUp")
+
+	else:
+		handled = False
+
+	pass_through = \
+		control or \
+		alt or \
+		key == "Delete" or \
+		key == "Backspace" or \
+		key == "Up" or \
+		key == "Down" or \
+		key == "Left" or \
+		key == "Right"
+
+	if handled or pass_through:
+		global g_RepeatCount
+		g_RepeatCount = None
+
+	return not pass_through
 
 #------------------------------------------------------------------------
 def HandleInsertModeKey(key, shift, control, alt):
-	print("HandleInsertModeKey key:" + str(key))
+
 	if key == "Escape":
 		EnableCommandMode()
 		return True
@@ -163,36 +344,59 @@ def HandleInsertModeKey(key, shift, control, alt):
 # Called when a key is pressed.
 # Return true to surpress the key
 def OnInterceptKey(key, shift, control, alt):
-	global g_CommandMode
-	if g_CommandMode:
-		HandleCommandModeKey(key, shift, control, alt)
-	else:
-		HandleInsertModeKey(key, shift, control, alt)
-	return g_CommandMode
+	if N10X.Editor.TextEditorHasFocus():
+		global g_CommandMode
+		if g_CommandMode:
+			return HandleCommandModeKey(key, shift, control, alt)
+		else:
+			HandleInsertModeKey(key, shift, control, alt)
 
 #------------------------------------------------------------------------
 # Called when a char is to be inserted into the text editor.
 # Return true to surpress the char key.
 # If we are in command mode surpress all char keys
 def OnInterceptCharKey(c):
-	global g_CommandMode
-	if g_CommandMode:
-		HandleCommandModeChar(c)
+	if N10X.Editor.TextEditorHasFocus():
+		global g_CommandMode
+		if g_CommandMode:
+			HandleCommandModeChar(c)
+			return True
+
+#------------------------------------------------------------------------
+def HandleCommandPanelCommand(command):
+
+	if command == ":w":
+		N10X.Editor.ExecuteCommand("SaveFile")
 		return True
-	
+
+	if command == ":wq":
+		N10X.Editor.ExecuteCommand("SaveFile")
+		N10X.Editor.ExecuteCommand("CloseFile")
+		return True
+
+	if command == ":q":
+		N10X.Editor.ExecuteCommand("CloseFile")
+		return True
+
+	if command == ":q!":
+		N10X.Editor.DiscardUnsavedChanges()
+		N10X.Editor.ExecuteCommand("CloseFile")
+		return True
+
 #------------------------------------------------------------------------
 def EnableVim():
-	global g_CommandMode
+	global g_VimEnabled
 	enable_vim = N10X.Editor.GetSetting("Vim") == "true"
-	
-	if g_CommandMode != enable_vim:
-	
+
+	if g_VimEnabled != enable_vim:
+		g_VimEnabled = enable_vim
+
 		if enable_vim:
 			print("[vim] Enabling Vim")
 			N10X.Editor.AddOnInterceptCharKeyFunction(OnInterceptCharKey)
 			N10X.Editor.AddOnInterceptKeyFunction(OnInterceptKey)
 			EnableCommandMode()
-			
+
 		else:
 			print("[vim] Disabling Vim")
 			EnableInsertMode()
@@ -207,8 +411,10 @@ def OnSettingsChanged():
 #------------------------------------------------------------------------
 def InitialiseVim():
 	EnableVim()
-	
+
 #------------------------------------------------------------------------
 N10X.Editor.AddOnSettingsChangedFunction(OnSettingsChanged)
+N10X.Editor.AddCommandPanelHandlerFunction(HandleCommandPanelCommand)
+
 N10X.Editor.CallOnMainThread(InitialiseVim)
 
