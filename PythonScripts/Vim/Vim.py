@@ -54,14 +54,14 @@ def GetRepeatCount():
 		return g_RepeatCount
 
 #------------------------------------------------------------------------
-def RepeatedCommand(command, reset_visial_mode=True):
+def RepeatedCommand(command, exit_visual_mode=True):
 	for i in range(GetRepeatCount()):
 		if callable(command):
 			command()
 		else:
 			N10X.Editor.ExecuteCommand(command)
 
-	if reset_visial_mode:
+	if exit_visual_mode:
 		global g_VisualMode
 		g_VisualMode = False
 
@@ -176,26 +176,30 @@ def HandleCommandModeChar(c):
 		RepeatedEditCommand("Cut")
 
 	elif command == "yy":
+		MoveToStartOfLine()
+		n10x_command = lambda:N10X.Editor.SendKey("Down", shift=True)
+		RepeatedCommand(n10x_command, exit_visual_mode=False)
 		N10X.Editor.ExecuteCommand("Copy")
+		N10X.Editor.ClearSelection()
 
 	elif command == "P":
 		RepeatedEditCommand("Paste")
 
 	elif command == "h":
 		n10x_command = lambda:N10X.Editor.SendKey("Left", shift=g_VisualMode)
-		RepeatedCommand(n10x_command, reset_visial_mode=False);
+		RepeatedCommand(n10x_command, exit_visual_mode=False);
 
 	elif command == "l":
 		n10x_command = lambda:N10X.Editor.SendKey("Right", shift=g_VisualMode)
-		RepeatedCommand(n10x_command, reset_visial_mode=False);
+		RepeatedCommand(n10x_command, exit_visual_mode=False);
 
 	elif command == "k":
 		n10x_command = lambda:N10X.Editor.SendKey("Up", shift=g_VisualMode)
-		RepeatedCommand(n10x_command, reset_visial_mode=False);
+		RepeatedCommand(n10x_command, exit_visual_mode=False);
 
 	elif command == "j":
 		n10x_command = lambda:N10X.Editor.SendKey("Down", shift=g_VisualMode)
-		RepeatedCommand(n10x_command, reset_visial_mode=False);
+		RepeatedCommand(n10x_command, exit_visual_mode=False);
 
 	if command == "0":
 		MoveToStartOfLine()
