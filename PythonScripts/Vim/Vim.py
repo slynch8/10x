@@ -21,7 +21,7 @@ def EnableInsertMode():
 	global g_CommandMode
 	if g_CommandMode:
 		g_CommandMode = False
-		N10X.Editor.ClearCursorColourOverride()
+		N10X.Editor.SetCursorMode("Underscore")
 		N10X.Editor.ResetCursorBlink()
 
 #------------------------------------------------------------------------
@@ -29,8 +29,19 @@ def EnableCommandMode():
 	global g_CommandMode
 	if not g_CommandMode:
 		g_CommandMode = True
-		N10X.Editor.SetCursorColourOverride((255, 0, 0))
+		N10X.Editor.SetCursorMode("Block")
 		N10X.Editor.ResetCursorBlink()
+
+#------------------------------------------------------------------------
+def EnterVisualMode():
+	global g_VisualMode
+	g_VisualMode = True
+
+#------------------------------------------------------------------------
+def ExitVisualMode():
+	global g_VisualMode
+	g_VisualMode = False
+	N10X.Editor.ClearSelection()
 
 #------------------------------------------------------------------------
 # Misc
@@ -44,6 +55,16 @@ def IsCommandPrefix(c):
 		c == ">" or \
 		c == "<" or \
 		c == "y"
+
+#------------------------------------------------------------------------
+def SetPrevCommand(c):
+	global g_PrevCommand
+	if g_PrevCommand != c:
+		g_PrevCommand = c
+		if c:
+			N10X.Editor.SetCursorMode("HalfBlock")
+		else:
+			N10X.Editor.SetCursorMode("Block")
 
 #------------------------------------------------------------------------
 def GetRepeatCount():
@@ -141,7 +162,6 @@ def HandleCommandModeChar(c):
 	command = c
 	if g_PrevCommand:
 		command = g_PrevCommand + c
-		g_PrevCommand = None
 
 	global g_RepeatCount
 	is_repeat_key = False
@@ -152,7 +172,7 @@ def HandleCommandModeChar(c):
 		EnableInsertMode()
 
 	elif IsCommandPrefix(command):
-		g_PrevCommand = command
+		SetPrevCommand(command)
 
 	elif c >= '1' and c <= '9' or (c == '0' and g_RepeatCount != None):
 		if g_RepeatCount == None:
@@ -167,10 +187,9 @@ def HandleCommandModeChar(c):
 
 	elif command == "v":
 		if g_VisualMode:
-			g_VisualMode = False
-			N10X.Editor.ClearSelection()
+			ExitVisualMode()
 		else:
-			g_VisualMode = True
+			EnterVisualMode()
 
 	elif command == "dd":
 		RepeatedEditCommand("Cut")
@@ -257,9 +276,9 @@ def HandleCommandModeChar(c):
 	# NOTE: This changes the cursor position, so if you undo, the cursor returns to the wrong
 	# place (1 down from where it should be).
 	elif command == "o":
-		N10X.Editor.ExecuteCommand("MoveCursorDown");
-		N10X.Editor.ExecuteCommand("InsertLine");
-		EnableInsertMode();
+		MoveToEndOfLine()
+		N10X.Editor.SendKey("Enter")
+		EnableInsertMode()
 
 	elif command == "gd":
 		N10X.Editor.ExecuteCommand("GotoSymbolDefinition");
@@ -290,6 +309,9 @@ def HandleCommandModeChar(c):
 	elif command == "x":
 		RepeatedEditCommand("Delete")
 
+	if not IsCommandPrefix(command):
+		SetPrevCommand(None)
+
 	# reset repeat count
 	if (not is_repeat_key) and (not IsCommandPrefix(command)):
 		g_RepeatCount = None
@@ -299,7 +321,13 @@ def HandleCommandModeKey(key, shift, control, alt):
 
 	handled = True
 
-	if key == "H" and alt:
+	global g_VisualMode
+
+	if key == "Escape":
+		if g_VisualMode:
+			ExitVisualMode()
+		
+	elif key == "H" and alt:
 		N10X.Editor.ExecuteCommand("MovePanelFocusLeft")
 
 	elif key == "L" and alt:
@@ -317,6 +345,7 @@ def HandleCommandModeKey(key, shift, control, alt):
 	pass_through = \
 		control or \
 		alt or \
+		key == "Escape" or \
 		key == "Delete" or \
 		key == "Backspace" or \
 		key == "Up" or \
@@ -327,6 +356,7 @@ def HandleCommandModeKey(key, shift, control, alt):
 	if handled or pass_through:
 		global g_RepeatCount
 		g_RepeatCount = None
+		SetPrevCommand(None)
 
 	return not pass_through
 
@@ -404,6 +434,7 @@ def EnableVim():
 		else:
 			print("[vim] Disabling Vim")
 			EnableInsertMode()
+			N10X.Editor.ResetCursorMode()
 			N10X.Editor.RemoveOnInterceptCharKeyFunction(OnInterceptCharKey)
 			N10X.Editor.RemoveOnInterceptKeyFunction(OnInterceptKey)
 
