@@ -59,7 +59,7 @@ def IsCommandPrefix(c):
 #------------------------------------------------------------------------
 def SetPrevCommand(c):
 	global g_PrevCommand
-	if g_PrevCommand != c:
+	if g_CommandMode and g_PrevCommand != c:
 		g_PrevCommand = c
 		if c:
 			N10X.Editor.SetCursorMode("HalfBlock")
@@ -67,20 +67,22 @@ def SetPrevCommand(c):
 			N10X.Editor.SetCursorMode("Block")
 
 #------------------------------------------------------------------------
-def GetRepeatCount():
+def RepeatedCommand(command, exit_visual_mode=True):
+	
 	global g_RepeatCount
 	if g_RepeatCount == None:
-		return 1
-	else:
-		return g_RepeatCount
+		g_RepeatCount = 1
+	
+	while g_RepeatCount:
 
-#------------------------------------------------------------------------
-def RepeatedCommand(command, exit_visual_mode=True):
-	for i in range(GetRepeatCount()):
+		g_RepeatCount -= 1
+		
 		if callable(command):
 			command()
 		else:
 			N10X.Editor.ExecuteCommand(command)
+			
+	g_RepeatCount = None
 
 	if exit_visual_mode:
 		global g_VisualMode
@@ -143,14 +145,24 @@ def GetWordEnd():
 
 #------------------------------------------------------------------------
 def CutToEndOfWordAndInsert():
-	end = GetWordEnd()
+	global g_RepeatCount
+
 	cursor_pos = N10X.Editor.GetCursorPos()
-	line = N10X.Editor.GetLine(cursor_pos[1])
-	line = line[:cursor_pos[0]] + line[end:]
-	N10X.Editor.SetLine(cursor_pos[1], line)
-	EnableInsertMode()
 
-
+	if g_RepeatCount:
+		N10X.Editor.ExecuteCommand("MoveCursorNextWord")
+		end_cursor_pos = N10X.Editor.GetCursorPos()
+		line = N10X.Editor.GetLine(cursor_pos[1])
+		line = line[:cursor_pos[0]] + line[end_cursor_pos[0]:]
+		N10X.Editor.SetLine(cursor_pos[1], line)
+	else:
+		end = GetWordEnd()
+		line = N10X.Editor.GetLine(cursor_pos[1])
+		line = line[:cursor_pos[0]] + line[end:]
+		N10X.Editor.SetLine(cursor_pos[1], line)
+	
+	if not g_RepeatCount:
+		EnableInsertMode()
 
 #------------------------------------------------------------------------
 # Key Intercepting
@@ -233,7 +245,8 @@ def HandleCommandModeChar(c):
 		RepeatedCommand("MoveCursorNextWord")
 
 	elif command == "cw":
-		CutToEndOfWordAndInsert()
+		n10x_command = lambda:CutToEndOfWordAndInsert()
+		RepeatedCommand(n10x_command);
 
 	elif command == "I":
 		MoveToStartOfLine();
@@ -276,9 +289,9 @@ def HandleCommandModeChar(c):
 	# NOTE: This changes the cursor position, so if you undo, the cursor returns to the wrong
 	# place (1 down from where it should be).
 	elif command == "o":
+		EnableInsertMode()
 		MoveToEndOfLine()
 		N10X.Editor.SendKey("Enter")
-		EnableInsertMode()
 
 	elif command == "gd":
 		N10X.Editor.ExecuteCommand("GotoSymbolDefinition");
