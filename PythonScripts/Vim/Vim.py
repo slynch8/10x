@@ -14,16 +14,17 @@ g_CommandMode = False
 g_PrevCommand = None
 g_RepeatCount = None
 
-g_VisualMode = False
-
-g_LineVisualMode = False
-g_LineVisualModeStartPos = None
+g_VisualMode = None				# None, "standard", "line"
+g_VisualModeStartPos = None
 
 g_HandingKey = False
 
 #------------------------------------------------------------------------
+# Modes
+
+#------------------------------------------------------------------------
 def EnableInsertMode():
-	ExitAllVisualModes()
+	ExitVisualMode()
 	global g_CommandMode
 	if g_CommandMode:
 		g_CommandMode = False
@@ -39,39 +40,20 @@ def EnableCommandMode():
 		N10X.Editor.ResetCursorBlink()
 
 #------------------------------------------------------------------------
-def EnterVisualMode():
+def EnterVisualMode(mode):
 	global g_VisualMode
-	if not g_VisualMode:
-		ExitAllVisualModes()
-		g_VisualMode = True
+	global g_VisualModeStartPos
+	if g_VisualMode == None:
+		g_VisualModeStartPos = N10X.Editor.GetCursorPos()
+	g_VisualMode = mode
+	UpdateVisualModeSelection()
 
 #------------------------------------------------------------------------
 def ExitVisualMode():
 	global g_VisualMode
 	if g_VisualMode:
-		g_VisualMode = False
-		N10X.Editor.ClearSelection()
-
-#------------------------------------------------------------------------
-def EnterLineVisualMode():
-	ExitVisualMode()
-	global g_LineVisualMode
-	g_LineVisualMode = True
-	global g_LineVisualModeStartPos
-	g_LineVisualModeStartPos = N10X.Editor.GetCursorPos()
-	UpdateLineVisualModeSelection()
-
-#------------------------------------------------------------------------
-def ExitLineVisualMode():
-	global g_LineVisualMode
-	if g_LineVisualMode:
-		ClearLineVisualModeSelection()
-		g_LineVisualMode = False
-
-#------------------------------------------------------------------------
-def ExitAllVisualModes():
-	ExitVisualMode()
-	ExitLineVisualMode()
+		g_VisualMode = None
+		N10X.Editor.RemoveCursor(1)
 
 #------------------------------------------------------------------------
 # Misc
@@ -97,8 +79,8 @@ def SetPrevCommand(c):
 			N10X.Editor.SetCursorMode("Block")
 
 #------------------------------------------------------------------------
-def RepeatedCommand(command, exit_visual_mode=True):
-	
+def RepeatedCommand(command):
+
 	global g_RepeatCount
 	if g_RepeatCount == None:
 		g_RepeatCount = 1
@@ -114,12 +96,6 @@ def RepeatedCommand(command, exit_visual_mode=True):
 			
 	g_RepeatCount = None
 
-	if exit_visual_mode:
-		global g_VisualMode
-		g_VisualMode = False
-		global g_LineVisualMode
-		g_LineVisualMode = False
-
 #------------------------------------------------------------------------
 def RepeatedEditCommand(command):
 	N10X.Editor.PushUndoGroup()
@@ -127,33 +103,29 @@ def RepeatedEditCommand(command):
 	N10X.Editor.PopUndoGroup()
 
 #------------------------------------------------------------------------
-def ClearLineVisualModeSelection(moving_down=False):
-	global g_LineVisualModeStartPos
+def UpdateVisualModeSelection():
+	global g_VisualMode
+	global g_VisualModeStartPos
+	
 	cursor_pos = N10X.Editor.GetCursorPos()
-	cursor_pos = (g_LineVisualModeStartPos[0], cursor_pos[1])
-	if cursor_pos[1] > g_LineVisualModeStartPos[1]:
-		cursor_pos = (cursor_pos[0], cursor_pos[1] - 1)
-	if moving_down:
-		cursor_pos = (cursor_pos[0], cursor_pos[1] + 1)
-	N10X.Editor.SetCursorPos(cursor_pos)
+
+	if g_VisualMode == "standard":
+		N10X.Editor.SetCursorSelection(g_VisualModeStartPos, cursor_pos, cursor_index=1)
+		
+	elif g_VisualMode == "line":
+		start_line = min(g_VisualModeStartPos[1], cursor_pos[1])
+		end_line = max(g_VisualModeStartPos[1], cursor_pos[1])
+		N10X.Editor.SetCursorSelection((0, start_line), (0, end_line + 1), cursor_index=1)
+
+	N10X.Editor.SetCursorVisible(1, False)
 
 #------------------------------------------------------------------------
-def UpdateLineVisualModeSelection():
-	global g_LineVisualMode
-	global g_LineVisualModeStartPos
-	
-	if g_LineVisualMode:
-		cursor_pos = N10X.Editor.GetCursorPos()
-		
-		if cursor_pos[1] == g_LineVisualModeStartPos[1]:
-			N10X.Editor.SetCursorPos((0, cursor_pos[1]))
-			N10X.Editor.SetCursorPosSelect((0, cursor_pos[1] + 1))
-		elif cursor_pos[1] > g_LineVisualModeStartPos[1]:
-			N10X.Editor.SetCursorPos((0, g_LineVisualModeStartPos[1]))
-			N10X.Editor.SetCursorPosSelect((0, cursor_pos[1]))
-		else:
-			N10X.Editor.SetCursorPos((0, g_LineVisualModeStartPos[1] + 1))
-			N10X.Editor.SetCursorPosSelect((0, cursor_pos[1]))
+def SubmitVisualModeSelection():
+	global g_VisualMode
+	if g_VisualMode:
+		start_pos, end_pos = N10X.Editor.GetCursorSelection(cursor_index=1)
+		ExitVisualMode()
+		N10X.Editor.SetCursorSelection(start_pos, end_pos)
 			
 #------------------------------------------------------------------------
 # Command Functions
@@ -240,7 +212,6 @@ def HandleCommandModeChar(c):
 	is_repeat_key = False
 
 	global g_VisualMode
-	global g_LineVisualMode
 
 	if command == "i":
 		EnableInsertMode()
@@ -260,53 +231,54 @@ def HandleCommandModeChar(c):
 		N10X.Editor.SetCommandPanelText(":")
 
 	elif command == "v":
-		ExitLineVisualMode()
-		if g_VisualMode:
+		if g_VisualMode == "standard":
 			ExitVisualMode()
 		else:
-			EnterVisualMode()
+			EnterVisualMode("standard")
 
 	elif command == "V":
-		ExitVisualMode()
-		if g_LineVisualMode:
-			ExitLineVisualMode()
+		if g_VisualMode == "line":
+			ExitVisualMode()
 		else:
-			EnterLineVisualMode()
+			EnterVisualMode("line")
 
 	elif command == "dd":
+		SubmitVisualModeSelection()
 		RepeatedEditCommand("Cut")
 
 	elif command == "yy":
-		MoveToStartOfLine()
-		n10x_command = lambda:N10X.Editor.SendKey("Down", shift=True)
-		RepeatedCommand(n10x_command, exit_visual_mode=False)
+		if g_VisualMode:
+			SubmitVisualModeSelection()
+		else:
+			MoveToStartOfLine()
+			n10x_command = lambda:N10X.Editor.SendKey("Down", shift=True)
+			RepeatedCommand(n10x_command)
 		N10X.Editor.ExecuteCommand("Copy")
 		N10X.Editor.ClearSelection()
 
 	elif command == "P":
+		SubmitVisualModeSelection()
 		RepeatedEditCommand("Paste")
 
 	elif command == "h":
-		if not g_LineVisualMode:
-			n10x_command = lambda:N10X.Editor.SendKey("Left", shift=g_VisualMode)
-			RepeatedCommand(n10x_command, exit_visual_mode=False);
+		n10x_command = lambda:N10X.Editor.SendKey("Left")
+		RepeatedCommand(n10x_command);
+		UpdateVisualModeSelection()
 
 	elif command == "l":
-		if not g_LineVisualMode:
-			n10x_command = lambda:N10X.Editor.SendKey("Right", shift=g_VisualMode)
-			RepeatedCommand(n10x_command, exit_visual_mode=False);
+		n10x_command = lambda:N10X.Editor.SendKey("Right")
+		RepeatedCommand(n10x_command);
+		UpdateVisualModeSelection()
 
 	elif command == "k":
-		ClearLineVisualModeSelection()
-		n10x_command = lambda:N10X.Editor.SendKey("Up", shift=g_VisualMode)
-		RepeatedCommand(n10x_command, exit_visual_mode=False);
-		UpdateLineVisualModeSelection()
+		n10x_command = lambda:N10X.Editor.SendKey("Up")
+		RepeatedCommand(n10x_command);
+		UpdateVisualModeSelection()
 
 	elif command == "j":
-		ClearLineVisualModeSelection(moving_down=True)
-		n10x_command = lambda:N10X.Editor.SendKey("Down", shift=g_VisualMode)
-		RepeatedCommand(n10x_command, exit_visual_mode=False);
-		UpdateLineVisualModeSelection()
+		n10x_command = lambda:N10X.Editor.SendKey("Down")
+		RepeatedCommand(n10x_command);
+		UpdateVisualModeSelection()
 
 	if command == "0":
 		MoveToStartOfLine()
@@ -348,6 +320,7 @@ def HandleCommandModeChar(c):
 	elif command == "p":
 		# In vim, the cursor should "stay with the line."
 		# Doing this for P seems to do some weird selection thing.
+		SubmitVisualModeSelection()
 		N10X.Editor.ExecuteCommand("MoveCursorDown");
 		N10X.Editor.ExecuteCommand("Paste")
 		N10X.Editor.ExecuteCommand("MoveCursorUp");
@@ -359,24 +332,29 @@ def HandleCommandModeChar(c):
 		RepeatedCommand("FindInFilePrevCurrentWord")
 
 	elif command == "O":
+		ExitVisualMode()
 		N10X.Editor.ExecuteCommand("InsertLine");
 		EnableInsertMode();
 
 	# NOTE: This changes the cursor position, so if you undo, the cursor returns to the wrong
 	# place (1 down from where it should be).
 	elif command == "o":
+		ExitVisualMode()
 		EnableInsertMode()
 		MoveToEndOfLine()
 		N10X.Editor.SendKey("Enter")
 
 	elif command == "gd":
+		ExitVisualMode()
 		N10X.Editor.ExecuteCommand("GotoSymbolDefinition");
 
 	# NOTE: in vim, this loops.
 	elif command == "gt":
+		ExitVisualMode()
 		N10X.Editor.ExecuteCommand("NextPanelTab");
 
 	elif command == "gT":
+		ExitVisualMode()
 		N10X.Editor.ExecuteCommand("PrevPanelTab");
 
 	elif command == "gg":
@@ -387,15 +365,19 @@ def HandleCommandModeChar(c):
 
 	# NOTE: undo is pretty buggy with P/p stuff -- cursor position gets messed up.
 	elif command == "u":
+		ExitVisualMode()
 		RepeatedCommand("Undo")
 
 	elif command == ">>":
+		SubmitVisualModeSelection()
 		RepeatedCommand("IndentLine")
 
 	elif command == "<<":
+		SubmitVisualModeSelection()
 		RepeatedCommand("UnindentLine")
 
 	elif command == "x":
+		SubmitVisualModeSelection()
 		RepeatedEditCommand("Delete")
 
 	if not IsCommandPrefix(command):
@@ -420,7 +402,7 @@ def HandleCommandModeKey(key, shift, control, alt):
 	pass_through = False
 
 	if key == "Escape":
-		ExitAllVisualModes()
+		ExitVisualMode()
 		
 	elif key == "H" and alt:
 		N10X.Editor.ExecuteCommand("MovePanelFocusLeft")
@@ -434,35 +416,21 @@ def HandleCommandModeKey(key, shift, control, alt):
 	elif key == "K" and alt:
 		N10X.Editor.ExecuteCommand("MovePanelFocusUp")
 
-	elif key == "Up" and g_VisualMode and not shift:
-		N10X.Editor.SendKey("Up", shift=True)
-		UpdateLineVisualModeSelection()
-
-	elif key == "Down" and g_VisualMode and not shift:
-		N10X.Editor.SendKey("Down", shift=True)
-		UpdateLineVisualModeSelection()
-
-	elif key == "Left" and g_VisualMode and not shift:
-		N10X.Editor.SendKey("Left", shift=True)
-
-	elif key == "Right" and g_VisualMode and not shift:
-		N10X.Editor.SendKey("Right", shift=True)
-
-	elif key == "Up" and g_LineVisualMode:
-		ClearLineVisualModeSelection()
+	elif key == "Up" and g_VisualMode:
 		N10X.Editor.SendKey("Up")
-		UpdateLineVisualModeSelection()
+		UpdateVisualModeSelection()
 
-	elif key == "Down" and g_LineVisualMode:
-		ClearLineVisualModeSelection(moving_down=True)
+	elif key == "Down" and g_VisualMode:
 		N10X.Editor.SendKey("Down")
-		UpdateLineVisualModeSelection()
+		UpdateVisualModeSelection()
 
-	elif key == "Left" and g_LineVisualMode:
-		handled = True
+	elif key == "Left" and g_VisualMode:
+		N10X.Editor.SendKey("Left")
+		UpdateVisualModeSelection()
 
-	elif key == "Right" and g_LineVisualMode:
-		handled = True
+	elif key == "Right" and g_VisualMode:
+		N10X.Editor.SendKey("Right")
+		UpdateVisualModeSelection()
 
 	else:
 		handled = False
