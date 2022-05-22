@@ -6,7 +6,6 @@ import time
 
 DETACHED_PROCESS = 0x00000008
 REMEDYBG_PROCESS = "remedybg.exe"
-REMEDYBG_UPDATE_INTERVAL = 5.0
 
 class RemedyBGBreakpoint(NamedTuple):
     filename : str
@@ -17,9 +16,7 @@ remedybg_path:str = None
 remedybg_proc_id:int = 0
 remedybg_active_project:str = None
 remedybg_breakpoints:RemedyBGBreakpoint = []
-remedybg_update_timer_start:float = 0
 remedybg_run_after_build = False
-remedybg_run_to_cursor_after_build = False
 
 def _RemedyBGFindProcess()->bool:
     global remedybg_path
@@ -50,7 +47,7 @@ def _RemedyBGFindProcess()->bool:
     else:
         remedybg_path = None
         remedybg_proc_id = 0
-        print('[RemedyBG.py]: Error searching for remedybg process (wmic command)')
+        print('[RemedyBG]: Error searching for remedybg process (wmic command)')
         return False
 
 def _RemedyBGExecuteProcess():
@@ -76,7 +73,7 @@ def _RemedyBGStopProcess():
     global remedybg_path
     global remedybg_proc_id
     if remedybg_proc_id != 0:
-        print('[RemedyBG.py]: Stopping remedybg.exe, pid: ' + str(remedybg_proc_id))
+        print('[RemedyBG]: Stopping remedybg.exe, pid: ' + str(remedybg_proc_id))
         subprocess.run("taskkill /F /PID " + str(remedybg_proc_id), shell=True)
         time.sleep(0.1)
         
@@ -122,22 +119,19 @@ def RemedyBGStart():
     global remedybg_path
     global remedybg_proc_id
     global remedybg_active_project
-    global remedybg_update_timer_start
     global remedybg_started
 
     if remedybg_started:
         return
-
-    remedybg_update_timer_start = time.time()
 
     active_project:str = N10X.Editor.GetActiveProject()
     cur_proc_id = remedybg_proc_id
     if remedybg_proc_id == 0 or (not _RemedyBGFindProcess()) or cur_proc_id != remedybg_proc_id:
         _RemedyBGExecuteProcess()
     else:
-        print('[RemedyBG.py]: remedybg instance found: ' + remedybg_path + ', ProcId: ' + str(remedybg_proc_id))
+        print('[RemedyBG]: remedybg instance found: ' + remedybg_path + ', ProcId: ' + str(remedybg_proc_id))
         if remedybg_active_project != None and remedybg_active_project != active_project:
-            print('[RemedyBG.py]: remedybg is on a different project, reopening with a new session ...')
+            print('[RemedyBG]: remedybg is on a different project, reopening with a new session ...')
             remedybg_active_project = active_project
             _RemedyBGStopProcess()
             RemedyBGStart()
@@ -147,7 +141,6 @@ def RemedyBGStart():
     if remedybg_proc_id != 0:
         _RemedyBGSyncCurrentBreakpoints()
         remedybg_started = True
-        N10X.Editor.AddUpdateFunction(_RemedyBGUpdate)
         print('RemedyBG debugging session started.')
 
 def RemedyBGStop():
@@ -157,7 +150,6 @@ def RemedyBGStop():
     if remedybg_started:
         _RemedyBGStopProcess()
         N10X.Editor.ExecuteCommand('RemoveAllBreakpoints')
-        N10X.Editor.RemoveUpdateFunction(_RemedyBGUpdate)
         remedybg_breakpoints = []
         remedybg_started = False
         print('RemedyBG debugging session stopped.')
@@ -166,7 +158,7 @@ def RemedyBGRun():
     global remedybg_run_after_build
 
     if not remedybg_started:
-        print('[RemedyBG.py]: remedybg session is not started, starting a new session ...')
+        print('[RemedyBG]: remedybg session is not started, starting a new session ...')
         RemedyBGStart()
         time.sleep(0.1)
 
@@ -183,6 +175,12 @@ def RemedyBGRun():
     else:
         _RemedyBGStartDebug()
 
+def _RemedyBGBuildFinished(result):
+    global remedybg_run_after_build
+    if remedybg_run_after_build and result:
+        _RemedyBGStartDebug()
+    remedybg_run_after_build = False
+
 def _RemedyBGRunToCursor():
     if remedybg_started and remedybg_proc_id != 0:
         filename = N10X.Editor.GetCurrentFilename()
@@ -197,7 +195,6 @@ def RemedyBGRunToCursor(*, deny_rebuild=False):
       rebuilds the workspace if BuildBeforeStartDebugging is set
       tries to launch the debugger
       syncs the breakpoints
-
     deny_rebuild option can be passed to the function to ignore settings
     this allows you to have 2 bindings. For example:
       Control F10 to run and rebuild
@@ -224,38 +221,6 @@ def RemedyBGRunToCursor(*, deny_rebuild=False):
         N10X.Editor.ExecuteCommand('BuildActiveWorkspace')
     else:
         _RemedyBGRunToCursor()
-
-def _RemedyBGUpdate():
-    global remedybg_update_timer_start
-    global remedybg_active_project
-
-    if remedybg_started and remedybg_proc_id != 0:
-        elapsed:float = time.time() - remedybg_update_timer_start 
-        if elapsed >= REMEDYBG_UPDATE_INTERVAL:
-            active_project:str = N10X.Editor.GetActiveProject()
-            cur_proc_id = remedybg_proc_id
-            remedybg_update_timer_start = time.time()
-
-            if not _RemedyBGFindProcess() or cur_proc_id != remedybg_proc_id:
-                print('[RemedyBG.py]: remedybg process is closed, relaunching ...')
-                _RemedyBGExecuteProcess()
-                _RemedyBGSyncCurrentBreakpoints()
-            elif active_project != remedybg_active_project:
-                print('[RemedyBG.py]: active project has changed, relaunching ...')
-                remedybg_active_project = active_project
-                _RemedyBGStopProcess()
-                _RemedyBGExecuteProcess()
-                _RemedyBGSyncCurrentBreakpoints()
-
-def _RemedyBGBuildFinished(result):
-    global remedybg_run_after_build
-    global remedybg_run_to_cursor_after_build
-    if remedybg_run_after_build and result:
-        _RemedyBGStartDebug()
-    if remedybg_run_to_cursor_after_build and result:
-        _RemedyBGRunToCursor()
-    remedybg_run_after_build = False
-    remedybg_run_to_cursor_after_build = False
 
 N10X.Editor.AddOnWorkspaceOpenedFunction(_RemedyBGOnWorkspaceOpened)
 N10X.Editor.AddBreakpointAddedFunction(_RemedyBGAddBreakpoint)
