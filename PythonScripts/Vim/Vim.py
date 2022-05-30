@@ -475,7 +475,10 @@ def HandleCommandModeKey(key, shift, control, alt):
 	elif key == "Right" and g_VisualMode != "none":
 		N10X.Editor.SendKey("Right")
 		UpdateVisualModeSelection()
-
+	elif key == "PageUp":
+		N10X.Editor.SendKey("PageUp")
+	elif key == "PageDown":
+		N10X.Editor.SendKey("PageDown")
 	else:
 		handled = False
 
