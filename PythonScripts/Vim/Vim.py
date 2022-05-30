@@ -234,6 +234,18 @@ def DeleteLine():
 	N10X.Editor.SetCursorPos(cursor_pos)
 
 #------------------------------------------------------------------------
+def JoinLine():
+	print("Join Line")
+	N10X.Editor.SendKey("Down")
+	DeleteLine()
+	N10X.Editor.SendKey("Up")
+	MoveToEndOfLine()
+	cursor_pos = N10X.Editor.GetCursorPos()
+	N10X.Editor.InsertText(" ")
+	N10X.Editor.ExecuteCommand("Paste")
+	N10X.Editor.SetCursorPos(cursor_pos) # Need to set the cursor pos to right before join
+
+#------------------------------------------------------------------------
 def Yank():
 	global g_VisualMode
 	SubmitVisualModeSelection()
@@ -380,6 +392,9 @@ def HandleCommandModeChar(c):
 	elif command == "cW" or command == "C":
 		CutToEndOfLineAndInsert()
 		
+	elif command == "J":
+		JoinLine()
+
 	elif command == "I":
 		MoveToStartOfLine();
 		N10X.Editor.ExecuteCommand("MoveCursorNextWord")
