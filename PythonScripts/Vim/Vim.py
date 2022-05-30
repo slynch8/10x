@@ -191,6 +191,32 @@ def CutToEndOfWordAndInsert():
 
 	EnterInsertMode()
 
+
+#------------------------------------------------------------------------
+def CutToEndOfLine():
+	cursor_pos = N10X.Editor.GetCursorPos()
+
+	line = N10X.Editor.GetLine(cursor_pos[1])
+	line_end_pos = len(line)
+	N10X.Editor.SetSelection(cursor_pos, (line_end_pos, cursor_pos[1]))
+	N10X.Editor.ExecuteCommand("Cut")
+
+#------------------------------------------------------------------------
+
+def CutToEndOfLineAndInsert():
+	CutToEndOfLine()
+	EnterInsertMode()
+
+#------------------------------------------------------------------------
+def CutToEndOfWord():
+	repeat_count = GetAndClearRepeatCount()
+	cursor_pos = N10X.Editor.GetCursorPos()
+
+	for i in range(repeat_count - 1):
+		N10X.Editor.ExecuteCommand("MoveCursorNextWord")
+	word_end_pos = GetWordEnd()
+	N10X.Editor.SetSelection(cursor_pos, (word_end_pos, cursor_pos[1]))
+	N10X.Editor.ExecuteCommand("Cut")
 #------------------------------------------------------------------------
 def DeleteLine():
 	global g_VisualMode
@@ -343,9 +369,17 @@ def HandleCommandModeChar(c):
 	elif command == "w":
 		RepeatedCommand("MoveCursorNextWord")
 
+	elif command == "dw":
+		CutToEndOfWord()
 	elif command == "cw":
 		CutToEndOfWordAndInsert()
 
+	elif command == "dW" or command == "D":
+		CutToEndOfLine()
+		
+	elif command == "cW" or command == "C":
+		CutToEndOfLineAndInsert()
+		
 	elif command == "I":
 		MoveToStartOfLine();
 		N10X.Editor.ExecuteCommand("MoveCursorNextWord")
