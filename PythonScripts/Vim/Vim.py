@@ -235,7 +235,6 @@ def DeleteLine():
 
 #------------------------------------------------------------------------
 def JoinLine():
-	print("Join Line")
 	N10X.Editor.SendKey("Down")
 	DeleteLine()
 	N10X.Editor.SendKey("Up")
