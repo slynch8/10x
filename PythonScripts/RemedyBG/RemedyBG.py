@@ -1,229 +1,484 @@
-import N10X
-import subprocess
-import io
-from typing import NamedTuple
-import time
+'''
+RemedyBG debugger integration for 10x (10xeditor.com) 
+RemedyBG: https://remedybg.handmade.network/
+Version: 0.4.2
+Original Script author: septag@discord
 
-DETACHED_PROCESS = 0x00000008
-REMEDYBG_PROCESS = "remedybg.exe"
+Options:
+	- RemedyBG.Path: Path to remedybg.exe. If not set, the script will assume remedybg.exe is in PATH or current dir
+	- RemedyBG.OutputDebugText: (default=true) receives and output debug text to 10x output
 
-class RemedyBGBreakpoint(NamedTuple):
-    filename : str
-    line_index : str
+Commands:
+	- RDBG_StartDebugging: Same behavior as default StartDebugging. Launches remedybg if not opened before and runs the 
+						   executable in the debugger. 
+						   If "BuildBeforeStartDebugging" option is set, it builds it before running the session
+						   If debugger is already running, it does nothing
+						   If debugger is in suspend/pause state, it continues the debugger
+	- RDBG_StopDebugging: Stops if debugger is running
 
-remedybg_started:bool = False
-remedybg_path:str = None
-remedybg_proc_id:int = 0
-remedybg_active_project:str = None
-remedybg_breakpoints:RemedyBGBreakpoint = []
-remedybg_run_after_build = False
+Experimental:
+	- RDBG_RunToCursor: Run up to selected cursor. User should already started a debugging session before calling this
+	- RDBG_GoToCursor: Goes to selected cursor in remedybg and bring it to foreground
+	- RDBG_AddSelectionToWatch: Adds selected text to remedybg's watch window #1
 
-def _RemedyBGFindProcess()->bool:
-    global remedybg_path
-    global remedybg_proc_id
+History:
+  0.4.2
+	- Fixed current directory path being empty issue
+	- Improved error handling when openning a session
+	
+  0.4.1
+	- Added BREAKPOINT_HIT handling. Now when breakpoint hits it moves 10x editor to it's position
+	- Adding breakpoints also makes remedybg to go to that position as well
+	- Two sided breakpoint data (breakpoint_rdbg dictionary)
+	- Fixed GetBreakpoints when opening a new session
 
-    args = "wmic process where \"name='%s'\" get ExecutablePath,ProcessId" % (REMEDYBG_PROCESS)
-    result:subprocess.CompletedProcess = subprocess.run(args, shell=True, capture_output=True)
-    if result.returncode == 0:
-        buf = io.StringIO(result.stdout.decode('UTF-8'))
-        if buf.readline().startswith("ExecutablePath"):
-            proc_id = 0
-            while True:
-                l = buf.readline()
-                if not l or l.strip() == '':
-                    break
-                remedybg_proc_info = l.strip().split(' ')
-                remedybg_path = remedybg_proc_info[0]
-                if len(remedybg_proc_info) > 2:
-                    proc_id = int(remedybg_proc_info[2])
-                    if proc_id == remedybg_proc_id:
-                        return True
-            remedybg_proc_id = proc_id
-            return True if proc_id != 0 else False
-        else:
-            remedybg_path = None
-            remedybg_proc_id = 0
-            return False
-    else:
-        remedybg_path = None
-        remedybg_proc_id = 0
-        print('[RemedyBG]: Error searching for remedybg process (wmic command)')
-        return False
+  0.3.0
+	- Added event receiver in update function 
+	- Added output debug text to 10x output and a new option 'RemedyBG.OutputDebugText'
+  0.2.0
+	- Added new AddBreakpointUpdatedFunction and implemented proper breakpoint syncing from 10x to remedybg
+	- Changed from GetSelectionStart/End API to new GetSelection function in AddWatch
+  0.1.0
+	- First release
+'''
 
-def _RemedyBGExecuteProcess():
-    global remedybg_path
-    global remedybg_proc_id
+from enum import Enum, IntEnum
+from optparse import Option
+import win32file, win32pipe, pywintypes, win32api
+import io, os, ctypes, time, typing, subprocess
 
-    remedybg_exe = N10X.Editor.GetSetting("RemedyBG.Path")
-    if not remedybg_exe:
-        remedybg_exe = REMEDYBG_PROCESS
-    
-    debug_cmd = N10X.Editor.GetDebugCommand()
-    debug_args = N10X.Editor.GetDebugCommandArgs()
-    debug_cwd = N10X.Editor.GetDebugCommandCwd()
+from N10X import Editor
 
-    p = subprocess.Popen(remedybg_exe + ' "' + debug_cmd + '" ' + debug_args, 
-                         shell=False, stdin=None, stdout=None, stderr=None, close_fds=True, creationflags=DETACHED_PROCESS, cwd=debug_cwd)
-    if p.pid:
-        remedybg_path = remedybg_exe
-        remedybg_proc_id = p.pid    
-        print('remedybg.exe: ' + str(remedybg_proc_id))
+HANDLE = typing.Any
+PREFIX:str = '\\\\.\\pipe\\'
+TITLE:str = 'RemedyBG'
+PROCESS_POLL_INTERVAL:float = 1.0
 
-def _RemedyBGStopProcess():
-    global remedybg_path
-    global remedybg_proc_id
-    if remedybg_proc_id != 0:
-        print('[RemedyBG]: Stopping remedybg.exe, pid: ' + str(remedybg_proc_id))
-        subprocess.run("taskkill /F /PID " + str(remedybg_proc_id), shell=True)
-        time.sleep(0.1)
-        
-    remedybg_path = None
-    remedybg_proc_id = 0
+class Options():
+	executable:str
+	output_debug_text:bool
+	build_before_debug:bool
 
-def _RemedyBGAddBreakpoint(filename, line_index):
-    global remedybg_breakpoints
+	def __init__(self):
+		self.executable = Editor.GetSetting("RemedyBG.Path").strip()
+		if not self.executable:
+			self.executable = 'remedybg.exe'
 
-    if not (filename, line_index) in remedybg_breakpoints:
-        remedybg_breakpoints.append(RemedyBGBreakpoint(filename, line_index))
+		self.output_debug_text = True
+		output_debug_text = Editor.GetSetting("RemedyBG.OutputDebugText") 
+		if output_debug_text and output_debug_text == 'false':
+			self.output_debug_text = False
 
-        if remedybg_started and remedybg_proc_id != 0:
-            subprocess.Popen([remedybg_path, "add-breakpoint-at-file" , filename, str(line_index + 1)], 
-                            shell=False, stdin=None, stdout=None, stderr=None, close_fds=True, creationflags=DETACHED_PROCESS)
-    
-def _RemedyBGRemoveBreakpoint(filename, line_index):
-    global remedybg_breakpoints
+		if  Editor.GetSetting("BuildBeforeStartDebugging") and Editor.GetSetting("BuildBeforeStartDebugging") == 'true':
+			self.build_before_debug = True
+		else:
+			self.build_before_debug = False
 
-    if (filename, line_index) in remedybg_breakpoints:
-        remedybg_breakpoints.remove(RemedyBGBreakpoint(filename, line_index))
-        if remedybg_started and remedybg_proc_id != 0:
-            subprocess.Popen([remedybg_path, "remove-breakpoint-at-file" , filename, str(line_index + 1)], 
-                            shell=False, stdin=None, stdout=None, stderr=None, close_fds=True, creationflags=DETACHED_PROCESS)
+class TargetState(IntEnum):
+	NONE = 1
+	SUSPENDED = 2
+	EXECUTING = 3
 
-def _RemedyBGOnWorkspaceOpened():
-    RemedyBGStop()
+class Command(IntEnum):
+	BRING_DEBUGGER_TO_FOREGROUND = 50
+	COMMAND_EXIT_DEBUGGER = 75
+	GET_IS_SESSION_MODIFIED = 100
+	GET_SESSION_FILENAME = 101
+	NEW_SESSION = 102
+	OPEN_SESSION = 103
+	SAVE_SESSION = 104
+	SAVE_AS_SESSION = 105
+	GOTO_FILE_AT_LINE = 200
+	CLOSE_FILE = 201
+	CLOSE_ALL_FILES = 202
+	GET_CURRENT_FILE = 203
+	GET_TARGET_STATE = 300
+	START_DEBUGGING = 301
+	STOP_DEBUGGING = 302
+	RESTART_DEBUGGING = 303
+	CONTINUE_EXECUTION = 312
+	RUN_TO_FILE_AT_LINE = 313
+	GET_BREAKPOINT_LOCATIONS = 601
+	ADD_BREAKPOINT_AT_FILENAME_LINE = 604
+	UPDATE_BREAKPOINT_LINE = 608
+	DELETE_BREAKPOINT = 610
+	DELETE_ALL_BREAKPOINTS = 611
+	ADD_WATCH = 701
 
-def _RemedyBGSyncCurrentBreakpoints():
-    for b in remedybg_breakpoints:
-        # we have to wait a bit before submitting each breakpoint to remedy otherwise it won't accept all of them
-        # TODO: come up with a better solution, because this obviously stalls the editor
-        time.sleep(0.1) 
-        subprocess.Popen([remedybg_path, "add-breakpoint-at-file" , b.filename, str(b.line_index + 1)], 
-                          shell=False, stdin=None, stdout=None, stderr=None, close_fds=True, creationflags=DETACHED_PROCESS)
+class BreakpointKind(IntEnum):
+	RDBG_BREAKPOINT_KIND_FUNCTION_NAME = 1
+	RDBG_BREAKPOINT_KIND_FILENAME_LINE = 2
+	RDBG_BREAKPOINT_KIND_ADDRESS = 3
+	RDBG_BREAKPOINT_KIND_PROCESSOR = 4
 
-def _RemedyBGStartDebug():
-    if remedybg_started and remedybg_proc_id != 0:
-        subprocess.Popen([remedybg_path, "start-debugging"], 
-                        shell=False, stdin=None, stdout=None, stderr=None, close_fds=True, creationflags=DETACHED_PROCESS)
+class CommandResult(IntEnum):
+	UNKNOWN = 0
+	OK = 1
+	FAIL = 2
+	ABORTED = 3
+	INVALID_COMMAND = 4
+	BUFFER_TOO_SMALL = 5
+	FAILED_OPENING_FILE = 6
+	FAILED_SAVING_SESSION = 7
+	INVALID_ID = 8
+	INVALID_TARGET_STATE = 9
+	FAILED_NO_ACTIVE_CONFIG = 10
+	INVALID_BREAKPOINT_KIND = 11
 
-def RemedyBGStart():
-    global remedybg_path
-    global remedybg_proc_id
-    global remedybg_active_project
-    global remedybg_started
+class EventType(IntEnum):
+	KIND_EXIT_PROCESS = 100,
+	KIND_BREAKPOINT_HIT = 600,
+	KIND_BREAKPOINT_RESOLVED = 601
+	OUTPUT_DEBUG_STRING = 800
 
-    if remedybg_started:
-        return
+class Session:
+	name : str
+	process : subprocess.Popen
+	cmd_pipe : HANDLE
+	event_pipe : HANDLE 
+	breakpoints = {}		# 10x_id -> rdbg_id
+	breakpoints_rdbg = {} 	# rdbg_id -> (id, file, line)
+	run_after_build : bool
+	last_poll_time : float
 
-    active_project:str = N10X.Editor.GetActiveProject()
-    cur_proc_id = remedybg_proc_id
-    if remedybg_proc_id == 0 or (not _RemedyBGFindProcess()) or cur_proc_id != remedybg_proc_id:
-        _RemedyBGExecuteProcess()
-    else:
-        print('[RemedyBG]: remedybg instance found: ' + remedybg_path + ', ProcId: ' + str(remedybg_proc_id))
-        if remedybg_active_project != None and remedybg_active_project != active_project:
-            print('[RemedyBG]: remedybg is on a different project, reopening with a new session ...')
-            remedybg_active_project = active_project
-            _RemedyBGStopProcess()
-            RemedyBGStart()
+	def __init__(self, name:str):
+		self.name = name
+		self.process = None
+		self.cmd_pipe = None
+		self.event_pipe = None
+		self.run_after_build = False
+		self.last_poll_time = 0
 
-    remedybg_active_project = active_project
+	def send_command(self, cmd:Command, **cmd_args)->int:
+		if self.cmd_pipe is None:
+			return 0
 
-    if remedybg_proc_id != 0:
-        _RemedyBGSyncCurrentBreakpoints()
-        remedybg_started = True
-        print('RemedyBG debugging session started.')
+		cmd_buffer = io.BytesIO()
+		cmd_buffer.write(ctypes.c_uint16(cmd))
 
-def RemedyBGStop():
-    global remedybg_breakpoints
-    global remedybg_started
+		if cmd == Command.ADD_BREAKPOINT_AT_FILENAME_LINE:
+			filepath:str = cmd_args['filename']
+			cmd_buffer.write(ctypes.c_uint16(len(filepath)))
+			cmd_buffer.write(bytes(filepath, 'utf-8'))
+			cmd_buffer.write(ctypes.c_uint32(cmd_args['line']))
+			cmd_buffer.write(ctypes.c_uint16(0))
+		elif cmd == Command.DELETE_BREAKPOINT:
+			if cmd_args['id'] in self.breakpoints:
+				rdbg_id = self.breakpoints[cmd_args['id']]
+				cmd_buffer.write(ctypes.c_uint32(rdbg_id))
+				self.breakpoints.pop(cmd_args['id'])
+				if rdbg_id in self.breakpoints_rdbg:
+					self.breakpoints_rdbg.pop(rdbg_id)
+			else:
+				return 0
+		elif cmd == Command.GOTO_FILE_AT_LINE:
+			filepath:str = cmd_args['filename']
+			cmd_buffer.write(ctypes.c_uint16(len(filepath)))
+			cmd_buffer.write(bytes(filepath, 'utf-8'))
+			cmd_buffer.write(ctypes.c_uint32(cmd_args['line']))
+		elif cmd == Command.START_DEBUGGING:
+			cmd_buffer.write(ctypes.c_uint8(0))
+		elif cmd == Command.STOP_DEBUGGING:
+			pass
+		elif cmd == Command.CONTINUE_EXECUTION:
+			pass
+		elif cmd == Command.RUN_TO_FILE_AT_LINE:
+			filepath:str = cmd_args['filename']
+			cmd_buffer.write(ctypes.c_uint16(len(filepath)))
+			cmd_buffer.write(bytes(filepath, 'utf-8'))
+			cmd_buffer.write(ctypes.c_uint32(cmd_args['line']))
+		elif cmd == Command.GET_TARGET_STATE:
+			pass
+		elif cmd == Command.ADD_WATCH:
+			expr:str = cmd_args['expr']
+			cmd_buffer.write(ctypes.c_uint8(1)) 	# watch window 1
+			cmd_buffer.write(ctypes.c_uint16(len(expr)))
+			cmd_buffer.write(bytes(expr, 'utf-8'))
+			cmd_buffer.write(ctypes.c_uint16(0))	
+		elif cmd == Command.UPDATE_BREAKPOINT_LINE:
+			if cmd_args['id'] in self.breakpoints:
+				rdbg_id = self.breakpoints[cmd_args['id']]
+				cmd_buffer.write(ctypes.c_uint32(rdbg_id))
+				cmd_buffer.write(ctypes.c_uint32(cmd_args['line']))
+		elif cmd == Command.GET_BREAKPOINT_LOCATIONS:
+			cmd_buffer.write(ctypes.c_uint32(cmd_args['id']))
+		else:
+			assert 0
+			return 0		# not implemented
 
-    if remedybg_started:
-        _RemedyBGStopProcess()
-        N10X.Editor.ExecuteCommand('RemoveAllBreakpoints')
-        remedybg_breakpoints = []
-        remedybg_started = False
-        print('RemedyBG debugging session stopped.')
+		try:
+			out_data = win32pipe.TransactNamedPipe(self.cmd_pipe, cmd_buffer.getvalue(), 8192, None)
+		except pywintypes.error as pipe_error:
+			print('RDBG', pipe_error)
+			self.close(stop=False)
+			return 0
 
-def RemedyBGRun():
-    global remedybg_run_after_build
+		out_buffer = io.BytesIO(out_data[1])		
+		result_code : CommandResult = int.from_bytes(out_buffer.read(2), 'little')
+		if result_code == 1:
+			if cmd == Command.ADD_BREAKPOINT_AT_FILENAME_LINE:
+				breakpoint_id = int.from_bytes(out_buffer.read(4), 'little')
+				self.breakpoints[cmd_args['id']] = breakpoint_id
+				self.breakpoints_rdbg[breakpoint_id] = (cmd_args['id'], cmd_args['filename'], cmd_args['line'])
+				return breakpoint_id
+			elif cmd == Command.GET_TARGET_STATE:
+				return int.from_bytes(out_buffer.read(2), 'little')
+			elif cmd == Command.ADD_WATCH:
+				return int.from_bytes(out_buffer.read(4), 'little')
+			elif cmd == Command.GET_BREAKPOINT_LOCATIONS:
+				num_locs:int = int.from_bytes(out_buffer.read(2))
+				for l in range(0, num_locs):
+					address:int = int.from_bytes(out_buffer.read(8), 'little')
+					module_name:str = out_buffer.read(int.from_bytes(out_buffer.read(2), 'little')).decode('utf-8')
+					filename:str = out_buffer.read(int.from_bytes(out_buffer.read(2), 'little')).decode('utf-8')
+					line_num:int = int.from_bytes(out_buffer.read(4), 'little')
+					# TODO: do we have several locations for a single breakpoint ?
+					return line_num
 
-    if not remedybg_started:
-        print('[RemedyBG]: remedybg session is not started, starting a new session ...')
-        RemedyBGStart()
-        time.sleep(0.1)
+		else:
+			print('RDBG: ' + str(cmd) + ' failed')
+			return 0
 
-    if remedybg_started and remedybg_proc_id == 0:
-        _RemedyBGExecuteProcess()
-        _RemedyBGSyncCurrentBreakpoints()
-        time.sleep(0.1)
+		return 1
 
-    build_before_debug = True if \
-        (N10X.Editor.GetSetting("BuildBeforeStartDebugging") and N10X.Editor.GetSetting("BuildBeforeStartDebugging")[0] == 't') else False
-    if build_before_debug:
-        remedybg_run_after_build = True
-        N10X.Editor.ExecuteCommand('BuildActiveWorkspace')
-    else:
-        _RemedyBGStartDebug()
+	def open(self)->bool:
+		try:
+			debug_cmd = Editor.GetDebugCommand().strip()
+			debug_args = Editor.GetDebugCommandArgs().strip()
+			debug_cwd = Editor.GetDebugCommandCwd().strip()
 
-def _RemedyBGBuildFinished(result):
-    global remedybg_run_after_build
-    if remedybg_run_after_build and result:
-        _RemedyBGStartDebug()
-    remedybg_run_after_build = False
+			if debug_cmd == '':
+				Editor.ShowMessageBox(TITLE, 'Debug command is empty. Perhaps active project is not set in workspace tree?')
+				return False
 
-def _RemedyBGRunToCursor():
-    if remedybg_started and remedybg_proc_id != 0:
-        filename = N10X.Editor.GetCurrentFilename()
-        line_index = N10X.Editor.GetCursorPos()[1]
-        subprocess.Popen([remedybg_path, "run-to-cursor", filename, str(line_index + 1)], 
-                    shell=False, stdin=None, stdout=None, stderr=None, close_fds=True, creationflags=DETACHED_PROCESS)
+			args = _rdbg_options.executable + ' --servername ' + self.name + ' "' + debug_cmd + '" ' + debug_args
+			self.process = subprocess.Popen(args, cwd=debug_cwd if debug_cwd != '' else os.path.curdir)
 
-def RemedyBGRunToCursor(*, deny_rebuild=False):
-    """
-    Provides RunToCursor behaviour from VisualStudio/RemedyBG (Control + F10)
-    Command also:
-      rebuilds the workspace if BuildBeforeStartDebugging is set
-      tries to launch the debugger
-      syncs the breakpoints
-    deny_rebuild option can be passed to the function to ignore settings
-    this allows you to have 2 bindings. For example:
-      Control F10 to run and rebuild
-      Control Shift F10 to run without rebuild
-    """
-    global remedybg_run_to_cursor_after_build
-    if not remedybg_started:
-        print('[RemedyBG.py]: remedybg session is not started, starting a new session ...')
-        RemedyBGStart()
-        time.sleep(0.1)
+			time.sleep(0.5)
 
-    if remedybg_started and remedybg_proc_id == 0:
-        _RemedyBGExecuteProcess()
-        _RemedyBGSyncCurrentBreakpoints()
-        time.sleep(0.1)
+			assert self.cmd_pipe == None
+			name = PREFIX + self.name
+			self.cmd_pipe = win32file.CreateFile(name, win32file.GENERIC_READ|win32file.GENERIC_WRITE, \
+				0, None, win32file.OPEN_EXISTING, 0, None)
+			win32pipe.SetNamedPipeHandleState(self.cmd_pipe, win32pipe.PIPE_READMODE_MESSAGE, None, None)
 
-    build_before_debug = True if \
-        (N10X.Editor.GetSetting("BuildBeforeStartDebugging") and N10X.Editor.GetSetting("BuildBeforeStartDebugging")[0] == 't') else False
-    if deny_rebuild:
-        build_before_debug = False
+			assert self.event_pipe == None
+			name = name + '-events'
+			self.event_pipe = win32file.CreateFile(name, win32file.GENERIC_READ|256, \
+				0, None, win32file.OPEN_EXISTING, 0, None)
+			win32pipe.SetNamedPipeHandleState(self.event_pipe, win32pipe.PIPE_READMODE_MESSAGE, None, None)
 
-    if build_before_debug:
-        remedybg_run_to_cursor_after_build = True
-        N10X.Editor.ExecuteCommand('BuildActiveWorkspace')
-    else:
-        _RemedyBGRunToCursor()
+			print("RDBG: Connection established")
 
-N10X.Editor.AddOnWorkspaceOpenedFunction(_RemedyBGOnWorkspaceOpened)
-N10X.Editor.AddBreakpointAddedFunction(_RemedyBGAddBreakpoint)
-N10X.Editor.AddBreakpointRemovedFunction(_RemedyBGRemoveBreakpoint)
-N10X.Editor.AddBuildFinishedFunction(_RemedyBGBuildFinished)
+			for bp in Editor.GetBreakpoints():
+				self.send_command(Command.ADD_BREAKPOINT_AT_FILENAME_LINE, id=bp[0], filename=bp[1], line=bp[2])
 
+		except FileNotFoundError as not_found:
+			Editor.ShowMessageBox(TITLE, str(not_found) + ': ' + _rdbg_options.executable)
+			return False
+		except pywintypes.error as connection_error:
+			Editor.ShowMessageBox(TITLE, str(connection_error))
+			return False
+		except OSError as os_error:
+			Editor.ShowMessageBox(TITLE, str(os_error))
+			return False
+		
+		return True
+
+	def close(self, stop=True):
+		if stop:
+			self.stop()
+
+		if self.cmd_pipe:
+			win32file.CloseHandle(self.cmd_pipe)
+			self.cmd_pipe = None
+
+		if self.event_pipe is not None:
+			win32file.CloseHandle(self.event_pipe)
+			self.event_pipe = None
+
+		if self.process is not None:
+			self.process.kill()
+			self.process = None
+
+		print("RDBG: Connection closed")
+
+	def run(self):
+		global _rdbg_options
+		
+		if self.cmd_pipe is not None:
+			state:TargetState = self.send_command(Command.GET_TARGET_STATE)
+			if state == TargetState.NONE:
+				self.send_command(Command.START_DEBUGGING)
+			elif state == TargetState.SUSPENDED:
+				self.send_command(Command.CONTINUE_EXECUTION)
+			elif state == TargetState.EXECUTING:
+				pass
+			if _rdbg_options.output_debug_text:
+				Editor.ShowOutput()
+
+	def stop(self):
+		if self.cmd_pipe is not None:
+			state:TargetState = _rdbg_session.send_command(Command.GET_TARGET_STATE)
+			if state == TargetState.SUSPENDED or state == TargetState.EXECUTING:
+				_rdbg_session.send_command(Command.STOP_DEBUGGING)
+
+	def update(self)->bool:
+		global _rdbg_options
+
+		tm:float = time.time()
+		if tm - self.last_poll_time >= 1.0:
+			self.last_poll_time = tm
+
+			if self.process is None:
+				return False
+
+			if self.process is not None and self.process.poll() is not None:
+				print('RDBG: RemedyBG quit with code: %i' % (self.process.poll()))
+				self.process = None
+				self.close(stop=False)
+				return False
+
+		if self.process is not None and self.event_pipe is not None:
+			try:
+				buffer, nbytes, result = win32pipe.PeekNamedPipe(self.event_pipe, 0)
+				if nbytes:
+					hr, data = win32file.ReadFile(self.event_pipe, nbytes, None)
+					event_buffer = io.BytesIO(data)
+					event_type = int.from_bytes(event_buffer.read(2), 'little')
+					if event_type == EventType.OUTPUT_DEBUG_STRING and _rdbg_options.output_debug_text:
+						text = event_buffer.read(int.from_bytes(event_buffer.read(2), 'little')).decode('utf-8')
+						print('RDBG:', text.strip())
+					elif event_type == EventType.KIND_BREAKPOINT_HIT:
+						bp_id = int.from_bytes(event_buffer.read(4), 'little')
+						if bp_id in self.breakpoints_rdbg:
+							id_10x, filename, line = self.breakpoints_rdbg[bp_id]
+							Editor.OpenFile(filename)
+							Editor.SetCursorPos((0, line-1)) # convert to index-based
+					elif event_type == EventType.KIND_BREAKPOINT_RESOLVED:
+						bp_id = int.from_bytes(event_buffer.read(4), 'little')
+						if bp_id in self.breakpoints_rdbg:
+							new_line:int = self.send_command(Command.GET_BREAKPOINT_LOCATIONS, id=bp_id)
+							id_10x, filename, line = self.breakpoints_rdbg[bp_id]
+							self.breakpoints_rdbg[bp_id] = (id_10x, filename, new_line)
+							print('new line:', new_line)
+
+			except win32api.error as pipe_error:
+				print('RDBG:', pipe_error)
+				self.close(stop=False)
+				return False
+			
+		return True
+
+def RDBG_StartDebugging():
+	global _rdbg_session
+	global _rdbg_options
+
+	if _rdbg_session is not None:
+		# poll for debugger state. if we are in the middle of debugging, then continue, otherwise run/build-run
+		state:TargetState = _rdbg_session.send_command(Command.GET_TARGET_STATE)
+		if state == TargetState.NONE:
+			if _rdbg_options.build_before_debug:
+				_rdbg_session.run_after_build = True
+				Editor.ExecuteCommand('BuildActiveWorkspace')
+			else:
+				_rdbg_session.run()
+		elif state == TargetState.SUSPENDED:
+			_rdbg_session.run()
+	else:
+		if Editor.GetWorkspaceFilename() == '':
+			Editor.ShowMessageBox(TITLE, 'No Workspace is opened for debugging')
+			return
+
+		print('RDBG: Workspace: ' + Editor.GetWorkspaceFilename())
+
+		_rdbg_session = Session(os.path.basename(Editor.GetWorkspaceFilename()))
+		if _rdbg_session.open():
+			if _rdbg_options.build_before_debug:
+				_rdbg_session.run_after_build = True
+				Editor.ExecuteCommand('BuildActiveWorkspace')
+			else:
+				_rdbg_session.run()			
+		else:
+			_rdbg_session = None
+
+def RDBG_StopDebugging():
+	global _rdbg_session
+	if _rdbg_session is not None:
+		_rdbg_session.stop()
+
+def RDBG_RunToCursor():
+	global _rdbg_session
+	if _rdbg_session is not None:
+		filename:str = Editor.GetCurrentFilename()
+		if filename != '':
+			_rdbg_session.send_command(Command.RUN_TO_FILE_AT_LINE, filename=filename, line=Editor.GetCursorPos()[1])
+
+def RDBG_GoToCursor():
+	global _rdbg_session
+	if _rdbg_session is not None:
+		filename:str = Editor.GetCurrentFilename()
+		if filename != '':
+			_rdbg_session.send_command(Command.GOTO_FILE_AT_LINE, filename=filename, line=Editor.GetCursorPos()[1])
+
+def RDBG_AddSelectionToWatch():
+	global _rdbg_session
+	if _rdbg_session is not None:
+		selection:str = Editor.GetSelection()
+		if selection != '':
+			_rdbg_session.send_command(Command.ADD_WATCH, expr=selection)
+		
+def _RDBG_WorkspaceOpened():
+	global _rdbg_session
+	if _rdbg_session is not None:
+		print('RDBG: Closing previous debug session "%s".' % (_rdbg_session.name))
+		_rdbg_session.close()
+		_rdbg_session = None
+
+def _RDBG_AddBreakpoint(id, filename, line):
+	global _rdbg_session
+	if _rdbg_session is not None:
+		_rdbg_session.send_command(Command.ADD_BREAKPOINT_AT_FILENAME_LINE, id=id, filename=filename, line=line)
+		_rdbg_session.send_command(Command.GOTO_FILE_AT_LINE, filename=filename, line=line)
+
+def _RDBG_RemoveBreakpoint(id, filename, line):
+	global _rdbg_session
+	if _rdbg_session is not None:
+		_rdbg_session.send_command(Command.DELETE_BREAKPOINT, id=id, filename=filename, line=line)
+
+def _RDBG_UpdateBreakpoint(id, filename, line):
+	global _rdbg_session
+	if _rdbg_session is not None:
+		_rdbg_session.send_command(Command.UPDATE_BREAKPOINT_LINE, id=id, line=line)
+
+def _RDBG_BuildFinished(result):
+	global _rdbg_session
+	
+	if _rdbg_session is not None:
+		if _rdbg_session.run_after_build and result:
+			_rdbg_session.run()	
+		_rdbg_session.run_after_build = False
+
+def _RDBG_Update():
+	global _rdbg_session
+
+	if _rdbg_session is not None:
+		if not _rdbg_session.update():
+			_rdbg_session = None
+
+def _RDBG_SettingsChanged():
+	global _rdbg_options
+	_rdbg_options = Options()
+
+_rdbg_session:Session = None
+_rdbg_options:Options = Options()
+
+
+Editor.AddBreakpointAddedFunction(_RDBG_AddBreakpoint)
+Editor.AddBreakpointRemovedFunction(_RDBG_RemoveBreakpoint)
+Editor.AddBreakpointUpdatedFunction(_RDBG_UpdateBreakpoint)
+
+Editor.AddOnWorkspaceOpenedFunction(_RDBG_WorkspaceOpened)
+Editor.AddBuildFinishedFunction(_RDBG_BuildFinished)
+Editor.AddUpdateFunction(_RDBG_Update)
+Editor.AddOnSettingsChangedFunction(_RDBG_SettingsChanged)
