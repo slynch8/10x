@@ -1,7 +1,7 @@
 '''
 RemedyBG debugger integration for 10x (10xeditor.com) 
-RemedyBG: https://remedybg.handmade.network/
-Version: 0.4.2
+RemedyBG: https://remedybg.handmade.network/ (should be above 0.3.8)
+Version: 0.4.3
 Original Script author: septag@discord
 
 Options:
@@ -22,6 +22,9 @@ Experimental:
 	- RDBG_AddSelectionToWatch: Adds selected text to remedybg's watch window #1
 
 History:
+  0.4.3
+	- Fixed/Improved opening connection to remedybg for the first time
+
   0.4.2
 	- Fixed current directory path being empty issue
 	- Improved error handling when openning a session
@@ -253,13 +256,33 @@ class Session:
 
 			args = _rdbg_options.executable + ' --servername ' + self.name + ' "' + debug_cmd + '" ' + debug_args
 			self.process = subprocess.Popen(args, cwd=debug_cwd if debug_cwd != '' else os.path.curdir)
-
-			time.sleep(0.5)
+			time.sleep(0.1)
 
 			assert self.cmd_pipe == None
 			name = PREFIX + self.name
-			self.cmd_pipe = win32file.CreateFile(name, win32file.GENERIC_READ|win32file.GENERIC_WRITE, \
-				0, None, win32file.OPEN_EXISTING, 0, None)
+			
+			# for the first pipe:
+			# we have to keep trying for some time, because depending on the machine, it might take a while until remedybg creates pipes
+			pipe_success:bool = False
+			wait_time:float = 0.1
+			for retry in range(0, 5):
+				try:
+					self.cmd_pipe = win32file.CreateFile(name, win32file.GENERIC_READ|win32file.GENERIC_WRITE, \
+						0, None, win32file.OPEN_EXISTING, 0, None)
+				except pywintypes.error:
+					time.sleep(wait_time)
+					wait_time = wait_time*2.0
+					continue
+				except Exception as e:
+					Editor.ShowMessageBox(TITLE, 'Pipe error:' +  str(e))
+					return False
+				pipe_success = True
+				break
+
+			if not pipe_success:
+				Editor.ShowMessageBox(TITLE, 'Named pipe could not be opened to remedybg. Make sure remedybg version is above 0.3.8')
+				return False
+			
 			win32pipe.SetNamedPipeHandleState(self.cmd_pipe, win32pipe.PIPE_READMODE_MESSAGE, None, None)
 
 			assert self.event_pipe == None
