@@ -1,7 +1,7 @@
 '''
 RemedyBG debugger integration for 10x (10xeditor.com) 
 RemedyBG: https://remedybg.handmade.network/ (should be above 0.3.8)
-Version: 0.4.3
+Version: 0.5.0
 Original Script author: septag@discord
 
 Options:
@@ -22,6 +22,10 @@ Experimental:
 	- RDBG_AddSelectionToWatch: Adds selected text to remedybg's watch window #1
 
 History:
+  0.5.0
+	- Added support for new RemedyBG events and breakpoint syncing
+	- Added breakpoint fixing/resolving by RemedyBG
+
   0.4.3
 	- Fixed/Improved opening connection to remedybg for the first time
 
@@ -109,10 +113,10 @@ class Command(IntEnum):
 	ADD_WATCH = 701
 
 class BreakpointKind(IntEnum):
-	RDBG_BREAKPOINT_KIND_FUNCTION_NAME = 1
-	RDBG_BREAKPOINT_KIND_FILENAME_LINE = 2
-	RDBG_BREAKPOINT_KIND_ADDRESS = 3
-	RDBG_BREAKPOINT_KIND_PROCESSOR = 4
+	FUNCTION_NAME = 1
+	FILENAME_LINE = 2
+	ADDRESS = 3
+	PROCESSOR = 4
 
 class CommandResult(IntEnum):
 	UNKNOWN = 0
@@ -133,24 +137,50 @@ class EventType(IntEnum):
 	KIND_BREAKPOINT_HIT = 600,
 	KIND_BREAKPOINT_RESOLVED = 601
 	OUTPUT_DEBUG_STRING = 800
+	BREAKPOINT_ADDED = 602
+	BREAKPOINT_MODIFIED = 603
+	BREAKPOINT_REMOVED = 604
 
 class Session:
-	name : str
-	process : subprocess.Popen
-	cmd_pipe : HANDLE
-	event_pipe : HANDLE 
-	breakpoints = {}		# 10x_id -> rdbg_id
-	breakpoints_rdbg = {} 	# rdbg_id -> (id, file, line)
-	run_after_build : bool
-	last_poll_time : float
-
 	def __init__(self, name:str):
-		self.name = name
-		self.process = None
-		self.cmd_pipe = None
-		self.event_pipe = None
-		self.run_after_build = False
-		self.last_poll_time = 0
+		self.name:str = name
+		self.process:subprocess.Popen = None
+		self.cmd_pipe:HANDLE = None
+		self.event_pipe:HANDLE = None
+		self.run_after_build:bool = False
+		self.last_poll_time:float = 0
+		self.ignore_next_remove_breakpoint:bool = False
+		self.breakpoints = {}
+		self.breakpoints_rdbg = {}
+
+	def get_breakpoint_locations(self, bp_id:int):
+		if self.cmd_pipe is None:
+			return 0		
+		cmd_buffer = io.BytesIO()
+		cmd_buffer.write(ctypes.c_uint16(Command.GET_BREAKPOINT_LOCATIONS))
+		cmd_buffer.write(ctypes.c_uint32(bp_id))
+		try:
+			out_data = win32pipe.TransactNamedPipe(self.cmd_pipe, cmd_buffer.getvalue(), 8192, None)
+		except pywintypes.error as pipe_error:
+			print('RDBG', pipe_error)
+			self.close(stop=False)
+			return ('', 0)
+
+		out_buffer = io.BytesIO(out_data[1])		
+		result_code : CommandResult = int.from_bytes(out_buffer.read(2), 'little')
+		if result_code == 1:
+			num_locs:int = int.from_bytes(out_buffer.read(2), 'little')
+			# TODO: do we have several locations for a single breakpoint ?
+			if num_locs > 0:
+				address:int = int.from_bytes(out_buffer.read(8), 'little')
+				module_name:str = out_buffer.read(int.from_bytes(out_buffer.read(2), 'little')).decode('utf-8')
+				filename:str = out_buffer.read(int.from_bytes(out_buffer.read(2), 'little')).decode('utf-8')
+				line_num:int = int.from_bytes(out_buffer.read(4), 'little')
+				return (filename, line_num)
+			else:
+				return ('', 0)
+		else:
+			return ('', 0)		
 
 	def send_command(self, cmd:Command, **cmd_args)->int:
 		if self.cmd_pipe is None:
@@ -203,8 +233,6 @@ class Session:
 				rdbg_id = self.breakpoints[cmd_args['id']]
 				cmd_buffer.write(ctypes.c_uint32(rdbg_id))
 				cmd_buffer.write(ctypes.c_uint32(cmd_args['line']))
-		elif cmd == Command.GET_BREAKPOINT_LOCATIONS:
-			cmd_buffer.write(ctypes.c_uint32(cmd_args['id']))
 		else:
 			assert 0
 			return 0		# not implemented
@@ -220,24 +248,19 @@ class Session:
 		result_code : CommandResult = int.from_bytes(out_buffer.read(2), 'little')
 		if result_code == 1:
 			if cmd == Command.ADD_BREAKPOINT_AT_FILENAME_LINE:
-				breakpoint_id = int.from_bytes(out_buffer.read(4), 'little')
-				self.breakpoints[cmd_args['id']] = breakpoint_id
-				self.breakpoints_rdbg[breakpoint_id] = (cmd_args['id'], cmd_args['filename'], cmd_args['line'])
-				return breakpoint_id
+				bp_id = int.from_bytes(out_buffer.read(4), 'little')
+				if bp_id not in self.breakpoints_rdbg:
+					self.breakpoints[cmd_args['id']] = bp_id
+					self.breakpoints_rdbg[bp_id] = (cmd_args['id'], cmd_args['filename'], cmd_args['line'])
+				else:
+					print('RDBG: Breakpoint (%i) %s@%i skipped, because it will not get triggered' % (cmd_args['id'], cmd_args['filename'], cmd_args['line']))
+					self.ignore_next_remove_breakpoint = True
+					Editor.RemoveBreakpointById(cmd_args['id'])
+				return bp_id
 			elif cmd == Command.GET_TARGET_STATE:
 				return int.from_bytes(out_buffer.read(2), 'little')
 			elif cmd == Command.ADD_WATCH:
 				return int.from_bytes(out_buffer.read(4), 'little')
-			elif cmd == Command.GET_BREAKPOINT_LOCATIONS:
-				num_locs:int = int.from_bytes(out_buffer.read(2))
-				for l in range(0, num_locs):
-					address:int = int.from_bytes(out_buffer.read(8), 'little')
-					module_name:str = out_buffer.read(int.from_bytes(out_buffer.read(2), 'little')).decode('utf-8')
-					filename:str = out_buffer.read(int.from_bytes(out_buffer.read(2), 'little')).decode('utf-8')
-					line_num:int = int.from_bytes(out_buffer.read(4), 'little')
-					# TODO: do we have several locations for a single breakpoint ?
-					return line_num
-
 		else:
 			print('RDBG: ' + str(cmd) + ' failed')
 			return 0
@@ -346,6 +369,12 @@ class Session:
 			if state == TargetState.SUSPENDED or state == TargetState.EXECUTING:
 				_rdbg_session.send_command(Command.STOP_DEBUGGING)
 
+	def next_breakpoint_ignored(self):
+		if self.ignore_next_remove_breakpoint:
+			self.ignore_next_remove_breakpoint = False
+			return True
+		return False
+
 	def update(self)->bool:
 		global _rdbg_options
 
@@ -381,10 +410,37 @@ class Session:
 					elif event_type == EventType.KIND_BREAKPOINT_RESOLVED:
 						bp_id = int.from_bytes(event_buffer.read(4), 'little')
 						if bp_id in self.breakpoints_rdbg:
-							new_line:int = self.send_command(Command.GET_BREAKPOINT_LOCATIONS, id=bp_id)
+							filename, new_line = self.get_breakpoint_locations(bp_id)
+							id_10x, filename_old, line = self.breakpoints_rdbg[bp_id]
+
+							if filename != '':
+								self.breakpoints_rdbg[bp_id] = (id_10x, filename_old, new_line)
+								Editor.UpdateBreakpoint(id_10x, new_line)
+							else:
+								self.breakpoints_rdbg.pop(bp_id)
+								self.breakpoints.pop(id_10x)
+								self.ignore_next_remove_breakpoint = True
+								Editor.RemoveBreakpointById(id_10x)
+					elif event_type == EventType.BREAKPOINT_ADDED:
+						bp_id = int.from_bytes(event_buffer.read(4), 'little')
+						if bp_id not in self.breakpoints_rdbg:
+							filename, line = self.get_breakpoint_locations(bp_id)
+							if filename != '':
+								id_10x:int = Editor.AddBreakpoint(filename, line)
+								self.breakpoints_rdbg[bp_id] = (id_10x, filename, line)
+								self.breakpoints[id_10x] = bp_id
+					elif event_type == EventType.BREAKPOINT_REMOVED:
+						bp_id = int.from_bytes(event_buffer.read(4), 'little')
+						if bp_id in self.breakpoints_rdbg:
 							id_10x, filename, line = self.breakpoints_rdbg[bp_id]
-							self.breakpoints_rdbg[bp_id] = (id_10x, filename, new_line)
-							print('new line:', new_line)
+							if id_10x in self.breakpoints:
+								self.breakpoints.pop(id_10x)
+							self.breakpoints_rdbg.pop(bp_id)
+							self.ignore_next_remove_breakpoint = True
+							Editor.RemoveBreakpointById(id_10x)
+					elif event_type == EventType.BREAKPOINT_MODIFIED:
+						# used for enabling/disabling breakpoints, we don't have that now
+						pass
 
 			except win32api.error as pipe_error:
 				print('RDBG:', pipe_error)
@@ -466,7 +522,7 @@ def _RDBG_AddBreakpoint(id, filename, line):
 
 def _RDBG_RemoveBreakpoint(id, filename, line):
 	global _rdbg_session
-	if _rdbg_session is not None:
+	if _rdbg_session is not None and not _rdbg_session.next_breakpoint_ignored():
 		_rdbg_session.send_command(Command.DELETE_BREAKPOINT, id=id, filename=filename, line=line)
 
 def _RDBG_UpdateBreakpoint(id, filename, line):
