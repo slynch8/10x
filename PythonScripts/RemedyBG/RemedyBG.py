@@ -1,7 +1,7 @@
 '''
 RemedyBG debugger integration for 10x (10xeditor.com) 
 RemedyBG: https://remedybg.handmade.network/ (should be above 0.3.8)
-Version: 0.5.0
+Version: 0.5.1
 Original Script author: septag@discord
 
 Options:
@@ -22,6 +22,9 @@ Experimental:
 	- RDBG_AddSelectionToWatch: Adds selected text to remedybg's watch window #1
 
 History:
+  0.5.1
+	- Fix for breakpoint filepath inconsistencies between slash and backslash
+
   0.5.0
 	- Added support for new RemedyBG events and breakpoint syncing
 	- Added breakpoint fixing/resolving by RemedyBG
@@ -191,6 +194,7 @@ class Session:
 
 		if cmd == Command.ADD_BREAKPOINT_AT_FILENAME_LINE:
 			filepath:str = cmd_args['filename']
+			filepath = filepath.replace('/', '\\')
 			cmd_buffer.write(ctypes.c_uint16(len(filepath)))
 			cmd_buffer.write(bytes(filepath, 'utf-8'))
 			cmd_buffer.write(ctypes.c_uint32(cmd_args['line']))
@@ -206,6 +210,7 @@ class Session:
 				return 0
 		elif cmd == Command.GOTO_FILE_AT_LINE:
 			filepath:str = cmd_args['filename']
+			filepath = filepath.replace('/', '\\')
 			cmd_buffer.write(ctypes.c_uint16(len(filepath)))
 			cmd_buffer.write(bytes(filepath, 'utf-8'))
 			cmd_buffer.write(ctypes.c_uint32(cmd_args['line']))
@@ -405,6 +410,7 @@ class Session:
 						bp_id = int.from_bytes(event_buffer.read(4), 'little')
 						if bp_id in self.breakpoints_rdbg:
 							id_10x, filename, line = self.breakpoints_rdbg[bp_id]
+							filename = filename.replace('\\', '/')
 							Editor.OpenFile(filename)
 							Editor.SetCursorPos((0, line-1)) # convert to index-based
 					elif event_type == EventType.KIND_BREAKPOINT_RESOLVED:
@@ -426,6 +432,7 @@ class Session:
 						if bp_id not in self.breakpoints_rdbg:
 							filename, line = self.get_breakpoint_locations(bp_id)
 							if filename != '':
+								filename = filename.replace('\\', '/')
 								id_10x:int = Editor.AddBreakpoint(filename, line)
 								self.breakpoints_rdbg[bp_id] = (id_10x, filename, line)
 								self.breakpoints[id_10x] = bp_id
