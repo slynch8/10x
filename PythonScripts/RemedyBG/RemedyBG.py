@@ -1,7 +1,7 @@
 '''
 RemedyBG debugger integration for 10x (10xeditor.com) 
 RemedyBG: https://remedybg.handmade.network/ (should be above 0.3.8)
-Version: 0.5.1
+Version: 0.5.2
 Original Script author: septag@discord
 
 Options:
@@ -22,6 +22,9 @@ Experimental:
 	- RDBG_AddSelectionToWatch: Adds selected text to remedybg's watch window #1
 
 History:
+  0.5.2
+	- Fixed a regression bug for remedybg filepaths introduced in the previous version
+
   0.5.1
 	- Fix for breakpoint filepath inconsistencies between slash and backslash
 
@@ -194,7 +197,6 @@ class Session:
 
 		if cmd == Command.ADD_BREAKPOINT_AT_FILENAME_LINE:
 			filepath:str = cmd_args['filename']
-			filepath = filepath.replace('/', '\\')
 			cmd_buffer.write(ctypes.c_uint16(len(filepath)))
 			cmd_buffer.write(bytes(filepath, 'utf-8'))
 			cmd_buffer.write(ctypes.c_uint32(cmd_args['line']))
@@ -210,7 +212,6 @@ class Session:
 				return 0
 		elif cmd == Command.GOTO_FILE_AT_LINE:
 			filepath:str = cmd_args['filename']
-			filepath = filepath.replace('/', '\\')
 			cmd_buffer.write(ctypes.c_uint16(len(filepath)))
 			cmd_buffer.write(bytes(filepath, 'utf-8'))
 			cmd_buffer.write(ctypes.c_uint32(cmd_args['line']))
