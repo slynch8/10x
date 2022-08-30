@@ -288,7 +288,6 @@ class Session:
 			debug_cwd = os.path.abspath(debug_cwd) if debug_cwd != '' else os.path.abspath(os.path.curdir)
 			if debug_cwd != '' and not os.path.isdir(debug_cwd):
 				Editor.ShowMessageBox(TITLE, 'Debugger working directory is invalid: ' + debug_cwd)
-			print(debug_cwd)
 
 			args = _rdbg_options.executable + ' --servername ' + self.name + ' "' + debug_cmd + '" ' + debug_args
 			self.process = subprocess.Popen(args, cwd=debug_cwd)
