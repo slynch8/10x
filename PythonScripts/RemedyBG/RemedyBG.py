@@ -1,7 +1,7 @@
 '''
 RemedyBG debugger integration for 10x (10xeditor.com) 
 RemedyBG: https://remedybg.handmade.network/ (should be above 0.3.8)
-Version: 0.5.2
+Version: 0.5.3
 Original Script author: septag@discord
 
 Options:
@@ -22,6 +22,9 @@ Experimental:
 	- RDBG_AddSelectionToWatch: Adds selected text to remedybg's watch window #1
 
 History:
+  0.5.3
+    - Fixed debug working directory being invalid or relative path
+
   0.5.2
 	- Fixed a regression bug for remedybg filepaths introduced in the previous version
 
@@ -282,9 +285,13 @@ class Session:
 			if debug_cmd == '':
 				Editor.ShowMessageBox(TITLE, 'Debug command is empty. Perhaps active project is not set in workspace tree?')
 				return False
+			debug_cwd = os.path.abspath(debug_cwd) if debug_cwd != '' else os.path.abspath(os.path.curdir)
+			if debug_cwd != '' and not os.path.isdir(debug_cwd):
+				Editor.ShowMessageBox(TITLE, 'Debugger working directory is invalid: ' + debug_cwd)
+			print(debug_cwd)
 
 			args = _rdbg_options.executable + ' --servername ' + self.name + ' "' + debug_cmd + '" ' + debug_args
-			self.process = subprocess.Popen(args, cwd=debug_cwd if debug_cwd != '' else os.path.curdir)
+			self.process = subprocess.Popen(args, cwd=debug_cwd)
 			time.sleep(0.1)
 
 			assert self.cmd_pipe == None
