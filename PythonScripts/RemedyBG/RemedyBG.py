@@ -285,12 +285,14 @@ class Session:
 			if debug_cmd == '':
 				Editor.ShowMessageBox(TITLE, 'Debug command is empty. Perhaps active project is not set in workspace tree?')
 				return False
-			debug_cwd = os.path.abspath(debug_cwd) if debug_cwd != '' else os.path.abspath(os.path.curdir)
-			if debug_cwd != '' and not os.path.isdir(debug_cwd):
-				Editor.ShowMessageBox(TITLE, 'Debugger working directory is invalid: ' + debug_cwd)
+				
+			full_path = os.path.dirname(os.path.abspath(Editor.GetWorkspaceFilename()))
+			full_path = os.path.join(full_path, debug_cwd)
+			if full_path != '' and not os.path.isdir(full_path):
+				Editor.ShowMessageBox(TITLE, 'Debugger working directory is invalid: ' + full_path)
 
 			args = _rdbg_options.executable + ' --servername ' + self.name + ' "' + debug_cmd + '" ' + debug_args
-			self.process = subprocess.Popen(args, cwd=debug_cwd)
+			self.process = subprocess.Popen(args, cwd=full_path)
 			time.sleep(0.1)
 
 			assert self.cmd_pipe == None
