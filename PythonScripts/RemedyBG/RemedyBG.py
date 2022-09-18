@@ -1,7 +1,7 @@
 '''
 RemedyBG debugger integration for 10x (10xeditor.com) 
 RemedyBG: https://remedybg.handmade.network/ (should be above 0.3.8)
-Version: 0.5.3
+Version: 0.6.0
 Original Script author: septag@discord
 
 Options:
@@ -22,8 +22,9 @@ Experimental:
 	- RDBG_AddSelectionToWatch: Adds selected text to remedybg's watch window #1
 
 History:
-  0.5.3
-    - Fixed debug working directory being invalid or relative path
+  0.6.0
+	- Added new location sync events with RemedyBg
+	- Added experimental StepInto/StepOver/StepOut functions
 
   0.5.2
 	- Fixed a regression bug for remedybg filepaths introduced in the previous version
@@ -112,6 +113,9 @@ class Command(IntEnum):
 	START_DEBUGGING = 301
 	STOP_DEBUGGING = 302
 	RESTART_DEBUGGING = 303
+	STEP_INTO_BY_LINE = 307
+	STEP_OVER_BY_LINE = 309
+	STEP_OUT = 311,
 	CONTINUE_EXECUTION = 312
 	RUN_TO_FILE_AT_LINE = 313
 	GET_BREAKPOINT_LOCATIONS = 601
@@ -141,6 +145,21 @@ class CommandResult(IntEnum):
 	FAILED_NO_ACTIVE_CONFIG = 10
 	INVALID_BREAKPOINT_KIND = 11
 
+class SourceLocChangedReason(IntEnum):
+	UNSPECIFIED = 0
+	COMMAND_LINE = 1
+	DRIVER = 2
+	BREAKPOINT_SELECTED = 3
+	CURRENT_FRAME_CHANGED = 4
+	THREAD_CHANGED = 5
+	BREAKPOINT_HIT = 6
+	EXCEPTION_HIT = 7
+	STEP_OVER = 8
+	STEP_IN = 9
+	STEP_OUT = 10
+	NON_USER_BREAKPOINT = 11
+	DEBUG_BREAK = 12
+
 class EventType(IntEnum):
 	KIND_EXIT_PROCESS = 100,
 	KIND_BREAKPOINT_HIT = 600,
@@ -149,6 +168,7 @@ class EventType(IntEnum):
 	BREAKPOINT_ADDED = 602
 	BREAKPOINT_MODIFIED = 603
 	BREAKPOINT_REMOVED = 604
+	SOURCE_LOCATION_CHANGED = 200
 
 class Session:
 	def __init__(self, name:str):
@@ -220,6 +240,12 @@ class Session:
 			cmd_buffer.write(ctypes.c_uint32(cmd_args['line']))
 		elif cmd == Command.START_DEBUGGING:
 			cmd_buffer.write(ctypes.c_uint8(0))
+		elif cmd == Command.STEP_INTO_BY_LINE:
+			pass
+		elif cmd == Command.STEP_OVER_BY_LINE:
+			pass
+		elif cmd == Command.STEP_OVER_BY_LINE:
+			pass
 		elif cmd == Command.STOP_DEBUGGING:
 			pass
 		elif cmd == Command.CONTINUE_EXECUTION:
@@ -415,13 +441,6 @@ class Session:
 					if event_type == EventType.OUTPUT_DEBUG_STRING and _rdbg_options.output_debug_text:
 						text = event_buffer.read(int.from_bytes(event_buffer.read(2), 'little')).decode('utf-8')
 						print('RDBG:', text.strip())
-					elif event_type == EventType.KIND_BREAKPOINT_HIT:
-						bp_id = int.from_bytes(event_buffer.read(4), 'little')
-						if bp_id in self.breakpoints_rdbg:
-							id_10x, filename, line = self.breakpoints_rdbg[bp_id]
-							filename = filename.replace('\\', '/')
-							Editor.OpenFile(filename)
-							Editor.SetCursorPos((0, line-1)) # convert to index-based
 					elif event_type == EventType.KIND_BREAKPOINT_RESOLVED:
 						bp_id = int.from_bytes(event_buffer.read(4), 'little')
 						if bp_id in self.breakpoints_rdbg:
@@ -454,6 +473,15 @@ class Session:
 							self.breakpoints_rdbg.pop(bp_id)
 							self.ignore_next_remove_breakpoint = True
 							Editor.RemoveBreakpointById(id_10x)
+					elif event_type == EventType.SOURCE_LOCATION_CHANGED:
+						filename:str = event_buffer.read(int.from_bytes(event_buffer.read(2), 'little')).decode('utf-8')
+						line:int = int.from_bytes(event_buffer.read(4), 'little')
+						reason:SourceLocChangedReason = int.from_bytes(event_buffer.read(4), 'little')
+						if reason != SourceLocChangedReason.DRIVER:
+							filename = filename.replace('\\', '/')
+							Editor.OpenFile(filename)
+							Editor.SetCursorPos((0, line-1)) # convert to index-based
+
 					elif event_type == EventType.BREAKPOINT_MODIFIED:
 						# used for enabling/disabling breakpoints, we don't have that now
 						pass
@@ -515,6 +543,21 @@ def RDBG_GoToCursor():
 		filename:str = Editor.GetCurrentFilename()
 		if filename != '':
 			_rdbg_session.send_command(Command.GOTO_FILE_AT_LINE, filename=filename, line=Editor.GetCursorPos()[1])
+
+def RDBG_StepInto():
+	global _rdbg_session
+	if _rdbg_session is not None:
+		_rdbg_session.send_command(Command.STEP_INTO_BY_LINE)
+
+def RDBG_StepOver():
+	global _rdbg_session
+	if _rdbg_session is not None:
+		_rdbg_session.send_command(Command.STEP_OVER_BY_LINE)
+
+def RDBG_StepOut():
+	global _rdbg_session
+	if _rdbg_session is not None:
+		_rdbg_session.send_command(Command.STEP_OUT)
 
 def RDBG_AddSelectionToWatch():
 	global _rdbg_session
