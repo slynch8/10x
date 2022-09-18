@@ -1,7 +1,7 @@
 '''
 RemedyBG debugger integration for 10x (10xeditor.com) 
 RemedyBG: https://remedybg.handmade.network/ (should be above 0.3.8)
-Version: 0.6.0
+Version: 0.6.1
 Original Script author: septag@discord
 
 Options:
@@ -22,6 +22,9 @@ Experimental:
 	- RDBG_AddSelectionToWatch: Adds selected text to remedybg's watch window #1
 
 History:
+  0.6.1
+	- Minor fix for change-location event
+	
   0.6.0
 	- Added new location sync events with RemedyBg
 	- Added experimental StepInto/StepOver/StepOut functions
@@ -476,7 +479,7 @@ class Session:
 					elif event_type == EventType.SOURCE_LOCATION_CHANGED:
 						filename:str = event_buffer.read(int.from_bytes(event_buffer.read(2), 'little')).decode('utf-8')
 						line:int = int.from_bytes(event_buffer.read(4), 'little')
-						reason:SourceLocChangedReason = int.from_bytes(event_buffer.read(4), 'little')
+						reason:SourceLocChangedReason = int.from_bytes(event_buffer.read(2), 'little')
 						if reason != SourceLocChangedReason.DRIVER:
 							filename = filename.replace('\\', '/')
 							Editor.OpenFile(filename)
