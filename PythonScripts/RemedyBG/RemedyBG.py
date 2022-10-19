@@ -1,10 +1,11 @@
 '''
 RemedyBG debugger integration for 10x (10xeditor.com) 
 RemedyBG: https://remedybg.handmade.network/ (should be above 0.3.8)
-Version: 0.6.0
+Version: 0.6.1
 Original Script author: septag@discord
 
 Options:
+	- RemedyBG.Hook: (default=False) Hook RemedyBg into default Start/Stop/Restart debugging commands instead of the default msvc debugger integration
 	- RemedyBG.Path: Path to remedybg.exe. If not set, the script will assume remedybg.exe is in PATH or current dir
 	- RemedyBG.OutputDebugText: (default=true) receives and output debug text to 10x output
 
@@ -15,13 +16,20 @@ Commands:
 						   If debugger is already running, it does nothing
 						   If debugger is in suspend/pause state, it continues the debugger
 	- RDBG_StopDebugging: Stops if debugger is running
+	- RDBG_RestartDebugging: Restart debugging 
 
-Experimental:
+Extras:
 	- RDBG_RunToCursor: Run up to selected cursor. User should already started a debugging session before calling this
 	- RDBG_GoToCursor: Goes to selected cursor in remedybg and bring it to foreground
 	- RDBG_AddSelectionToWatch: Adds selected text to remedybg's watch window #1
+	- RDBG_StepInto: Steps into line when debugging, also updates the cursor position in 10x according to position in remedybg
+	- RDBG_StepOver: Steps over the line when debugging, also updates the cursor position in 10x according to position in remedybg
+	- RDBG_StepOut: Steps out of the current line when debugging, also updates the cursor position in 10x according to position in remedybg
 
 History:
+  0.6.1
+	- Added RemedyBG.Hook option to hook remedybg to default debugging functions instead of msvc integration
+
   0.6.0
 	- Added new location sync events with RemedyBg
 	- Added experimental StepInto/StepOver/StepOut functions
@@ -72,10 +80,6 @@ TITLE:str = 'RemedyBG'
 PROCESS_POLL_INTERVAL:float = 1.0
 
 class Options():
-	executable:str
-	output_debug_text:bool
-	build_before_debug:bool
-
 	def __init__(self):
 		self.executable = Editor.GetSetting("RemedyBG.Path").strip()
 		if not self.executable:
@@ -90,6 +94,10 @@ class Options():
 			self.build_before_debug = True
 		else:
 			self.build_before_debug = False
+
+		hook_calls = Editor.GetSetting("RemedyBG.Hook")
+		if hook_calls and hook_calls == 'true':
+			self.hook_calls = hook_calls
 
 class TargetState(IntEnum):
 	NONE = 1
@@ -247,6 +255,8 @@ class Session:
 		elif cmd == Command.STEP_OVER_BY_LINE:
 			pass
 		elif cmd == Command.STOP_DEBUGGING:
+			pass
+		elif cmd == Command.RESTART_DEBUGGING:
 			pass
 		elif cmd == Command.CONTINUE_EXECUTION:
 			pass
@@ -524,11 +534,16 @@ def RDBG_StartDebugging():
 				_rdbg_session.run()			
 		else:
 			_rdbg_session = None
-
+	
 def RDBG_StopDebugging():
 	global _rdbg_session
 	if _rdbg_session is not None:
 		_rdbg_session.stop()
+
+def RDBG_RestartDebugging():
+	global _rdbg_session
+	if _rdbg_session is not None:
+		_rdbg_session.send_command(Command.RESTART_DEBUGGING)		
 
 def RDBG_RunToCursor():
 	global _rdbg_session
@@ -608,9 +623,29 @@ def _RDBG_SettingsChanged():
 	global _rdbg_options
 	_rdbg_options = Options()
 
+def _RDBG_StartDebugging()->bool:
+	if _rdbg_options.hook_calls:
+		RDBG_StartDebugging()
+		return True
+	else:
+		return False
+
+def _RDBG_StopDebugging()->bool:
+	if _rdbg_options.hook_calls:
+		RDBG_StopDebugging()
+		return True
+	else:
+		return False
+
+def _RDBG_RestartDebugging()->bool:
+	if _rdbg_options.hook_calls:
+		RDBG_RestartDebugging()
+		return True
+	else:
+		return False
+
 _rdbg_session:Session = None
 _rdbg_options:Options = Options()
-
 
 Editor.AddBreakpointAddedFunction(_RDBG_AddBreakpoint)
 Editor.AddBreakpointRemovedFunction(_RDBG_RemoveBreakpoint)
@@ -620,3 +655,7 @@ Editor.AddOnWorkspaceOpenedFunction(_RDBG_WorkspaceOpened)
 Editor.AddBuildFinishedFunction(_RDBG_BuildFinished)
 Editor.AddUpdateFunction(_RDBG_Update)
 Editor.AddOnSettingsChangedFunction(_RDBG_SettingsChanged)
+
+Editor.AddStartDebuggingFunction(_RDBG_StartDebugging)
+Editor.AddStopDebuggingFunction(_RDBG_StopDebugging)
+Editor.AddRestartDebuggingFunction(_RDBG_RestartDebugging)
