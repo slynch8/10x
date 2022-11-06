@@ -95,7 +95,8 @@ class Options():
 		else:
 			self.build_before_debug = False
 
-		hook_calls = Editor.GetSetting("RemedyBG.Hook")
+		self.hook_calls = False
+		hook_calls = Editor.GetSetting("RemedyBG.Hook").strip().lower()
 		if hook_calls and hook_calls == 'true':
 			self.hook_calls = hook_calls
 
