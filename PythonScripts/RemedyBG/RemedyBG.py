@@ -1,7 +1,7 @@
 '''
 RemedyBG debugger integration for 10x (10xeditor.com) 
 RemedyBG: https://remedybg.handmade.network/ (should be above 0.3.8)
-Version: 0.6.1
+Version: 0.6.2
 Original Script author: septag@discord
 
 Options:
@@ -27,6 +27,11 @@ Extras:
     - RDBG_StepOut: Steps out of the current line when debugging, also updates the cursor position in 10x according to position in remedybg
 
 History:
+  0.6.2
+    - Changed tabs to spaces :(
+    - Fixed a minor bug in RemedyBG.Hook
+    - Added target state tracking (not yet working as it should/unsupported by 10x)
+
   0.6.1
     - Added RemedyBG.Hook option to hook remedybg to default debugging functions instead of msvc integration
 
@@ -95,10 +100,11 @@ class Options():
         else:
             self.build_before_debug = False
 
-        self.hook_calls = False
-        hook_calls = Editor.GetSetting("RemedyBG.Hook").strip().lower()
+        hook_calls = Editor.GetSetting("RemedyBG.Hook")
         if hook_calls and hook_calls == 'true':
-            self.hook_calls = hook_calls
+            self.hook_calls = True
+        else:
+            self.hook_calls = False
 
 class TargetState(IntEnum):
     NONE = 1
@@ -190,10 +196,11 @@ class Session:
         self.ignore_next_remove_breakpoint:bool = False
         self.breakpoints = {}
         self.breakpoints_rdbg = {}
+        self.target_state:TargetState = TargetState.NONE
 
     def get_breakpoint_locations(self, bp_id:int):
         if self.cmd_pipe is None:
-            return 0        
+            return 0		
         cmd_buffer = io.BytesIO()
         cmd_buffer.write(ctypes.c_uint16(Command.GET_BREAKPOINT_LOCATIONS))
         cmd_buffer.write(ctypes.c_uint32(bp_id))
@@ -204,7 +211,7 @@ class Session:
             self.close(stop=False)
             return ('', 0)
 
-        out_buffer = io.BytesIO(out_data[1])        
+        out_buffer = io.BytesIO(out_data[1])		
         result_code : CommandResult = int.from_bytes(out_buffer.read(2), 'little')
         if result_code == 1:
             num_locs:int = int.from_bytes(out_buffer.read(2), 'little')
@@ -218,7 +225,7 @@ class Session:
             else:
                 return ('', 0)
         else:
-            return ('', 0)        
+            return ('', 0)		
 
     def send_command(self, cmd:Command, **cmd_args)->int:
         if self.cmd_pipe is None:
@@ -270,10 +277,10 @@ class Session:
             pass
         elif cmd == Command.ADD_WATCH:
             expr:str = cmd_args['expr']
-            cmd_buffer.write(ctypes.c_uint8(1))     # watch window 1
+            cmd_buffer.write(ctypes.c_uint8(1)) 	# watch window 1
             cmd_buffer.write(ctypes.c_uint16(len(expr)))
             cmd_buffer.write(bytes(expr, 'utf-8'))
-            cmd_buffer.write(ctypes.c_uint16(0))    
+            cmd_buffer.write(ctypes.c_uint16(0))	
         elif cmd == Command.UPDATE_BREAKPOINT_LINE:
             if cmd_args['id'] in self.breakpoints:
                 rdbg_id = self.breakpoints[cmd_args['id']]
@@ -281,7 +288,7 @@ class Session:
                 cmd_buffer.write(ctypes.c_uint32(cmd_args['line']))
         else:
             assert 0
-            return 0        # not implemented
+            return 0		# not implemented
 
         try:
             out_data = win32pipe.TransactNamedPipe(self.cmd_pipe, cmd_buffer.getvalue(), 8192, None)
@@ -290,7 +297,7 @@ class Session:
             self.close(stop=False)
             return 0
 
-        out_buffer = io.BytesIO(out_data[1])        
+        out_buffer = io.BytesIO(out_data[1])		
         result_code : CommandResult = int.from_bytes(out_buffer.read(2), 'little')
         if result_code == 1:
             if cmd == Command.ADD_BREAKPOINT_AT_FILENAME_LINE:
@@ -307,6 +314,8 @@ class Session:
                 return int.from_bytes(out_buffer.read(2), 'little')
             elif cmd == Command.ADD_WATCH:
                 return int.from_bytes(out_buffer.read(4), 'little')
+            elif cmd == Command.START_DEBUGGING and self.target_state != TargetState.EXECUTING:
+                self.target_state = TargetState.EXECUTING
         else:
             print('RDBG: ' + str(cmd) + ' failed')
             return 0
@@ -496,6 +505,9 @@ class Session:
                     elif event_type == EventType.BREAKPOINT_MODIFIED:
                         # used for enabling/disabling breakpoints, we don't have that now
                         pass
+                    elif event_type == EventType.KIND_EXIT_PROCESS:
+                        # exit_code:int = int.from_bytes(event_buffer.read(4), 'little')
+                        self.target_state = TargetState.NONE
 
             except win32api.error as pipe_error:
                 print('RDBG:', pipe_error)
@@ -514,7 +526,7 @@ def RDBG_StartDebugging():
         if state == TargetState.NONE:
             if _rdbg_options.build_before_debug:
                 _rdbg_session.run_after_build = True
-                Editor.ExecuteCommand('BuildActiveWorkspace')
+                # Editor.ExecuteCommand('BuildActiveWorkspace')
             else:
                 _rdbg_session.run()
         elif state == TargetState.SUSPENDED:
@@ -530,9 +542,9 @@ def RDBG_StartDebugging():
         if _rdbg_session.open():
             if _rdbg_options.build_before_debug:
                 _rdbg_session.run_after_build = True
-                Editor.ExecuteCommand('BuildActiveWorkspace')
+                # Editor.ExecuteCommand('BuildActiveWorkspace')
             else:
-                _rdbg_session.run()            
+                _rdbg_session.run()			
         else:
             _rdbg_session = None
     
@@ -544,7 +556,7 @@ def RDBG_StopDebugging():
 def RDBG_RestartDebugging():
     global _rdbg_session
     if _rdbg_session is not None:
-        _rdbg_session.send_command(Command.RESTART_DEBUGGING)        
+        _rdbg_session.send_command(Command.RESTART_DEBUGGING)		
 
 def RDBG_RunToCursor():
     global _rdbg_session
@@ -610,7 +622,7 @@ def _RDBG_BuildFinished(result):
     
     if _rdbg_session is not None:
         if _rdbg_session.run_after_build and result:
-            _rdbg_session.run()    
+            _rdbg_session.run()	
         _rdbg_session.run_after_build = False
 
 def _RDBG_Update():
@@ -645,6 +657,9 @@ def _RDBG_RestartDebugging()->bool:
     else:
         return False
 
+def _RDBG_ProjectBuild(filename:str)->bool:
+    return False
+
 _rdbg_session:Session = None
 _rdbg_options:Options = Options()
 
@@ -660,3 +675,5 @@ Editor.AddOnSettingsChangedFunction(_RDBG_SettingsChanged)
 Editor.AddStartDebuggingFunction(_RDBG_StartDebugging)
 Editor.AddStopDebuggingFunction(_RDBG_StopDebugging)
 Editor.AddRestartDebuggingFunction(_RDBG_RestartDebugging)
+
+Editor.AddProjectBuildFunction(_RDBG_ProjectBuild)
