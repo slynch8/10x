@@ -1,7 +1,7 @@
 '''
 RemedyBG debugger integration for 10x (10xeditor.com) 
 RemedyBG: https://remedybg.handmade.network/ (should be above 0.3.8)
-Version: 0.6.2
+Version: 0.6.3
 Original Script author: septag@discord
 
 Options:
@@ -27,6 +27,9 @@ Extras:
     - RDBG_StepOut: Steps out of the current line when debugging, also updates the cursor position in 10x according to position in remedybg
 
 History:
+  0.6.3
+    - Minor bug fixed on workspace paths with spaces
+
   0.6.2
     - Changed tabs to spaces :(
     - Fixed a minor bug in RemedyBG.Hook
@@ -337,7 +340,7 @@ class Session:
             if full_path != '' and not os.path.isdir(full_path):
                 Editor.ShowMessageBox(TITLE, 'Debugger working directory is invalid: ' + full_path)
 
-            args = _rdbg_options.executable + ' --servername ' + self.name + ' "' + debug_cmd + '" ' + debug_args
+            args = _rdbg_options.executable + ' --servername ' + self.name + ' "' + debug_cmd + '" "' + debug_args + '"'
             self.process = subprocess.Popen(args, cwd=full_path)
             time.sleep(0.1)
 
