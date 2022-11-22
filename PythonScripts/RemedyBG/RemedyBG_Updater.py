@@ -52,6 +52,8 @@ Options:
     - RemedyBG_Updater.PagesToScan: will scrape until we go through this number of forum pages.  Generally a low value(2) is fine as the forum isnt too active
     - RemedyBG_Updater.MaxVersionHistory: will scrape until we find this number of versions
     
+    - RemedyBG_Updater.UpdateOnBoot: Check for updates when this script is (re)loaded
+    
 Commands:
     - RDBG_setup:           Setup remedy BG to be handled by this script 
     - RDBG_version:         Check if you are on the latest version
@@ -103,7 +105,11 @@ def create_missing_settings():
         
     if Editor.GetSetting("RemedyBG_Updater.MaxVersionHistory") == "":
         log("'RemedyBG_Updater.MaxVersionHistory' is missing,  Setting to default.")
-        Editor.SetSetting("RemedyBG_Updater.MaxVersionHistory", 3)    
+        Editor.SetSetting("RemedyBG_Updater.MaxVersionHistory", 3)   
+        
+    if Editor.GetSetting("RemedyBG_Updater.UpdateOnBoot") == "":
+        log("'RemedyBG_Updater.UpdateOnBoot' is missing,  Setting to default.")
+        Editor.SetSetting("RemedyBG_Updater.UpdateOnBoot", false)   
 
 def debug_log(text):        
     output_debug_text = Editor.GetSetting("RemedyBG.OutputDebugText")
@@ -313,7 +319,7 @@ def HandleCommandPanelCommand(command):
         debug_log("LatestVersion: {version}".format(version=version_checker.latest_version))
         debug_log("LocalVersion: {version}".format(version=version_checker.local_version))
         if version_checker.latest_version > version_checker.local_version:
-            message = "Local Version: {local}\nLatest Version: {latest}\n{separator}\n\n{latest_changes}".format(
+            message = "{latest_changes}\n{separator}\n\nLocal Version: {local}\nLatest Version: {latest}\n\nRun 'RDBG_update_latest' command to update.".format(
                 latest=".".join(version_checker.latest_version), 
                 local=".".join(version_checker.local_version),
                 separator="----------------------------------------------------------------------------",
@@ -326,6 +332,31 @@ def HandleCommandPanelCommand(command):
                 separator="----------------------------------------------------------------------------",
                 latest_changes="You have the latest version available.")
             Editor.ShowMessageBox(TITLE, message)
+        return True
+        
+    if command == "RDBG_version_silent":
+    
+        version_checker = VersionChecker()
+        debug_log("Checking local version.")
+        version_checker.determine_installed_version()
+        
+        # scrape the forum to determine the latest version
+        debug_log("Checking latest version.")
+        version_checker.scrape_forum()
+        
+        debug_log("LatestVersion: {version}".format(version=version_checker.latest_version))
+        debug_log("LocalVersion: {version}".format(version=version_checker.local_version))
+        if version_checker.latest_version > version_checker.local_version:
+            message = "{latest_changes}\n{separator}\n\nLocal Version: {local}\nLatest Version: {latest}\n\nRun 'RDBG_update_latest' command to update.".format(
+                latest=".".join(version_checker.latest_version), 
+                local=".".join(version_checker.local_version),
+                separator="----------------------------------------------------------------------------",
+                latest_changes=version_checker.forum_data[0]['post_content'])
+            
+            log(message)
+            Editor.ShowMessageBox(TITLE, message)
+        else:
+            log("RemedyBG is up to date with latest version {VERSION}".format(VERSION=".".join(version_checker.latest_version)))
         return True
     
     if command == "RDBG_update_latest":
@@ -358,3 +389,7 @@ def HandleCommandPanelCommand(command):
     return False
 
 Editor.AddCommandPanelHandlerFunction(HandleCommandPanelCommand)
+
+
+if Editor.GetSetting("RemedyBG_Updater.UpdateOnBoot") == "true":
+    HandleCommandPanelCommand("RDBG_version_silent")
