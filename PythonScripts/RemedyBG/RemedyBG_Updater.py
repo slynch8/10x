@@ -72,6 +72,8 @@ import zipfile
 import requests
 from bs4 import BeautifulSoup
 
+TITLE:str = "RemedyBG Updater"
+
 def create_all_settings():
     Editor.SetSetting("RemedyBG_Updater.PortalToken", "")
     Editor.SetSetting("RemedyBG_Updater.ItchLoginCookie", "")
