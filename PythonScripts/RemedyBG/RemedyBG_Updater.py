@@ -80,6 +80,7 @@ def create_all_settings():
     Editor.SetSetting("RemedyBG_Updater.StartPage", 1)
     Editor.SetSetting("RemedyBG_Updater.PagesToScan", 2)
     Editor.SetSetting("RemedyBG_Updater.MaxVersionHistory", 3)
+    Editor.SetSetting("RemedyBG_Updater.UpdateOnBoot", false)
     
 def create_missing_settings():
 
