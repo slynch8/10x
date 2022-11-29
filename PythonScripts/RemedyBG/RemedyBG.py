@@ -1,7 +1,7 @@
 '''
 RemedyBG debugger integration for 10x (10xeditor.com) 
 RemedyBG: https://remedybg.handmade.network/ (should be above 0.3.8)
-Version: 0.6.3
+Version: 0.7.0
 Original Script author: septag@discord
 
 Options:
@@ -27,6 +27,9 @@ Extras:
     - RDBG_StepOut: Steps out of the current line when debugging, also updates the cursor position in 10x according to position in remedybg
 
 History:
+  0.7.0
+    - Invalidates RemedyBG session if either active project/config/platform is changed
+
   0.6.3
     - Minor bug fixed on workspace paths with spaces
 
@@ -200,6 +203,8 @@ class Session:
         self.breakpoints = {}
         self.breakpoints_rdbg = {}
         self.target_state:TargetState = TargetState.NONE
+        self.active_project:str = ""    # project_path;config;platform
+        self.check_active_project_changed()
 
     def get_breakpoint_locations(self, bp_id:int):
         if self.cmd_pipe is None:
@@ -438,10 +443,19 @@ class Session:
             return True
         return False
 
+    def check_active_project_changed(self)->bool:
+        active_project:str = Editor.GetActiveProject() + ';' + Editor.GetBuildConfig() + ';' + Editor.GetBuildPlatform()
+        if active_project != self.active_project:
+            self.active_project = active_project
+            return True
+        return False
+
     def update(self)->bool:
         global _rdbg_options
 
         tm:float = time.time()
+
+        # do regular checks every one second
         if tm - self.last_poll_time >= 1.0:
             self.last_poll_time = tm
 
@@ -451,6 +465,11 @@ class Session:
             if self.process is not None and self.process.poll() is not None:
                 print('RDBG: RemedyBG quit with code: %i' % (self.process.poll()))
                 self.process = None
+                self.close(stop=False)
+                return False
+
+            if self.check_active_project_changed():
+                print('RDBG: Active project changed. Closing session...')
                 self.close(stop=False)
                 return False
 
@@ -524,6 +543,12 @@ def RDBG_StartDebugging():
     global _rdbg_options
 
     if _rdbg_session is not None:
+        if _rdbg_session.check_active_project_changed():
+            print('RDBG: Project config/platform changed. Restarting RemedyBG ...')
+            _rdbg_session.close(stop=False)
+            _rdbg_session = None
+            RDBG_StartDebugging()
+
         # poll for debugger state. if we are in the middle of debugging, then continue, otherwise run/build-run
         state:TargetState = _rdbg_session.send_command(Command.GET_TARGET_STATE)
         if state == TargetState.NONE:
