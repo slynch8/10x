@@ -1,13 +1,15 @@
 '''
 RemedyBG debugger integration for 10x (10xeditor.com) 
 RemedyBG: https://remedybg.handmade.network/ (should be above 0.3.8)
-Version: 0.7.0
+Version: 0.8.0
 Original Script author: septag@discord
 
 Options:
     - RemedyBG.Hook: (default=False) Hook RemedyBg into default Start/Stop/Restart debugging commands instead of the default msvc debugger integration
     - RemedyBG.Path: Path to remedybg.exe. If not set, the script will assume remedybg.exe is in PATH or current dir
-    - RemedyBG.OutputDebugText: (default=true) receives and output debug text to 10x output
+    - RemedyBG.OutputDebugText: (default=True) receives and output debug text to 10x output
+    - RemedyBG.KeepSessionOnActiveChange: (default=False) when active project or config is changed, it leaves the previously opened RemedyBG session
+                                           This is useful when you want to debug multiple binaries within a project like client/server apps
 
 Commands:
     - RDBG_StartDebugging: Same behavior as default StartDebugging. Launches remedybg if not opened before and runs the 
@@ -27,6 +29,10 @@ Extras:
     - RDBG_StepOut: Steps out of the current line when debugging, also updates the cursor position in 10x according to position in remedybg
 
 History:
+  0.8.0
+    - Improved debugger session names, now debugging sessions are more immune to overlapping
+    - Added `RemedyBG.KeepSessionOnActiveChange` that keeps the current debugging session when active project or config is changed
+
   0.7.0
     - Invalidates RemedyBG session if either active project/config/platform is changed
 
@@ -100,17 +106,25 @@ class Options():
         output_debug_text = Editor.GetSetting("RemedyBG.OutputDebugText") 
         if output_debug_text and output_debug_text == 'false':
             self.output_debug_text = False
-
-        if  Editor.GetSetting("BuildBeforeStartDebugging") and Editor.GetSetting("BuildBeforeStartDebugging") == 'true':
-            self.build_before_debug = True
         else:
-            self.build_before_debug = False
+            self.output_debug_text = True
 
         hook_calls = Editor.GetSetting("RemedyBG.Hook")
         if hook_calls and hook_calls == 'true':
             self.hook_calls = True
         else:
             self.hook_calls = False
+
+        keep_session = Editor.GetSetting("RemedyBG.KeepSessionOnActiveChange")
+        if keep_session and keep_session == 'true':
+            self.keep_session = True
+        else:
+            self.keep_session = False
+
+        if  Editor.GetSetting("BuildBeforeStartDebugging") and Editor.GetSetting("BuildBeforeStartDebugging") == 'true':
+            self.build_before_debug = True
+        else:
+            self.build_before_debug = False
 
 class TargetState(IntEnum):
     NONE = 1
@@ -192,8 +206,7 @@ class EventType(IntEnum):
     SOURCE_LOCATION_CHANGED = 200
 
 class Session:
-    def __init__(self, name:str):
-        self.name:str = name
+    def __init__(self):
         self.process:subprocess.Popen = None
         self.cmd_pipe:HANDLE = None
         self.event_pipe:HANDLE = None
@@ -204,7 +217,10 @@ class Session:
         self.breakpoints_rdbg = {}
         self.target_state:TargetState = TargetState.NONE
         self.active_project:str = ""    # project_path;config;platform
-        self.check_active_project_changed()
+
+        workspace_name:str = os.path.basename(Editor.GetWorkspaceFilename())
+        self.update_active_project()
+        self.name = workspace_name + '_' + hex(hash(self.active_project))
 
     def get_breakpoint_locations(self, bp_id:int):
         if self.cmd_pipe is None:
@@ -443,7 +459,7 @@ class Session:
             return True
         return False
 
-    def check_active_project_changed(self)->bool:
+    def update_active_project(self)->bool:
         active_project:str = Editor.GetActiveProject() + ';' + Editor.GetBuildConfig() + ';' + Editor.GetBuildPlatform()
         if active_project != self.active_project:
             self.active_project = active_project
@@ -468,8 +484,11 @@ class Session:
                 self.close(stop=False)
                 return False
 
-            if self.check_active_project_changed():
-                print('RDBG: Active project changed. Closing session...')
+            if self.update_active_project():
+                if _rdbg_options.keep_session:
+                    self.process = None
+                else:
+                    print('RDBG: Active project changed. Closing session...')
                 self.close(stop=False)
                 return False
 
@@ -543,8 +562,12 @@ def RDBG_StartDebugging():
     global _rdbg_options
 
     if _rdbg_session is not None:
-        if _rdbg_session.check_active_project_changed():
-            print('RDBG: Project config/platform changed. Restarting RemedyBG ...')
+        if _rdbg_session.update_active_project():
+            if _rdbg_options.keep_session:
+                _rdbg_session.process = None
+            else:
+                print('RDBG: Project config/platform changed. Restarting RemedyBG ...')
+                
             _rdbg_session.close(stop=False)
             _rdbg_session = None
             RDBG_StartDebugging()
@@ -566,7 +589,7 @@ def RDBG_StartDebugging():
 
         print('RDBG: Workspace: ' + Editor.GetWorkspaceFilename())
 
-        _rdbg_session = Session(os.path.basename(Editor.GetWorkspaceFilename()))
+        _rdbg_session = Session()
         if _rdbg_session.open():
             if _rdbg_options.build_before_debug:
                 _rdbg_session.run_after_build = True
