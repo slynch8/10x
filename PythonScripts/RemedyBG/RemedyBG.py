@@ -1,7 +1,7 @@
 '''
 RemedyBG debugger integration for 10x (10xeditor.com) 
 RemedyBG: https://remedybg.handmade.network/ (should be above 0.3.8)
-Version: 0.8.1
+Version: 0.9.0
 Original Script author: septag@discord
 
 RDBG_Options:
@@ -10,6 +10,10 @@ RDBG_Options:
     - RemedyBG.OutputDebugText: (default=True) receives and output debug text to 10x output
     - RemedyBG.KeepSessionOnActiveChange: (default=False) when active project or config is changed, it leaves the previously opened RemedyBG session
                                            This is useful when you want to debug multiple binaries within a project like client/server apps
+    - RemedyBG.StartProcessExtraCommand: Extra 10x command that will be executed after process is started in RemedyBG
+    - RemedyBG.StopProcessExtraCommand: Extra 10x command that will be executed after process is stopped in RemedyBG
+    - RemedyBG.SnapWindow: (default='') Automatically snaps remedybg window to the right or left of the 10x window when debugging starts
+                                          Available options are 'top-right', 'top-left', 'bottom-right', 'bottom-left'
 
 Commands:
     - RDBG_StartDebugging: Same behavior as default StartDebugging. Launches remedybg if not opened before and runs the 
@@ -29,6 +33,10 @@ Extras:
     - RDBG_StepOut: Steps out of the current line when debugging, also updates the cursor position in 10x according to position in remedybg
 
 History:
+  0.9.0
+    - Added StartProcessExtraCommand, StopProcessExtraCommand settings to run commands on target start/stop
+    - Snap window option to snap remedybg window to 10x window when debugging starts
+
   0.8.1
     - Prefix all types with RDBG_ to avoid global name collisions with other scripts
 
@@ -83,13 +91,14 @@ History:
   0.2.0
     - Added new AddBreakpointUpdatedFunction and implemented proper breakpoint syncing from 10x to remedybg
     - Changed from GetSelectionStart/End API to new GetSelection function in AddWatch
+
   0.1.0
     - First release
 '''
 
 from enum import Enum, IntEnum
 from optparse import Option
-import win32file, win32pipe, pywintypes, win32api
+import win32file, win32pipe, pywintypes, win32api, win32gui
 import io, os, ctypes, time, typing, subprocess
 
 from N10X import Editor
@@ -129,6 +138,11 @@ class RDBG_Options():
         else:
             self.build_before_debug = False
 
+        self.start_debug_command:str = Editor.GetSetting("RemedyBG.StartProcessExtraCommand").strip()
+        self.stop_debug_command:str = Editor.GetSetting("RemedyBG.StopProcessExtraCommand").strip()
+        self.snap_window:str = Editor.GetSetting("RemedyBG.SnapWindow").strip().lower()
+        self.hwnd = win32gui.GetActiveWindow()
+
 class RDBG_TargetState(IntEnum):
     NONE = 1
     SUSPENDED = 2
@@ -136,6 +150,8 @@ class RDBG_TargetState(IntEnum):
 
 class RDBG_Command(IntEnum):
     BRING_DEBUGGER_TO_FOREGROUND = 50
+    SET_WINDOW_POS = 51
+    GET_WINDOW_POS = 52
     COMMAND_EXIT_DEBUGGER = 75
     GET_IS_SESSION_MODIFIED = 100
     GET_SESSION_FILENAME = 101
@@ -199,8 +215,12 @@ class RDBG_SourceLocChangedReason(IntEnum):
     DEBUG_BREAK = 12
 
 class RDBG_EventType(IntEnum):
-    KIND_EXIT_PROCESS = 100,
-    KIND_BREAKPOINT_HIT = 600,
+    EXIT_PROCESS = 100
+    TARGET_STARTED = 101
+    TARGET_ATTACHED = 102
+    TARGET_DETACHED = 103
+    TARGET_CONTINUED = 104
+    KIND_BREAKPOINT_HIT = 600
     KIND_BREAKPOINT_RESOLVED = 601
     OUTPUT_DEBUG_STRING = 800
     BREAKPOINT_ADDED = 602
@@ -313,6 +333,13 @@ class RDBG_Session:
                 rdbg_id = self.breakpoints[cmd_args['id']]
                 cmd_buffer.write(ctypes.c_uint32(rdbg_id))
                 cmd_buffer.write(ctypes.c_uint32(cmd_args['line']))
+        elif cmd == RDBG_Command.SET_WINDOW_POS:
+            cmd_buffer.write(ctypes.c_int32(cmd_args['x']))
+            cmd_buffer.write(ctypes.c_int32(cmd_args['y']))
+            cmd_buffer.write(ctypes.c_int32(cmd_args['w'])) 
+            cmd_buffer.write(ctypes.c_int32(cmd_args['h'])) 
+        elif cmd == RDBG_Command.GET_WINDOW_POS:
+            pass
         else:
             assert 0
             return 0		# not implemented
@@ -341,13 +368,33 @@ class RDBG_Session:
                 return int.from_bytes(out_buffer.read(2), 'little')
             elif cmd == RDBG_Command.ADD_WATCH:
                 return int.from_bytes(out_buffer.read(4), 'little')
-            elif cmd == RDBG_Command.START_DEBUGGING and self.target_state != RDBG_TargetState.EXECUTING:
-                self.target_state = RDBG_TargetState.EXECUTING
+            elif cmd == RDBG_Command.GET_WINDOW_POS:
+                x = int.from_bytes(out_buffer.read(4), 'little')
+                y = int.from_bytes(out_buffer.read(4), 'little')
+                w = int.from_bytes(out_buffer.read(4), 'little')
+                h = int.from_bytes(out_buffer.read(4), 'little')
+                return (x, y, w, h)
         else:
             print('RDBG: ' + str(cmd) + ' failed')
             return 0
 
         return 1
+
+    def snap_remedybg_window(self):
+        snap_mode = _rdbg_options.snap_window
+        if _rdbg_session is not None and snap_mode and snap_mode != '':
+            rect = win32gui.GetWindowRect(_rdbg_options.hwnd)
+            rx, ry, rw, rh = _rdbg_session.send_command(RDBG_Command.GET_WINDOW_POS)
+
+            if snap_mode == 'top-right':
+                _rdbg_session.send_command(RDBG_Command.SET_WINDOW_POS, x=rect[2], y=rect[1], w=rw, h=rh)
+            elif snap_mode == 'bottom-right':
+                _rdbg_session.send_command(RDBG_Command.SET_WINDOW_POS, x=rect[2], y=rect[3]-rh, w=rw, h=rh)
+            elif snap_mode == 'top-left':
+                _rdbg_session.send_command(RDBG_Command.SET_WINDOW_POS, x=rect[0]-rw, y=rect[1], w=rw, h=rh)
+            elif snap_mode == 'bottom-left':
+                _rdbg_session.send_command(RDBG_Command.SET_WINDOW_POS, x=rect[0]-rw, y=rect[3]-rh, w=rw, h=rh)
+                
 
     def open(self)->bool:
         try:
@@ -545,13 +592,32 @@ class RDBG_Session:
                             filename = filename.replace('\\', '/')
                             Editor.OpenFile(filename)
                             Editor.SetCursorPos((0, line-1)) # convert to index-based
-
+                            if reason == RDBG_SourceLocChangedReason.BREAKPOINT_HIT or \
+                               reason == RDBG_SourceLocChangedReason.EXCEPTION_HIT or \
+                               reason == RDBG_SourceLocChangedReason.STEP_OVER or \
+                               reason == RDBG_SourceLocChangedReason.STEP_IN or  \
+                               reason == RDBG_SourceLocChangedReason.NON_USER_BREAKPOINT or \
+                               reason == RDBG_SourceLocChangedReason.DEBUG_BREAK:
+                               self.target_state = RDBG_TargetState.SUSPENDED
                     elif event_type == RDBG_EventType.BREAKPOINT_MODIFIED:
                         # used for enabling/disabling breakpoints, we don't have that now
                         pass
-                    elif event_type == RDBG_EventType.KIND_EXIT_PROCESS:
-                        # exit_code:int = int.from_bytes(event_buffer.read(4), 'little')
+                    elif event_type == RDBG_EventType.EXIT_PROCESS:
+                        exit_code:int = int.from_bytes(event_buffer.read(4), 'little')
+                        print('RDBG: Debugging terminted with exit code:', exit_code)
                         self.target_state = RDBG_TargetState.NONE
+                        if _rdbg_options.stop_debug_command and _rdbg_options.stop_debug_command != '':
+                            print('RDBG: Execute:', _rdbg_options.stop_debug_command)
+                            Editor.ExecuteCommand(_rdbg_options.stop_debug_command)
+                    elif event_type == RDBG_EventType.TARGET_STARTED:
+                        print('RDBG: Debugging started')
+                        self.target_state = RDBG_TargetState.EXECUTING
+                        if _rdbg_options.start_debug_command and _rdbg_options.start_debug_command != '':
+                            print('RDBG: Execute:', _rdbg_options.start_debug_command)
+                            Editor.ExecuteCommand(_rdbg_options.start_debug_command)
+                        self.snap_remedybg_window()
+                    elif event_type == RDBG_EventType.TARGET_CONTINUED:
+                        self.target_state = RDBG_TargetState.EXECUTING
 
             except win32api.error as pipe_error:
                 print('RDBG:', pipe_error)
@@ -579,8 +645,7 @@ def RDBG_StartDebugging():
         state:RDBG_TargetState = _rdbg_session.send_command(RDBG_Command.GET_TARGET_STATE)
         if state == RDBG_TargetState.NONE:
             if _rdbg_options.build_before_debug:
-                _rdbg_session.run_after_build = True
-                # Editor.ExecuteCommand('BuildActiveWorkspace')
+                _rdbg_session.run_after_build = True    # Checking this in BuildFinished callback
             else:
                 _rdbg_session.run()
         elif state == RDBG_TargetState.SUSPENDED:
@@ -595,8 +660,7 @@ def RDBG_StartDebugging():
         _rdbg_session = RDBG_Session()
         if _rdbg_session.open():
             if _rdbg_options.build_before_debug:
-                _rdbg_session.run_after_build = True
-                # Editor.ExecuteCommand('BuildActiveWorkspace')
+                _rdbg_session.run_after_build = True    # Checking this in BuildFinished callback
             else:
                 _rdbg_session.run()			
         else:
@@ -605,7 +669,7 @@ def RDBG_StartDebugging():
 def RDBG_StopDebugging():
     global _rdbg_session
     if _rdbg_session is not None:
-        _rdbg_session.stop()
+        _rdbg_session.stop()        
 
 def RDBG_RestartDebugging():
     global _rdbg_session
