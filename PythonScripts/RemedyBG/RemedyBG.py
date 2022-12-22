@@ -1,7 +1,7 @@
 '''
 RemedyBG debugger integration for 10x (10xeditor.com) 
 RemedyBG: https://remedybg.handmade.network/ (should be above 0.3.8)
-Version: 0.9.0
+Version: 0.9.1
 Original Script author: septag@discord
 
 RDBG_Options:
@@ -33,6 +33,9 @@ Extras:
     - RDBG_StepOut: Steps out of the current line when debugging, also updates the cursor position in 10x according to position in remedybg
 
 History:
+  0.9.1
+    - Removed double quotes from debug_args (this might create regression bugs, we'll see)
+
   0.9.0
     - Added StartProcessExtraCommand, StopProcessExtraCommand settings to run commands on target start/stop
     - Snap window option to snap remedybg window to 10x window when debugging starts
@@ -411,7 +414,7 @@ class RDBG_Session:
             if full_path != '' and not os.path.isdir(full_path):
                 Editor.ShowMessageBox(RDBG_TITLE, 'Debugger working directory is invalid: ' + full_path)
 
-            args = _rdbg_options.executable + ' --servername ' + self.name + ' "' + debug_cmd + '" "' + debug_args + '"'
+            args = _rdbg_options.executable + ' --servername ' + self.name + ' "' + debug_cmd + '"' + (' ' if debug_args!='' else '') + debug_args
             self.process = subprocess.Popen(args, cwd=full_path)
             time.sleep(0.1)
 
