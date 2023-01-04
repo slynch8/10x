@@ -539,7 +539,20 @@ def HandleCommandModeKey(key, shift, control, alt):
             key == "Up" or \
             key == "Down" or \
             key == "Left" or \
-            key == "Right"
+            key == "Right" or \
+            key == "F1" or \
+            key == "F2" or \
+            key == "F3" or \
+            key == "F4" or \
+            key == "F5" or \
+            key == "F6" or \
+            key == "F7" or \
+            key == "F8" or \
+            key == "F9" or \
+            key == "F10" or \
+            key == "F11" or \
+            key == "F12" or \
+            key.startswith("Mouse")
 
     if handled or pass_through:
         global g_RepeatCount
