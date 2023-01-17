@@ -1,7 +1,7 @@
 '''
 RemedyBG debugger integration for 10x (10xeditor.com) 
 RemedyBG: https://remedybg.handmade.network/ (should be above 0.3.8)
-Version: 0.9.1
+Version: 0.10.0
 Original Script author: septag@discord
 
 RDBG_Options:
@@ -33,6 +33,10 @@ Extras:
     - RDBG_StepOut: Steps out of the current line when debugging, also updates the cursor position in 10x according to position in remedybg
 
 History:
+  0.10.0
+    - Added Setting override for `VisualStudioSync` and `BuildBeforeStartDebugging`
+    - Added support for `StopDebuggingOnBuild` setting
+
   0.9.1
     - Removed double quotes from debug_args (this might create regression bugs, we'll see)
 
@@ -113,6 +117,8 @@ RDBG_PROCESS_POLL_INTERVAL:float = 1.0
 
 class RDBG_Options():
     def __init__(self):
+        global _rdbg_options_override
+
         self.executable = Editor.GetSetting("RemedyBG.Path").strip()
         if not self.executable:
             self.executable = 'remedybg.exe'
@@ -130,6 +136,13 @@ class RDBG_Options():
         else:
             self.hook_calls = False
 
+        _rdbg_options_override = True
+        if self.hook_calls:
+            Editor.OverrideSetting('VisualStudioSync', 'false')
+        else:
+            Editor.RemoveSettingOverride('VisualStudioSync')
+        _rdbg_options_override = False
+
         keep_session = Editor.GetSetting("RemedyBG.KeepSessionOnActiveChange")
         if keep_session and keep_session == 'true':
             self.keep_session = True
@@ -140,6 +153,12 @@ class RDBG_Options():
             self.build_before_debug = True
         else:
             self.build_before_debug = False
+        print('BuildBeforeStartDebugging =', self.build_before_debug)
+
+        if  Editor.GetSetting("StopDebuggingOnBuild") and Editor.GetSetting("StopDebuggingOnBuild") == 'true':
+            self.stop_debug_on_build = True
+        else:
+            self.stop_debug_on_build = False
 
         self.start_debug_command:str = Editor.GetSetting("RemedyBG.StartProcessExtraCommand").strip()
         self.stop_debug_command:str = Editor.GetSetting("RemedyBG.StopProcessExtraCommand").strip()
@@ -521,6 +540,7 @@ class RDBG_Session:
 
     def update(self)->bool:
         global _rdbg_options
+        global _rdbg_options_override
 
         tm:float = time.time()
 
@@ -609,12 +629,24 @@ class RDBG_Session:
                         exit_code:int = int.from_bytes(event_buffer.read(4), 'little')
                         print('RDBG: Debugging terminted with exit code:', exit_code)
                         self.target_state = RDBG_TargetState.NONE
+
+                        if not _rdbg_options.stop_debug_on_build:
+                            _rdbg_options_override = True
+                            Editor.RemoveSettingOverride('BuildBeforeStartDebugging')
+                            _rdbg_options_override = False
+
                         if _rdbg_options.stop_debug_command and _rdbg_options.stop_debug_command != '':
                             print('RDBG: Execute:', _rdbg_options.stop_debug_command)
                             Editor.ExecuteCommand(_rdbg_options.stop_debug_command)
                     elif event_type == RDBG_EventType.TARGET_STARTED:
                         print('RDBG: Debugging started')
                         self.target_state = RDBG_TargetState.EXECUTING
+
+                        if not _rdbg_options.stop_debug_on_build:
+                            _rdbg_options_override = True
+                            Editor.OverrideSetting('BuildBeforeStartDebugging', 'false')
+                            _rdbg_options_override = False
+
                         if _rdbg_options.start_debug_command and _rdbg_options.start_debug_command != '':
                             print('RDBG: Execute:', _rdbg_options.start_debug_command)
                             Editor.ExecuteCommand(_rdbg_options.start_debug_command)
@@ -755,7 +787,8 @@ def _RDBG_Update():
 
 def _RDBG_SettingsChanged():
     global _rdbg_options
-    _rdbg_options = RDBG_Options()
+    if not _rdbg_options_override:
+        _rdbg_options = RDBG_Options()
 
 def _RDBG_StartDebugging()->bool:
     if _rdbg_options.hook_calls:
@@ -779,10 +812,13 @@ def _RDBG_RestartDebugging()->bool:
         return False
 
 def _RDBG_ProjectBuild(filename:str)->bool:
+    if _rdbg_options.stop_debug_on_build and _rdbg_session is not None:
+        _rdbg_session.stop()        
     return False
 
 _rdbg_session:RDBG_Session = None
 _rdbg_options:RDBG_Options = RDBG_Options()
+_rdbg_options_override:bool = False
 
 Editor.AddBreakpointAddedFunction(_RDBG_AddBreakpoint)
 Editor.AddBreakpointRemovedFunction(_RDBG_RemoveBreakpoint)
