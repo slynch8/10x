@@ -1,7 +1,7 @@
 '''
 RemedyBG debugger integration for 10x (10xeditor.com) 
 RemedyBG: https://remedybg.handmade.network/ (should be above 0.3.8)
-Version: 0.9.1
+Version: 0.10.0
 Original Script author: septag@discord
 
 RDBG_Options:
