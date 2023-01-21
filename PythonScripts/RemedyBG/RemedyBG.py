@@ -194,10 +194,10 @@ class RDBG_Command(IntEnum):
     STEP_OUT = 311,
     CONTINUE_EXECUTION = 312
     RUN_TO_FILE_AT_LINE = 313
-    GET_BREAKPOINT_LOCATIONS = 601
     ADD_BREAKPOINT_AT_FILENAME_LINE = 604
     UPDATE_BREAKPOINT_LINE = 608
     DELETE_BREAKPOINT = 610
+    GET_BREAKPOINT = 612
     DELETE_ALL_BREAKPOINTS = 611
     ADD_WATCH = 701
 
@@ -267,11 +267,11 @@ class RDBG_Session:
         self.update_active_project()
         self.name = workspace_name + '_' + hex(hash(self.active_project))
 
-    def get_breakpoint_locations(self, bp_id:int):
+    def get_breakpoint(self, bp_id:int):
         if self.cmd_pipe is None:
-            return 0		
+            return 0
         cmd_buffer = io.BytesIO()
-        cmd_buffer.write(ctypes.c_uint16(RDBG_Command.GET_BREAKPOINT_LOCATIONS))
+        cmd_buffer.write(ctypes.c_uint16(RDBG_Command.GET_BREAKPOINT))
         cmd_buffer.write(ctypes.c_uint32(bp_id))
         try:
             out_data = win32pipe.TransactNamedPipe(self.cmd_pipe, cmd_buffer.getvalue(), 8192, None)
@@ -280,21 +280,33 @@ class RDBG_Session:
             self.close(stop=False)
             return ('', 0)
 
-        out_buffer = io.BytesIO(out_data[1])		
+        out_buffer = io.BytesIO(out_data[1])
         result_code : RDBG_CommandResult = int.from_bytes(out_buffer.read(2), 'little')
         if result_code == 1:
-            num_locs:int = int.from_bytes(out_buffer.read(2), 'little')
-            # TODO: do we have several locations for a single breakpoint ?
-            if num_locs > 0:
-                address:int = int.from_bytes(out_buffer.read(8), 'little')
-                module_name:str = out_buffer.read(int.from_bytes(out_buffer.read(2), 'little')).decode('utf-8')
-                filename:str = out_buffer.read(int.from_bytes(out_buffer.read(2), 'little')).decode('utf-8')
-                line_num:int = int.from_bytes(out_buffer.read(4), 'little')
-                return (filename, line_num)
-            else:
-                return ('', 0)
-        else:
-            return ('', 0)		
+            uid:int = int.from_bytes(out_buffer.read(4), 'little')
+            enabled:bool = int.from_bytes(out_buffer.read(1), 'little')
+            module_name:str = out_buffer.read(int.from_bytes(out_buffer.read(2), 'little')).decode('utf-8')
+            condition_expr:str = out_buffer.read(int.from_bytes(out_buffer.read(2), 'little')).decode('utf-8')
+            kind:int = int.from_bytes(out_buffer.read(1), 'little')
+            match kind:
+                case RDBG_BreakpointKind.FUNCTION_NAME:
+                    function_name:str = out_buffer.read(int.from_bytes(out_buffer.read(2), 'little')).decode('utf-8')
+                    overload_id:int = int.from_bytes(out_buffer.read(4), 'little')
+
+                case RDBG_BreakpointKind.FILENAME_LINE:
+                    filename:str = out_buffer.read(int.from_bytes(out_buffer.read(2), 'little')).decode('utf-8')
+                    line_num:int = int.from_bytes(out_buffer.read(4), 'little')
+                    return (filename, line_num)
+
+                case RDBG_BreakpointKind.ADDRESS:
+                    address:int = int.from_bytes(out_buffer.read(8), 'little')
+
+                case RDBG_BreakpointKind.PROCESSOR:
+                    address_expression:str = out_buffer.read(int.from_bytes(out_buffer.read(2), 'little')).decode('utf-8')
+                    num_bytes:int = int.from_bytes(out_buffer.read(1), 'little')
+                    access_kind:int = int.from_bytes(out_buffer.read(1), 'little')
+
+        return ('', 0)
 
     def send_command(self, cmd:RDBG_Command, **cmd_args)->int:
         if self.cmd_pipe is None:
@@ -578,7 +590,7 @@ class RDBG_Session:
                     elif event_type == RDBG_EventType.KIND_BREAKPOINT_RESOLVED:
                         bp_id = int.from_bytes(event_buffer.read(4), 'little')
                         if bp_id in self.breakpoints_rdbg:
-                            filename, new_line = self.get_breakpoint_locations(bp_id)
+                            filename, new_line = self.get_breakpoint(bp_id)
                             id_10x, filename_old, line = self.breakpoints_rdbg[bp_id]
 
                             if filename != '':
@@ -592,7 +604,7 @@ class RDBG_Session:
                     elif event_type == RDBG_EventType.BREAKPOINT_ADDED:
                         bp_id = int.from_bytes(event_buffer.read(4), 'little')
                         if bp_id not in self.breakpoints_rdbg:
-                            filename, line = self.get_breakpoint_locations(bp_id)
+                            filename, line = self.get_breakpoint(bp_id)
                             if filename != '':
                                 filename = filename.replace('\\', '/')
                                 id_10x:int = Editor.AddBreakpoint(filename, line)
