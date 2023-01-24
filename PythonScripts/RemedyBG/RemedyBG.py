@@ -1,7 +1,7 @@
 '''
 RemedyBG debugger integration for 10x (10xeditor.com) 
 RemedyBG: https://remedybg.handmade.network/ (should be above 0.3.8)
-Version: 0.10.0
+Version: 0.10.1
 Original Script author: septag@discord
 
 RDBG_Options:
@@ -33,6 +33,9 @@ Extras:
     - RDBG_StepOut: Steps out of the current line when debugging, also updates the cursor position in 10x according to position in remedybg
 
 History:
+  0.10.1:
+    - Added the ability to retrieve unresolved breakpoints from remedybg
+
   0.10.0
     - Added Setting override for `VisualStudioSync` and `BuildBeforeStartDebugging`
     - Added support for `StopDebuggingOnBuild` setting
