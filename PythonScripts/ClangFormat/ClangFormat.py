@@ -40,7 +40,7 @@ def ClangFormatSelection():
                                         '-i',
                                         N10X.Editor.GetCurrentFilename()],
                             shell=False, stdin=None, stdout=None, stderr=None, 
-                            close_fds=True, creationflags=DETACHED_PROCESS)
+                            close_fds=True)
             process.communicate()
         except FileNotFoundError:
             print('[ClangFormat]: clang-format executable "' + settings.bin_path + '" could not be found')    
@@ -57,7 +57,7 @@ def ClangFormatFile():
                                     '-i',
                                     N10X.Editor.GetCurrentFilename()],
                             shell=False, stdin=None, stdout=None, stderr=None, 
-                            close_fds=True, creationflags=DETACHED_PROCESS)
+                            close_fds=True)
         process.communicate()
     except FileNotFoundError:
          print('[ClangFormat]: clang-format executable "' + settings.bin_path + '" could not be found')
