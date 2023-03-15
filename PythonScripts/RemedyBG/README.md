@@ -5,6 +5,8 @@ RemedyBG: https://remedybg.handmade.network/
 For more info/documentation **please read the top of the python script.**
 Note that this script only works with RemedyBG version 0.3.8 and above
 
+To install the script copy it to %appdata%\10x\PythonScripts\
+
 # RemedyBG Debugger Updater 
 Version: 0.1.0
 
