@@ -31,11 +31,11 @@ def MaxLineX(y=None):
     if y is None:
       _, y = N10X.Editor.GetCursorPos()
 
-    return len(N10X.Editor.GetLine(y)) - 1
+    return len(N10X.Editor.GetLine(y)) - 2
 
 #------------------------------------------------------------------------
 def MaxY():
-    return N10X.Editor.GetLineCount()
+    return max(0, N10X.Editor.GetLineCount() - 1)
 
 #------------------------------------------------------------------------
 def XInRange(x, y=None):
@@ -55,6 +55,13 @@ def MoveCursorWithinRange(x=None, y=None):
     y = YInRange(y)
 
     N10X.Editor.SetCursorPos((XInRange(x, y), y))
+
+def MoveCursorWithinRangeDelta(x_delta=0, y_delta=0):
+    x, y = N10X.Editor.GetCursorPos()
+    x += x_delta
+    y += y_delta
+    MoveCursorWithinRange(x, y)
+    
 
 #------------------------------------------------------------------------
 # Modes
@@ -191,12 +198,6 @@ def MoveToEndOfFile():
 def MoveToStartOfLine():
     cursor_pos = N10X.Editor.GetCursorPos()
     N10X.Editor.SetCursorPos((0, cursor_pos[1]))
-
-#------------------------------------------------------------------------
-def MoveToEndOfLine():
-    cursor_pos = N10X.Editor.GetCursorPos()
-    line = N10X.Editor.GetLine(cursor_pos[1])
-    N10X.Editor.SetCursorPos((len(line), cursor_pos[1]))
 
 #------------------------------------------------------------------------
 def IsWordChar(c):
@@ -426,7 +427,7 @@ def HandleCommandModeChar(c):
         MoveToStartOfLine()
 
     elif command == "$":
-        MoveToEndOfLine()
+        MoveCursorWithinRange(x=MaxLineX() - 1)
 
     elif command == "b":
         RepeatedCommand("MoveCursorPrevWord")
@@ -456,16 +457,12 @@ def HandleCommandModeChar(c):
         EnterInsertMode();
 
     elif command == "a":
-        # NOTE: this bugs when trying pressing it at the end of a line.
-        # It shouldn't go to the next line, it should just go to the last possible position.
-        # This might be a byproduct of not using a block cursor in insertmode, where you
-        # actually can't go to the position after the last char.
-        N10X.Editor.ExecuteCommand("MoveCursorRight");
         EnterInsertMode();
+        MoveCursorWithinRangeDelta(x_delta=1)
 
     elif command == "A":
-        MoveToEndOfLine();
         EnterInsertMode();
+        MoveCursorWithinRange(x=MaxLineX())
 
     elif command == "e":
         cursor_pos = N10X.Editor.GetCursorPos()
@@ -697,9 +694,8 @@ def HandleCommandPanelCommand(command):
         return True
     
     split = command.split(":")
-    print(split)
     if len(split) == 2 and split[1].isdecimal(): 
-        MoveCursorWithinRange(None, int(split[1]) - 1)
+        MoveCursorWithinRange(y=int(split[1]) - 1)
         return True
 
 #------------------------------------------------------------------------
