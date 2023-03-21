@@ -428,8 +428,8 @@ def HandleCommandModeChar(c):
 
     if command == "0":
         MoveToStartOfLine()
-    
-
+    elif command == "%":
+        N10X.Editor.ExecuteCommand("MoveToMatchingBracket")
     elif command == "$":
         MoveCursorWithinRange(x=MaxLineX() - 1)
 
