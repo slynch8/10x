@@ -155,14 +155,18 @@ def UpdateVisualModeSelection():
     global g_VisualMode
     global g_VisualModeStartPos
     
-    cursor_pos = N10X.Editor.GetCursorPos()
+    x, y = N10X.Editor.GetCursorPos()
 
     if g_VisualMode == "standard":
-        N10X.Editor.SetSelection(g_VisualModeStartPos, cursor_pos, cursor_index=1)
-        
+        start = g_VisualModeStartPos
+        end = (x, y)
+        if end[1] < start[1]:
+           end, start = start, end
+        N10X.Editor.SetSelection(start, (end[0] + 1, end[1]), cursor_index=1)
+
     elif g_VisualMode == "line":
-        start_line = min(g_VisualModeStartPos[1], cursor_pos[1])
-        end_line = max(g_VisualModeStartPos[1], cursor_pos[1])
+        start_line = min(g_VisualModeStartPos[1], y)
+        end_line = max(g_VisualModeStartPos[1], y)
         N10X.Editor.SetSelection((0, start_line), (0, end_line + 1), cursor_index=1)
 
     N10X.Editor.SetCursorVisible(1, False)
@@ -430,8 +434,10 @@ def HandleCommandModeChar(c):
         MoveToStartOfLine()
     elif command == "%":
         N10X.Editor.ExecuteCommand("MoveToMatchingBracket")
+        UpdateVisualModeSelection()
     elif command == "$":
         MoveCursorWithinRange(x=MaxLineX() - 1)
+        UpdateVisualModeSelection()
 
     elif command == "b":
         RepeatedCommand("MoveCursorPrevWord")
