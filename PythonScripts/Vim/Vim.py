@@ -21,6 +21,42 @@ g_VisualModeStartPos = None
 g_HandingKey = False
 
 #------------------------------------------------------------------------
+# Helpers
+
+#------------------------------------------------------------------------
+def clamp(min_val, max_val, n):
+   return max(min(n, max_val), min_val)
+
+def MaxLineX(y=None):
+    if y is None:
+      _, y = N10X.Editor.GetCursorPos()
+
+    return len(N10X.Editor.GetLine(y)) - 1
+
+#------------------------------------------------------------------------
+def MaxY():
+    return N10X.Editor.GetLineCount()
+
+#------------------------------------------------------------------------
+def XInRange(x, y=None):
+    return clamp(0, MaxLineX(y), x)
+
+#------------------------------------------------------------------------
+def YInRange(y):
+    return clamp(0, MaxY(), y)
+
+#------------------------------------------------------------------------
+def MoveCursorWithinRange(x=None, y=None):
+    if x is None:
+      x, _ = N10X.Editor.GetCursorPos()
+    if y is None:
+      _, y = N10X.Editor.GetCursorPos()
+
+    y = YInRange(y)
+
+    N10X.Editor.SetCursorPos((XInRange(x, y), y))
+
+#------------------------------------------------------------------------
 # Modes
 
 #------------------------------------------------------------------------
@@ -29,7 +65,7 @@ def EnterInsertMode():
     global g_CommandMode
     if g_CommandMode != "insert":
         g_CommandMode = "insert"
-        N10X.Editor.SetCursorMode("Underscore")
+        N10X.Editor.SetCursorMode("Line")
         N10X.Editor.ResetCursorBlink()
 
 #------------------------------------------------------------------------
@@ -40,6 +76,9 @@ def EnterCommandMode():
         SetPrevCommand(None)
         N10X.Editor.SetCursorMode("Block")
         N10X.Editor.ResetCursorBlink()
+        x, y = N10X.Editor.GetCursorPos()
+
+        MoveCursorWithinRange(x - 1, y)
 
 #------------------------------------------------------------------------
 def EnterVisualMode(mode):
@@ -528,6 +567,12 @@ def HandleCommandModeKey(key, shift, control, alt):
     
     elif key == "R" and control:
         N10X.Editor.ExecuteCommand("Redo")
+    
+    elif key == "P" and control:
+        N10X.Editor.ExecuteCommand("Search")
+    
+    elif key == "S" and shift:
+        N10X.Editor.ExecuteCommand("SaveFile")
 
     elif key == "Up" and g_VisualMode != "none":
         N10X.Editor.SendKey("Up")
@@ -601,6 +646,10 @@ def HandleInsertModeKey(key, shift, control, alt):
         EnterCommandMode()
         return True
 
+
+def HandleVisualModeKey(key, shift, contro, alt):
+    None
+
 #------------------------------------------------------------------------
 # 10X Callbacks
 
@@ -645,6 +694,12 @@ def HandleCommandPanelCommand(command):
     if command == ":q!":
         N10X.Editor.DiscardUnsavedChanges()
         N10X.Editor.ExecuteCommand("CloseFile")
+        return True
+    
+    split = command.split(":")
+    print(split)
+    if len(split) == 2 and split[1].isdecimal(): 
+        MoveCursorWithinRange(None, int(split[1]) - 1)
         return True
 
 #------------------------------------------------------------------------
