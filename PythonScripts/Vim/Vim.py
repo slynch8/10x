@@ -548,6 +548,12 @@ def HandleCommandModeKey(key, shift, control, alt):
         N10X.Editor.SendKey("PageUp")
     elif key == "PageDown":
         N10X.Editor.SendKey("PageDown")
+
+    elif key == "U" and control:
+        N10X.Editor.SendKey("PageUp")
+    elif key == "D" and control:
+        N10X.Editor.SendKey("PageDown")
+
     else:
         handled = False
 
