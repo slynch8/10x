@@ -514,16 +514,16 @@ def HandleCommandModeKey(key, shift, control, alt):
     if key == "Escape":
         ExitVisualMode()
         
-    elif key == "H" and alt:
+    elif key == "H" and control:
         N10X.Editor.ExecuteCommand("MovePanelFocusLeft")
 
-    elif key == "L" and alt:
+    elif key == "L" and control:
         N10X.Editor.ExecuteCommand("MovePanelFocusRight")
 
-    elif key == "J" and alt:
+    elif key == "J" and control:
         N10X.Editor.ExecuteCommand("MovePanelFocusDown")
 
-    elif key == "K" and alt:
+    elif key == "K" and control:
         N10X.Editor.ExecuteCommand("MovePanelFocusUp")
 
     elif key == "Up" and g_VisualMode != "none":
