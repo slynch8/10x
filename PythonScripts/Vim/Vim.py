@@ -276,14 +276,17 @@ def DeleteLine():
 
 #------------------------------------------------------------------------
 def JoinLine():
+    N10X.Editor.PushUndoGroup()
     N10X.Editor.SendKey("Down")
     DeleteLine()
     N10X.Editor.SendKey("Up")
-    MoveToEndOfLine()
+    MoveCursorWithinRange(x=MaxLineX())
     cursor_pos = N10X.Editor.GetCursorPos()
     N10X.Editor.InsertText(" ")
     N10X.Editor.ExecuteCommand("Paste")
     N10X.Editor.SetCursorPos(cursor_pos) # Need to set the cursor pos to right before join
+    N10X.Editor.PopUndoGroup()
+
 
 #------------------------------------------------------------------------
 def Yank():
@@ -333,7 +336,7 @@ def AppendNewLineBelow():
     ExitVisualMode()
     EnterInsertMode()
     N10X.Editor.PushUndoGroup()
-    MoveToEndOfLine()
+    MoveCursorWithinRange(x=MaxLineX())
     N10X.Editor.SendKey("Enter")
     N10X.Editor.PopUndoGroup()
 
@@ -425,6 +428,7 @@ def HandleCommandModeChar(c):
 
     if command == "0":
         MoveToStartOfLine()
+    
 
     elif command == "$":
         MoveCursorWithinRange(x=MaxLineX() - 1)
