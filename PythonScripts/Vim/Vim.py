@@ -525,6 +525,9 @@ def HandleCommandModeKey(key, shift, control, alt):
 
     elif key == "K" and control:
         N10X.Editor.ExecuteCommand("MovePanelFocusUp")
+    
+    elif key == "R" and control:
+        N10X.Editor.ExecuteCommand("Redo")
 
     elif key == "Up" and g_VisualMode != "none":
         N10X.Editor.SendKey("Up")
