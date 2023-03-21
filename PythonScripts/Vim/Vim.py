@@ -61,7 +61,54 @@ def MoveCursorWithinRangeDelta(x_delta=0, y_delta=0):
     x += x_delta
     y += y_delta
     MoveCursorWithinRange(x, y)
+
+def MoveCursorXOrWrap(x):
+    _, y = N10X.Editor.GetCursorPos()
+
+    if x > MaxLineX(y):
+      x = 0
+      y += 1
     
+    if y >= MaxY():
+      y = MaxY()
+      N10X.Editor.SetCursorPos((MaxLineX(y), y))
+    else:
+      N10X.Editor.SetCursorPos((x, y))
+
+def MoveCursorXOrWrapDelta(x_delta):
+    if x_delta == 0:
+      return
+
+    x, y = N10X.Editor.GetCursorPos()
+    
+    # NOTE(Brandon): We max the line length with 1
+    # because on empty lines we don't want to skip.
+    def MaxLineMin1(y):
+      return max(MaxLineX(y), 1)
+
+    x += x_delta
+    if x_delta > 0:
+        while y <= MaxY() and x > MaxLineMin1(y) - 1:
+            x = x - MaxLineMin1(y)
+            y += 1
+
+        if y > MaxY():
+            y = MaxY()
+            N10X.Editor.SetCursorPos((MaxLineX(y), y))
+            return
+    else:
+        while y >= 0 and x < 0:
+            y -= 1
+            if y < 0:
+                x = 0
+            else:
+                x = MaxLineMin1(y) + x
+ 
+        if y < 0:
+            N10X.Editor.SetCursorPos((0, 0))
+            return
+
+    N10X.Editor.SetCursorPos((x, y))
 
 #------------------------------------------------------------------------
 # Modes
@@ -185,18 +232,12 @@ def SubmitVisualModeSelection():
 # Command Functions
 
 #------------------------------------------------------------------------
-# NOTE: Vim tries to maintain the x position, but not sure of the exact rules.
-# This screws up when the x coordinate does not exist, but is workable.
 def MoveToStartOfFile():
-    cursor_pos = N10X.Editor.GetCursorPos()
-    N10X.Editor.SetCursorPos((cursor_pos[0], 0))
+    MoveCursorWithinRange(y=0)
 
 #------------------------------------------------------------------------
 def MoveToEndOfFile():
-    cursor_pos = N10X.Editor.GetCursorPos()
-    line_count = N10X.Editor.GetLineCount()
-
-    N10X.Editor.SetCursorPos((cursor_pos[0], line_count-1))
+    MoveCursorWithinRange(y=MaxY())
 
 #------------------------------------------------------------------------
 def MoveToStartOfLine():
@@ -415,11 +456,11 @@ def HandleCommandModeChar(c):
         RepeatedEditCommand("Paste")
 
     elif command == "h":
-        RepeatedCommand(lambda:N10X.Editor.SendKey("Left"));
+        RepeatedCommand(lambda:MoveCursorXOrWrapDelta(-1));
         UpdateVisualModeSelection()
 
     elif command == "l":
-        RepeatedCommand(lambda:N10X.Editor.SendKey("Right"));
+        RepeatedCommand(lambda:MoveCursorXOrWrapDelta(1));
         UpdateVisualModeSelection()
 
     elif command == "k":
@@ -476,7 +517,7 @@ def HandleCommandModeChar(c):
 
     elif command == "e":
         cursor_pos = N10X.Editor.GetCursorPos()
-        N10X.Editor.SetCursorPos((GetWordEnd(), cursor_pos[1]))
+        MoveCursorXOrWrap(GetWordEnd())
         UpdateVisualModeSelection()
 
     elif command == "p":
