@@ -12,7 +12,7 @@ g_VimEnabled = False
 
 g_CommandMode = "insert"
 
-g_PrevCommand = None
+g_PrevCommand = ""
 g_RepeatCount = None
 
 g_VisualMode = "none"                # "none", "standard", "line"
@@ -33,19 +33,15 @@ def MaxLineX(y=None):
 
     return len(N10X.Editor.GetLine(y)) - 2
 
-#------------------------------------------------------------------------
 def MaxY():
     return max(0, N10X.Editor.GetLineCount() - 1)
 
-#------------------------------------------------------------------------
 def XInRange(x, y=None):
     return clamp(0, MaxLineX(y), x)
 
-#------------------------------------------------------------------------
 def YInRange(y):
     return clamp(0, MaxY(), y)
 
-#------------------------------------------------------------------------
 def MoveCursorWithinRange(x=None, y=None):
     if x is None:
       x, _ = N10X.Editor.GetCursorPos()
@@ -109,6 +105,38 @@ def MoveCursorXOrWrapDelta(x_delta):
             return
 
     N10X.Editor.SetCursorPos((x, y))
+ 
+def FindNextOccurrenceForward(c):
+    x, y = N10X.Editor.GetCursorPos()
+
+    x += 1
+
+    line = N10X.Editor.GetLine(y)
+    if x >= len(line):
+        return None
+    
+    line = line[x:]
+    index = line.find(c)
+    if index < 0:
+        return None
+
+    return x + index
+
+def FindNextOccurrenceBackward(c):
+    x, y = N10X.Editor.GetCursorPos()
+
+    x -= 1
+
+    line = N10X.Editor.GetLine(y)
+    if x < 0:
+        return None
+    
+    line = line[:x]
+    index = line.find(c)
+    if index < 0:
+        return None
+
+    return index
 
 #------------------------------------------------------------------------
 # Modes
@@ -127,7 +155,7 @@ def EnterCommandMode():
     global g_CommandMode
     if g_CommandMode != "normal":
         g_CommandMode = "normal"
-        SetPrevCommand(None)
+        ClearPrevCommand()
         N10X.Editor.SetCursorMode("Block")
         N10X.Editor.ResetCursorBlink()
         x, y = N10X.Editor.GetCursorPos()
@@ -155,23 +183,23 @@ def ExitVisualMode():
 
 #------------------------------------------------------------------------
 def IsCommandPrefix(c):
-    return \
-        c == "c" or \
-        c == "d" or \
-        c == "g" or \
-        c == ">" or \
-        c == "<" or \
-        c == "y"
+    if g_VisualMode == "none":
+        return c in "cdfFtTg<>y"
+    else:
+        return c in "gifFtT"
 
 #------------------------------------------------------------------------
+def ClearPrevCommand():
+    global g_PrevCommand
+    if g_PrevCommand:
+        g_PrevCommand = ""
+        # N10X.Editor.SetCursorMode("Block")
+
 def SetPrevCommand(c):
     global g_PrevCommand
-    if g_CommandMode == "normal" and g_PrevCommand != c:
-        g_PrevCommand = c
-        if c:
-            N10X.Editor.SetCursorMode("HalfBlock")
-        else:
-            N10X.Editor.SetCursorMode("Block")
+    if g_CommandMode == "normal":
+        g_PrevCommand += c
+        # N10X.Editor.SetCursorMode("HalfBlock")
 
 #------------------------------------------------------------------------
 def GetAndClearRepeatCount():
@@ -207,7 +235,7 @@ def UpdateVisualModeSelection():
     if g_VisualMode == "standard":
         start = g_VisualModeStartPos
         end = (x, y)
-        if end[1] < start[1]:
+        if end[1] < start[1] or (end[1] == start[1] and end[0] < start[0]):
            end, start = start, end
         N10X.Editor.SetSelection(start, (end[0] + 1, end[1]), cursor_index=1)
 
@@ -401,24 +429,21 @@ def HandleCommandModeChar(c):
 
     global g_VisualMode
 
+    consumed = True
+
     if command == "i":
         EnterInsertMode()
 
-    elif g_VisualMode != "none" and command == "d":
-        DeleteLine()
+    elif g_PrevCommand == "f":
+        MoveCursorWithinRange(x=FindNextOccurrenceForward(c))
 
-    elif g_VisualMode != "none" and command == "y":
-        Yank()
-
-    elif g_VisualMode != "none" and command == "c":
-        if g_VisualMode == "line":
-            ReplaceLine()
-        else:
-            ReplaceCharacters()
+    elif g_PrevCommand == "F":
+        MoveCursorWithinRange(x=FindNextOccurrenceBackward(c))
 
     elif IsCommandPrefix(command):
         SetPrevCommand(command)
-
+        consumed = False
+     
     elif c >= '1' and c <= '9' or (c == '0' and g_RepeatCount != None):
         if g_RepeatCount == None:
             g_RepeatCount = int(c)
@@ -431,16 +456,10 @@ def HandleCommandModeChar(c):
         N10X.Editor.SetCommandPanelText(":")
 
     elif command == "v":
-        if g_VisualMode == "standard":
-            ExitVisualMode()
-        else:
-            EnterVisualMode("standard")
+        EnterVisualMode("standard")
 
     elif command == "V":
-        if g_VisualMode == "line":
-            ExitVisualMode()
-        else:
-            EnterVisualMode("line")
+        EnterVisualMode("line")
 
     elif command == "dd":
         DeleteLine()
@@ -457,39 +476,34 @@ def HandleCommandModeChar(c):
 
     elif command == "h":
         RepeatedCommand(lambda:MoveCursorXOrWrapDelta(-1));
-        UpdateVisualModeSelection()
 
     elif command == "l":
         RepeatedCommand(lambda:MoveCursorXOrWrapDelta(1));
-        UpdateVisualModeSelection()
 
     elif command == "k":
         RepeatedCommand(lambda:N10X.Editor.SendKey("Up"));
-        UpdateVisualModeSelection()
 
     elif command == "j":
         RepeatedCommand(lambda:N10X.Editor.SendKey("Down"));
-        UpdateVisualModeSelection()
 
-    if command == "0":
+    elif command == "0":
         MoveToStartOfLine()
+
     elif command == "%":
         N10X.Editor.ExecuteCommand("MoveToMatchingBracket")
-        UpdateVisualModeSelection()
+
     elif command == "$":
         MoveCursorWithinRange(x=MaxLineX() - 1)
-        UpdateVisualModeSelection()
 
     elif command == "b":
         RepeatedCommand("MoveCursorPrevWord")
-        UpdateVisualModeSelection()
 
     elif command == "w":
         RepeatedCommand("MoveCursorNextWord")
-        UpdateVisualModeSelection()
 
     elif command == "dw":
         CutToEndOfWord()
+
     elif command == "cw":
         CutToEndOfWordAndInsert()
 
@@ -524,7 +538,6 @@ def HandleCommandModeChar(c):
     elif command == "e":
         cursor_pos = N10X.Editor.GetCursorPos()
         MoveCursorXOrWrap(GetWordEnd())
-        UpdateVisualModeSelection()
 
     elif command == "p":
         # In vim, the cursor should "stay with the line."
@@ -533,12 +546,6 @@ def HandleCommandModeChar(c):
         N10X.Editor.ExecuteCommand("MoveCursorDown");
         N10X.Editor.ExecuteCommand("Paste")
         N10X.Editor.ExecuteCommand("MoveCursorUp");
-
-    elif command == "*":
-        RepeatedCommand("FindInFileNextCurrentWord")
-
-    elif command == "#":
-        RepeatedCommand("FindInFilePrevCurrentWord")
 
     elif command == "O":
         ExitVisualMode()
@@ -552,15 +559,6 @@ def HandleCommandModeChar(c):
         ExitVisualMode()
         N10X.Editor.ExecuteCommand("GotoSymbolDefinition");
 
-    # NOTE: in vim, this loops.
-    elif command == "gt":
-        ExitVisualMode()
-        N10X.Editor.ExecuteCommand("NextPanelTab");
-
-    elif command == "gT":
-        ExitVisualMode()
-        N10X.Editor.ExecuteCommand("PrevPanelTab");
-
     elif command == "gg":
         MoveToStartOfFile();
 
@@ -573,26 +571,24 @@ def HandleCommandModeChar(c):
         RepeatedCommand("Undo")
 
     elif command == ">>":
-        SubmitVisualModeSelection()
         RepeatedCommand("IndentLine")
 
     elif command == "<<":
-        SubmitVisualModeSelection()
         RepeatedCommand("UnindentLine")
 
     elif command == "x":
         DeleteCharacters()
 
-    if not IsCommandPrefix(command):
-        SetPrevCommand(None)
+    if consumed:
+        ClearPrevCommand()
 
     # reset repeat count
     if (not is_repeat_key) and (not IsCommandPrefix(command)):
         g_RepeatCount = None
 
+
 #------------------------------------------------------------------------
 def HandleCommandModeKey(key, shift, control, alt):
-
     global g_HandingKey
     if g_HandingKey:
         return
@@ -612,50 +608,34 @@ def HandleCommandModeKey(key, shift, control, alt):
         N10X.Editor.ExecuteCommand("NextPanelTab")
     elif key == "H" and control:
         N10X.Editor.ExecuteCommand("MovePanelFocusLeft")
-
     elif key == "L" and control:
         N10X.Editor.ExecuteCommand("MovePanelFocusRight")
-
     elif key == "J" and control:
         N10X.Editor.ExecuteCommand("MovePanelFocusDown")
-
     elif key == "K" and control:
         N10X.Editor.ExecuteCommand("MovePanelFocusUp")
-    
     elif key == "R" and control:
         N10X.Editor.ExecuteCommand("Redo")
-    
     elif key == "P" and control:
         N10X.Editor.ExecuteCommand("Search")
-    
     elif key == "S" and shift:
         N10X.Editor.ExecuteCommand("SaveFile")
-
-    elif key == "Up" and g_VisualMode != "none":
+    elif key == "Up":
         N10X.Editor.SendKey("Up")
-        UpdateVisualModeSelection()
-
-    elif key == "Down" and g_VisualMode != "none":
+    elif key == "Down":
         N10X.Editor.SendKey("Down")
-        UpdateVisualModeSelection()
-
-    elif key == "Left" and g_VisualMode != "none":
+    elif key == "Left":
         N10X.Editor.SendKey("Left")
-        UpdateVisualModeSelection()
-
-    elif key == "Right" and g_VisualMode != "none":
+    elif key == "Right":
         N10X.Editor.SendKey("Right")
-        UpdateVisualModeSelection()
     elif key == "PageUp":
         N10X.Editor.SendKey("PageUp")
     elif key == "PageDown":
         N10X.Editor.SendKey("PageDown")
-
     elif key == "U" and control:
         N10X.Editor.SendKey("PageUp")
     elif key == "D" and control:
         N10X.Editor.SendKey("PageDown")
-
     else:
         handled = False
 
@@ -686,10 +666,12 @@ def HandleCommandModeKey(key, shift, control, alt):
     if handled or pass_through:
         global g_RepeatCount
         g_RepeatCount = None
-        SetPrevCommand(None)
+        ClearPrevCommand()
 
     g_HandingKey = False
-    
+
+    UpdateVisualModeSelection()
+
     return not pass_through
 
 #------------------------------------------------------------------------
@@ -704,8 +686,97 @@ def HandleInsertModeKey(key, shift, control, alt):
         return True
 
 
-def HandleVisualModeKey(key, shift, contro, alt):
-    None
+def HandleVisualModeChar(c):
+    global g_PrevCommand
+    command = c
+    if g_PrevCommand:
+        command = g_PrevCommand + c
+
+    global g_RepeatCount
+    is_repeat_key = False
+
+    global g_VisualMode
+
+    if command == "v":
+        if g_VisualMode == "standard":
+            ExitVisualMode()
+            EnterCommandMode()
+        else:
+            EnterVisualMode("standard")
+
+    elif command == "V":
+        if g_VisualMode == "line":
+            ExitVisualMode()
+            EnterCommandMode()
+        else:
+            EnterVisualMode("line")
+   
+    elif IsCommandPrefix(command):
+        SetPrevCommand(command)
+
+    elif command == "y":
+        Yank()
+
+    elif command == "d":
+        DeleteLine()
+
+    elif command == "x":
+        DeleteCharacters()
+
+    elif command == "c":
+        if g_VisualMode == "line":
+            ReplaceLine()
+        else:
+            ReplaceCharacters()
+
+    elif command == "h":
+        RepeatedCommand(lambda:MoveCursorXOrWrapDelta(-1));
+
+    elif command == "l":
+        RepeatedCommand(lambda:MoveCursorXOrWrapDelta(1));
+
+    elif command == "k":
+        RepeatedCommand(lambda:N10X.Editor.SendKey("Up"));
+
+    elif command == "j":
+        RepeatedCommand(lambda:N10X.Editor.SendKey("Down"));
+
+    elif command == "0":
+        MoveToStartOfLine()
+
+    elif command == "%":
+        N10X.Editor.ExecuteCommand("MoveToMatchingBracket")
+
+    elif command == "$":
+        MoveCursorWithinRange(x=MaxLineX() - 1)
+
+    elif command == "b":
+        RepeatedCommand("MoveCursorPrevWord")
+
+    elif command == "w":
+        RepeatedCommand("MoveCursorNextWord")
+
+    elif command == "gg":
+        MoveToStartOfFile();
+
+    elif command == "G":
+        MoveToEndOfFile();
+
+    elif command == ">":
+        RepeatedCommand("IndentLine")
+
+    elif command == "<":
+        RepeatedCommand("UnindentLine")
+    
+    UpdateVisualModeSelection()
+
+    if not IsCommandPrefix(command):
+        ClearPrevCommand()
+
+    # reset repeat count
+    if (not is_repeat_key) and (not IsCommandPrefix(command)):
+        g_RepeatCount = None
+
 
 #------------------------------------------------------------------------
 # 10X Callbacks
@@ -716,6 +787,7 @@ def HandleVisualModeKey(key, shift, contro, alt):
 def OnInterceptKey(key, shift, control, alt):
     if N10X.Editor.TextEditorHasFocus():
         global g_CommandMode
+        global g_VisualMode
         if g_CommandMode == "normal":
             return HandleCommandModeKey(key, shift, control, alt)
         else:
@@ -728,7 +800,11 @@ def OnInterceptKey(key, shift, control, alt):
 def OnInterceptCharKey(c):
     if N10X.Editor.TextEditorHasFocus():
         global g_CommandMode
-        if g_CommandMode == "normal":
+        global g_VisualMode
+        if g_VisualMode != "none":
+            HandleVisualModeChar(c)
+            return True
+        elif g_CommandMode == "normal":
             HandleCommandModeChar(c)
             return True
 
