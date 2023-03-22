@@ -514,6 +514,12 @@ def HandleCommandModeChar(c):
     elif command == "A":
         EnterInsertMode();
         MoveCursorWithinRange(x=MaxLineX())
+    
+    elif command == "K":
+        N10X.Editor.ExecuteCommand("ShowSymbolInfo")
+    
+    elif command == "Q":
+        N10X.Editor.ExecuteCommand("CloseFile")
 
     elif command == "e":
         cursor_pos = N10X.Editor.GetCursorPos()
