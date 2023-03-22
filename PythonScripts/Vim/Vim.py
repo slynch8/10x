@@ -606,7 +606,10 @@ def HandleCommandModeKey(key, shift, control, alt):
 
     if key == "Escape":
         ExitVisualMode()
-        
+    elif key == "Tab" and shift:
+        N10X.Editor.ExecuteCommand("PrevPanelTab")
+    elif key == "Tab":
+        N10X.Editor.ExecuteCommand("NextPanelTab")
     elif key == "H" and control:
         N10X.Editor.ExecuteCommand("MovePanelFocusLeft")
 
