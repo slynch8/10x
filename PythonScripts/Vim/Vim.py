@@ -10,15 +10,71 @@ import N10X
 #------------------------------------------------------------------------
 g_VimEnabled = False
 
-g_CommandMode = "insert"
-
 g_PrevCommand = ""
 g_RepeatCount = None
 
-g_VisualMode = "none"                # "none", "standard", "line"
+class Mode:
+    INSERT      = 0
+    NORMAL      = 1
+    VISUAL      = 2
+    VISUAL_LINE = 3
+
+
+g_Mode = Mode.INSERT
 g_VisualModeStartPos = None
 
 g_HandingKey = False
+
+
+class Command:
+    def __init__(self):
+        pass
+
+class EmptyCommand(Command):
+    def __init__(self):
+        self.command = None
+    
+    def Invoke(self, c):
+        if self.command and self.command.Invoke(c):
+            self.command = None
+            return True
+
+        return False
+    
+
+class CharacterInvocation(Command):
+    def __init__(self, c):
+        self.character = c
+
+class RepeatInvocation(Command):
+    def __init__(self, c):
+        self.count = c
+        self.command = None
+    
+
+class RepeatableInvocation(Command):
+    def __init__(self):
+        pass
+
+class MovementInvocation(RepeatableInvocation):
+    def __init__(self):
+        pass
+
+class DeleteInvocation(RepeatableInvocation):
+    def __init__(self):
+        pass
+    
+    def Invoke(self, c):
+        pass
+        
+    
+class MoveLeftInvocation(MovementInvocation):
+    def __init__(self):
+        pass
+ 
+g_Command = EmptyCommand()
+
+
 
 #------------------------------------------------------------------------
 # Helpers
@@ -143,18 +199,18 @@ def FindNextOccurrenceBackward(c):
 
 #------------------------------------------------------------------------
 def EnterInsertMode():
-    ExitVisualMode()
-    global g_CommandMode
-    if g_CommandMode != "insert":
-        g_CommandMode = "insert"
+    global g_Mode
+    if g_Mode != Mode.INSERT:
+        g_Mode = Mode.INSERT
         N10X.Editor.SetCursorMode("Line")
         N10X.Editor.ResetCursorBlink()
 
 #------------------------------------------------------------------------
 def EnterCommandMode():
-    global g_CommandMode
-    if g_CommandMode != "normal":
-        g_CommandMode = "normal"
+    global g_Mode
+    if g_Mode != Mode.NORMAL:
+        N10X.Editor.ClearSelection()
+        g_Mode = Mode.NORMAL
         ClearPrevCommand()
         N10X.Editor.SetCursorMode("Block")
         N10X.Editor.ResetCursorBlink()
@@ -164,26 +220,21 @@ def EnterCommandMode():
 
 #------------------------------------------------------------------------
 def EnterVisualMode(mode):
-    global g_VisualMode
+    global g_Mode
     global g_VisualModeStartPos
-    if g_VisualMode == "none":
+    if g_Mode != mode:
+        g_Mode = mode
         g_VisualModeStartPos = N10X.Editor.GetCursorPos()
-    g_VisualMode = mode
-    UpdateVisualModeSelection()
 
-#------------------------------------------------------------------------
-def ExitVisualMode():
-    global g_VisualMode
-    if g_VisualMode != "none":
-        g_VisualMode = "none"
-        N10X.Editor.RemoveCursor(1)
+    UpdateVisualModeSelection()
 
 #------------------------------------------------------------------------
 # Misc
 
 #------------------------------------------------------------------------
 def IsCommandPrefix(c):
-    if g_VisualMode == "none":
+    global g_Mode
+    if g_Mode == Mode.NORMAL:
         return c in "cdfFtTg<>y"
     else:
         return c in "gifFtT"
@@ -197,7 +248,8 @@ def ClearPrevCommand():
 
 def SetPrevCommand(c):
     global g_PrevCommand
-    if g_CommandMode == "normal":
+    global g_Mode
+    if g_Mode == Mode.NORMAL:
         g_PrevCommand += c
         # N10X.Editor.SetCursorMode("HalfBlock")
 
@@ -227,19 +279,19 @@ def RepeatedEditCommand(command):
 
 #------------------------------------------------------------------------
 def UpdateVisualModeSelection():
-    global g_VisualMode
+    global g_Mode
     global g_VisualModeStartPos
     
     x, y = N10X.Editor.GetCursorPos()
 
-    if g_VisualMode == "standard":
+    if g_Mode == Mode.VISUAL:
         start = g_VisualModeStartPos
         end = (x, y)
         if end[1] < start[1] or (end[1] == start[1] and end[0] < start[0]):
            end, start = start, end
         N10X.Editor.SetSelection(start, (end[0] + 1, end[1]), cursor_index=1)
 
-    elif g_VisualMode == "line":
+    elif g_Mode == Mode.VISUAL_LINE:
         start_line = min(g_VisualModeStartPos[1], y)
         end_line = max(g_VisualModeStartPos[1], y)
         N10X.Editor.SetSelection((0, start_line), (0, end_line + 1), cursor_index=1)
@@ -249,10 +301,10 @@ def UpdateVisualModeSelection():
 #------------------------------------------------------------------------
 # Returns start and end of selection
 def SubmitVisualModeSelection():
-    global g_VisualMode
-    if g_VisualMode != "none":
+    global g_Mode
+    if g_Mode == Mode.VISUAL or g_Mode == Mode.VISUAL_LINE:
         start_pos, end_pos = N10X.Editor.GetCursorSelection(cursor_index=1)
-        ExitVisualMode()
+        EnterCommandMode()
         N10X.Editor.SetSelection(start_pos, end_pos)
         return [start_pos, end_pos]
             
@@ -334,11 +386,11 @@ def CutToEndOfWord():
     N10X.Editor.ExecuteCommand("Cut")
 #------------------------------------------------------------------------
 def DeleteLine():
-    global g_VisualMode
+    global g_Mode
     cursor_pos = N10X.Editor.GetCursorPos()
     repeat_count = GetAndClearRepeatCount()
 
-    if g_VisualMode != "none":
+    if g_Mode == Mode.VISUAL or g_Mode == Mode.VISUAL_LINE:
         cursor_pos = SubmitVisualModeSelection()[0]
     else:
         cursor_pos = N10X.Editor.GetCursorPos()
@@ -363,11 +415,11 @@ def JoinLine():
 
 #------------------------------------------------------------------------
 def Yank():
-    global g_VisualMode
+    global g_Mode
     cursor_pos = N10X.Editor.GetCursorPos()
     repeat_count = GetAndClearRepeatCount()
 
-    if g_VisualMode != "none":
+    if g_Mode == Mode.VISUAL or g_Mode == Mode.VISUAL_LINE:
         SubmitVisualModeSelection()
     else:
         cursor_pos = N10X.Editor.GetCursorPos()
@@ -393,10 +445,10 @@ def ReplaceCharacters():
     
 #------------------------------------------------------------------------
 def DeleteCharacters():
-    global g_VisualMode
+    global g_Mode
     repeat_count = GetAndClearRepeatCount()
     
-    if g_VisualMode != "none":
+    if g_Mode == Mode.VISUAL or g_Mode == Mode.VISUAL_LINE:
         SubmitVisualModeSelection()
     else:
         cursor_pos = N10X.Editor.GetCursorPos()
@@ -406,7 +458,6 @@ def DeleteCharacters():
 
 #------------------------------------------------------------------------
 def AppendNewLineBelow():
-    ExitVisualMode()
     EnterInsertMode()
     N10X.Editor.PushUndoGroup()
     MoveCursorWithinRange(x=MaxLineX())
@@ -427,7 +478,7 @@ def HandleCommandModeChar(c):
     global g_RepeatCount
     is_repeat_key = False
 
-    global g_VisualMode
+    global g_Mode
 
     consumed = True
 
@@ -456,10 +507,10 @@ def HandleCommandModeChar(c):
         N10X.Editor.SetCommandPanelText(":")
 
     elif command == "v":
-        EnterVisualMode("standard")
+        EnterVisualMode(Mode.VISUAL)
 
     elif command == "V":
-        EnterVisualMode("line")
+        EnterVisualMode(Mode.VISUAL_LINE)
 
     elif command == "dd":
         DeleteLine()
@@ -548,7 +599,7 @@ def HandleCommandModeChar(c):
         N10X.Editor.ExecuteCommand("MoveCursorUp");
 
     elif command == "O":
-        ExitVisualMode()
+        EnterCommandMode()
         N10X.Editor.ExecuteCommand("InsertLine");
         EnterInsertMode();
 
@@ -556,7 +607,6 @@ def HandleCommandModeChar(c):
         AppendNewLineBelow()
 
     elif command == "gd":
-        ExitVisualMode()
         N10X.Editor.ExecuteCommand("GotoSymbolDefinition");
 
     elif command == "gg":
@@ -567,7 +617,6 @@ def HandleCommandModeChar(c):
 
     # NOTE: undo is pretty buggy with P/p stuff -- cursor position gets messed up.
     elif command == "u":
-        ExitVisualMode()
         RepeatedCommand("Undo")
 
     elif command == ">>":
@@ -596,12 +645,10 @@ def HandleCommandModeKey(key, shift, control, alt):
 
     handled = True
 
-    global g_VisualMode
-
     pass_through = False
 
     if key == "Escape":
-        ExitVisualMode()
+        EnterCommandMode()
     elif key == "Tab" and shift:
         N10X.Editor.ExecuteCommand("PrevPanelTab")
     elif key == "Tab":
@@ -695,22 +742,20 @@ def HandleVisualModeChar(c):
     global g_RepeatCount
     is_repeat_key = False
 
-    global g_VisualMode
+    global g_Mode
 
     if command == "v":
-        if g_VisualMode == "standard":
-            ExitVisualMode()
+        if g_Mode == Mode.VISUAL:
             EnterCommandMode()
         else:
-            EnterVisualMode("standard")
+            g_Mode = Mode.VISUAL
 
     elif command == "V":
-        if g_VisualMode == "line":
-            ExitVisualMode()
+        if g_Mode == Mode.VISUAL_LINE:
             EnterCommandMode()
         else:
-            EnterVisualMode("line")
-   
+            g_Mode = Mode.VISUAL_LINE
+
     elif IsCommandPrefix(command):
         SetPrevCommand(command)
 
@@ -718,13 +763,20 @@ def HandleVisualModeChar(c):
         Yank()
 
     elif command == "d":
-        DeleteLine()
+        start, end = N10X.Editor.GetCursorSelection(cursor_index=1)
+        # NOTE: I'm not entirely sure why we need to do this...
+        N10X.Editor.SetSelection(start, end)
+
+        N10X.Editor.ExecuteCommand("Cut")
+        MoveCursorWithinRange(start[0], start[1])
+
+        EnterCommandMode()
 
     elif command == "x":
         DeleteCharacters()
 
     elif command == "c":
-        if g_VisualMode == "line":
+        if g_Mode == Mode.VISUAL_LINE:
             ReplaceLine()
         else:
             ReplaceCharacters()
@@ -786,9 +838,8 @@ def HandleVisualModeChar(c):
 # Return true to surpress the key
 def OnInterceptKey(key, shift, control, alt):
     if N10X.Editor.TextEditorHasFocus():
-        global g_CommandMode
-        global g_VisualMode
-        if g_CommandMode == "normal":
+        global g_Mode
+        if g_Mode != Mode.INSERT:
             return HandleCommandModeKey(key, shift, control, alt)
         else:
             HandleInsertModeKey(key, shift, control, alt)
@@ -799,12 +850,11 @@ def OnInterceptKey(key, shift, control, alt):
 # If we are in command mode surpress all char keys
 def OnInterceptCharKey(c):
     if N10X.Editor.TextEditorHasFocus():
-        global g_CommandMode
-        global g_VisualMode
-        if g_VisualMode != "none":
+        global g_Mode
+        if g_Mode == Mode.VISUAL or g_Mode == Mode.VISUAL_LINE:
             HandleVisualModeChar(c)
             return True
-        elif g_CommandMode == "normal":
+        elif g_Mode == Mode.NORMAL:
             HandleCommandModeChar(c)
             return True
 
