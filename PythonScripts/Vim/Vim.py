@@ -388,27 +388,6 @@ def MoveToEndOfLine():
     MoveCursorWithinRange(x=MaxLineX() - 1)
 
 #------------------------------------------------------------------------
-def IsWordChar(c):
-    return \
-        (c >= 'a' and c <= 'z') or \
-        (c >= 'A' and c <= 'Z') or \
-        (c >= '0' and c <= '9') or \
-        c == '_'
-
-#------------------------------------------------------------------------
-def GetWordEnd():
-    cursor_pos = N10X.Editor.GetCursorPos()
-    line = N10X.Editor.GetLine(cursor_pos[1])
-    i = cursor_pos[0]
-    if i < len(line):
-        is_word_char = IsWordChar(line[i])
-        while i < len(line):
-            if IsWordChar(line[i]) != is_word_char:
-                break
-            i += 1
-    return i
-
-#------------------------------------------------------------------------
 # def JoinLine():
 #     N10X.Editor.PushUndoGroup()
 #     N10X.Editor.SendKey("Down")
