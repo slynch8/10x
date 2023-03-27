@@ -32,6 +32,7 @@ def IsVisual():
 
 g_CommandStr = ''
 g_HandleIntercepts = True
+g_LastSearch = None
 
 
 #------------------------------------------------------------------------
@@ -178,6 +179,30 @@ def FindToNextOccurrenceBackward(c):
     index += 1
 
     return index
+
+def PerformLineSearch(action, search):
+    global g_LastSearch
+    if action == ';' and g_LastSearch:
+        PerformLineSearch(g_LastSearch[0], g_LastSearch[1])
+        return True
+        
+    if not search:
+        return False
+
+    if action == 'f':
+        MoveCursorWithinRange(x=FindNextOccurrenceForward(search))
+    elif action == 'F':
+        MoveCursorWithinRange(x=FindNextOccurrenceBackward(search))
+    elif action == 't':
+        MoveCursorWithinRange(x=FindToNextOccurrenceForward(search))
+    elif action == 'T':
+        MoveCursorWithinRange(x=FindToNextOccurrenceBackward(search))
+    else:
+        return False
+
+    g_LastSearch = action + search
+    return True
+            
 
 def ClipboardNoTrailingNewline():
     win32clipboard.OpenClipboard()
@@ -552,20 +577,11 @@ def HandleCommandModeChar(ch):
                 if i == repeat_count - 1:
                     N10X.Editor.PopUndoGroup()
 
-            elif (m := re.match("([fFtT])(.?)", c)):
+            elif (m := re.match("([fFtT;])(.?)", c)):
                 action = m.group(1)
                 search = m.group(2)
-                if not search:
+                if not PerformLineSearch(action, search):
                     return
-                
-                if action == 'f':
-                    MoveCursorWithinRange(x=FindNextOccurrenceForward(search))
-                elif action == 'F':
-                    MoveCursorWithinRange(x=FindNextOccurrenceBackward(search))
-                elif action == 't':
-                    MoveCursorWithinRange(x=FindToNextOccurrenceForward(search))
-                elif action == 'T':
-                    MoveCursorWithinRange(x=FindToNextOccurrenceBackward(search))
 
             elif (m := re.match("d(.*)", c)):
                 trailing = m.group(1)
@@ -634,23 +650,13 @@ def HandleCommandModeChar(ch):
 
                     # Reset cursor position
                     MoveCursorWithinRange(x=start[0], y=min(start[1], end[1]))
-                elif (m := re.match(REPEAT_MATCH + "([fFtT])(.?)", trailing)):
+                elif (m := re.match(REPEAT_MATCH + "([fFtT;])(.?)", trailing)):
                     count = int(m.group(1)) if m.group(1) else 1
                     action = m.group(2)
                     search = m.group(3)
-                    if not search:
-                        print("Waiting for search...")
-                        return
-
                     for _ in range(count):
-                        if action == 'f':
-                            MoveCursorWithinRange(x=FindNextOccurrenceForward(search))
-                        elif action == 'F':
-                            MoveCursorWithinRange(x=FindNextOccurrenceBackward(search))
-                        elif action == 't':
-                            MoveCursorWithinRange(x=FindToNextOccurrenceForward(search))
-                        elif action == 'T':
-                            MoveCursorWithinRange(x=FindToNextOccurrenceBackward(search))
+                        if not PerformLineSearch(action, search):
+                            return
 
                     end = N10X.Editor.GetCursorPos()
                     SetSelection(start, end)
@@ -728,23 +734,13 @@ def HandleCommandModeChar(ch):
 
                     # Reset cursor position
                     MoveCursorWithinRange(x=start[0], y=min(start[1], end[1]))
-                elif (m := re.match(REPEAT_MATCH + "([fFtT])(.?)", trailing)):
+                elif (m := re.match(REPEAT_MATCH + "([fFtT;])(.?)", trailing)):
                     count = int(m.group(1)) if m.group(1) else 1
                     action = m.group(2)
                     search = m.group(3)
-                    if not search:
-                        print("Waiting for search...")
-                        return
-
                     for _ in range(count):
-                        if action == 'f':
-                            MoveCursorWithinRange(x=FindNextOccurrenceForward(search))
-                        elif action == 'F':
-                            MoveCursorWithinRange(x=FindNextOccurrenceBackward(search))
-                        elif action == 't':
-                            MoveCursorWithinRange(x=FindToNextOccurrenceForward(search))
-                        elif action == 'T':
-                            MoveCursorWithinRange(x=FindToNextOccurrenceBackward(search))
+                        if not PerformLineSearch(action, search):
+                            return
 
                     end = N10X.Editor.GetCursorPos()
                     SetSelection(start, end)
@@ -834,23 +830,13 @@ def HandleCommandModeChar(ch):
 
                     # Reset cursor position
                     MoveCursorWithinRange(x=start[0], y=min(start[1], end_y), max_offset=0)
-                elif (m := re.match(REPEAT_MATCH + "([fFtT])(.?)", trailing)):
+                elif (m := re.match(REPEAT_MATCH + "([fFtT;])(.?)", trailing)):
                     count = int(m.group(1)) if m.group(1) else 1
                     action = m.group(2)
                     search = m.group(3)
-                    if not search:
-                        print("Waiting for search...")
-                        return
-
                     for _ in range(count):
-                        if action == 'f':
-                            MoveCursorWithinRange(x=FindNextOccurrenceForward(search))
-                        elif action == 'F':
-                            MoveCursorWithinRange(x=FindNextOccurrenceBackward(search))
-                        elif action == 't':
-                            MoveCursorWithinRange(x=FindToNextOccurrenceForward(search))
-                        elif action == 'T':
-                            MoveCursorWithinRange(x=FindToNextOccurrenceBackward(search))
+                        if not PerformLineSearch(action, search):
+                            return
 
                     end = N10X.Editor.GetCursorPos()
                     SetSelection(start, end)
@@ -1061,20 +1047,11 @@ def HandleVisualModeChar(ch):
                 N10X.Editor.ExecuteCommand("MoveCursorNextWord")
             elif c == "b":
                 N10X.Editor.ExecuteCommand("MoveCursorPrevWord")
-            elif (m := re.match("([fFtT])(.?)", c)):
+            elif (m := re.match("([fFtT;])(.?)", c)):
                 action = m.group(1)
                 search = m.group(2)
-                if not search:
+                if not PerformLineSearch(action, search):
                     return
-                
-                if action == 'f':
-                    MoveCursorWithinRange(x=FindNextOccurrenceForward(search))
-                elif action == 'F':
-                    MoveCursorWithinRange(x=FindNextOccurrenceBackward(search))
-                elif action == 't':
-                    MoveCursorWithinRange(x=FindToNextOccurrenceForward(search))
-                elif action == 'T':
-                    MoveCursorWithinRange(x=FindToNextOccurrenceBackward(search))
             elif c == "%":
                 N10X.Editor.ExecuteCommand("MoveToMatchingBracket")
             elif c == ">":
