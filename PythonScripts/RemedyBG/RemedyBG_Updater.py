@@ -18,8 +18,9 @@ Setup and Initialization:
           - json
           - shutil
           - zipfile
+          - tempfile
           
-    Make sure you ahve the following settings filled out:
+    Make sure you have the following settings filled out:
         - RemedyBG_Updater.PortalToken
         - RemedyBG_Updater.ItchLoginCookie
         - RemedyBG_Updater.ItchLoginToken
@@ -60,6 +61,9 @@ Commands:
     - RDBG_update_latest:   Updates to the latest version
 
 History:
+  0.1.1
+    - Removed os calls that 10x had permission problems with
+    - utilize tempfile instead of C:/tmp
   0.1.0
     - First release
 '''
@@ -70,6 +74,7 @@ import shutil
 import json
 import zipfile
 import requests
+import tempfile
 from bs4 import BeautifulSoup
 
 TITLE:str = "RemedyBG Updater"
@@ -257,33 +262,31 @@ class VersionChecker:
                 file_request.raw.decode_content = True
                 
                 # save the file
-                final_file = "C:\\tmp\\{filename}".format(filename=file_name)
-                log("saving: " + final_file)
-                with open(final_file, 'wb') as file_out:
+                with tempfile.NamedTemporaryFile(mode='wb', suffix="_" + file_name, delete=False) as file_out:
+                    final_file = file_out.name;
+                    log("saving: " + final_file)
                     shutil.copyfileobj(file_request.raw, file_out)
+                        
+                    # extract the file
+                    remedy_path = Editor.GetSetting("RemedyBG.Path") 
+                    parent_path = os.sep.join(os.path.normpath(remedy_path).split(os.sep)[0:-2])
                     
-                # extract the file
-                remedy_path = Editor.GetSetting("RemedyBG.Path") 
-                parent_path = os.sep.join(os.path.normpath(remedy_path).split(os.sep)[0:-2])
-                
-                destination_dir = os.sep.join([parent_path, file_name.split('.')[0]])
-                log("extracting to: " + destination_dir)
-                with zipfile.ZipFile(final_file, 'r') as zip_ref:
-                    zip_ref.extractall(destination_dir)
-                
-                # refresh our local state
-                destination_dir = os.sep.join([destination_dir, "remedybg.exe"])
-                log("Updating 'RemedyBG.Path' Setting: " + destination_dir)
-                Editor.SetSetting("RemedyBG.Path", destination_dir)
-                
-                remedy_path = os.sep.join(os.path.normpath(remedy_path).split(os.sep)[0:-1]) # this removes the exe name; we want to remove the folder it is in
-                if os.path.exists(remedy_path):
-                    log("Removing old 'RemedyBG.Path' path: " + remedy_path)
-                    os.remove(remedy_path)
-                
-                log("Removing temp file: " + final_file)
-                os.remove(final_file)
-
+                    destination_dir = os.sep.join([parent_path, file_name.split('.')[0]])
+                    log("extracting to: " + destination_dir)
+                    with zipfile.ZipFile(final_file, 'r') as zip_ref:
+                        zip_ref.extractall(destination_dir)
+                    
+                    # refresh our local state
+                    destination_dir = os.sep.join([destination_dir, "remedybg.exe"])
+                    log("Updating 'RemedyBG.Path' Setting: " + destination_dir)
+                    Editor.SetSetting("RemedyBG.Path", destination_dir)
+                    
+                    # 10x doesnt have permission to do this.
+                    # remedy_path = os.sep.join(os.path.normpath(remedy_path).split(os.sep)[0:-1]) # this removes the exe name; we want to remove the folder it is in
+                    # if os.path.exists(remedy_path):
+                    #     log("Removing old 'RemedyBG.Path' path: " + remedy_path)
+                    #     os.remove(remedy_path)
+                    
                 log("done.")
                 return
 
