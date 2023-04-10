@@ -12,110 +12,81 @@ import win32clipboard
 #------------------------------------------------------------------------
 g_VimEnabled = False
 
+#------------------------------------------------------------------------
 class Mode:
     INSERT      = 0
-    NORMAL      = 1
+    COMMAND     = 1
     VISUAL      = 2
     VISUAL_LINE = 3
 
-
-
+#------------------------------------------------------------------------
 g_Mode = Mode.INSERT
+
+# position of the cursor when visual mode was entered
 g_VisualModeStartPos = None
 
+# guard to stop infinite recursion in key handling
 g_HandingKey = False
 
-def IsVisual():
+# the current command for command mode
+g_Command = ""
+
+# flag to enable/disable whether we handle key intercepts
+g_HandleKeyIntercepts = True
+
+# the last line search performed
+g_LastSearch = None
+
+# regex for getting the repeat count for a command
+g_RepeatMatch = "([1-9][0-9]*)?"
+
+g_StartedRecordingMacro = False
+
+#------------------------------------------------------------------------
+def InVisualMode():
     global g_Mode
     return g_Mode == Mode.VISUAL or g_Mode == Mode.VISUAL_LINE
 
-
-g_CommandStr = ''
-g_HandleIntercepts = True
-g_LastSearch = None
-
-
 #------------------------------------------------------------------------
-# Helpers
-
-#------------------------------------------------------------------------
-def clamp(min_val, max_val, n):
+def Clamp(min_val, max_val, n):
    return max(min(n, max_val), min_val)
 
-def MaxLineX(y=None):
+#------------------------------------------------------------------------
+def GetLine(y=None):
     if y is None:
-      _, y = N10X.Editor.GetCursorPos()
+        x, y = N10X.Editor.GetCursorPos()
+    return N10X.Editor.GetLine(y)
 
-    return len(N10X.Editor.GetLine(y)) - 2
+#------------------------------------------------------------------------
+def GetLineLength(y=None):
+    line = GetLine(y)
+    line = line.rstrip("\r\n")
+    return len(line)
 
-def MaxY():
+#------------------------------------------------------------------------
+def GetMaxY():
     return max(0, N10X.Editor.GetLineCount() - 1)
 
-def MoveCursorWithinRange(x=None, y=None, max_offset=1):
+#------------------------------------------------------------------------
+def SetCursorPos(x=None, y=None, max_offset=1):
     if x is None:
       x, _ = N10X.Editor.GetCursorPos()
     if y is None:
       _, y = N10X.Editor.GetCursorPos()
 
-    y = clamp(0, MaxY(), y)
-    x = clamp(0, MaxLineX(y) - max_offset, x)
+    y = Clamp(0, GetMaxY(), y)
+    x = Clamp(0, GetLineLength(y) - max_offset, x)
 
     N10X.Editor.SetCursorPos((x, y))
 
-def MoveCursorWithinRangeDelta(x_delta=0, y_delta=0, max_offset=1):
+#------------------------------------------------------------------------
+def MoveCursorPos(x_delta=0, y_delta=0, max_offset=1):
     x, y = N10X.Editor.GetCursorPos()
     x += x_delta
     y += y_delta
-    MoveCursorWithinRange(x, y, max_offset)
+    SetCursorPos(x, y, max_offset)
 
-def MoveCursorXOrWrap(x):
-    _, y = N10X.Editor.GetCursorPos()
-
-    if x > MaxLineX(y):
-      x = 0
-      y += 1
-
-    if y >= MaxY():
-      y = MaxY()
-      N10X.Editor.SetCursorPos((MaxLineX(y), y))
-    else:
-      N10X.Editor.SetCursorPos((x, y))
-
-def MoveCursorXOrWrapDelta(x_delta):
-    if x_delta == 0:
-      return
-
-    x, y = N10X.Editor.GetCursorPos()
-
-    # NOTE(Brandon): We max the line length with 1
-    # because on empty lines we don't want to skip.
-    def MaxLineMin1(y):
-      return max(MaxLineX(y), 1)
-
-    x += x_delta
-    if x_delta > 0:
-        while y <= MaxY() and x > MaxLineMin1(y) - 1:
-            x = x - MaxLineMin1(y)
-            y += 1
-
-        if y > MaxY():
-            y = MaxY()
-            N10X.Editor.SetCursorPos((MaxLineX(y), y))
-            return
-    else:
-        while y >= 0 and x < 0:
-            y -= 1
-            if y < 0:
-                x = 0
-            else:
-                x = MaxLineMin1(y) + x
- 
-        if y < 0:
-            N10X.Editor.SetCursorPos((0, 0))
-            return
-
-    N10X.Editor.SetCursorPos((x, y))
- 
+#------------------------------------------------------------------------
 def FindNextOccurrenceForward(c):
     x, y = N10X.Editor.GetCursorPos()
 
@@ -132,6 +103,7 @@ def FindNextOccurrenceForward(c):
 
     return x + index
 
+#------------------------------------------------------------------------
 def FindNextOccurrenceBackward(c):
     x, y = N10X.Editor.GetCursorPos()
 
@@ -146,93 +118,84 @@ def FindNextOccurrenceBackward(c):
 
     return index
 
-def FindToNextOccurrenceForward(c):
-    x, y = N10X.Editor.GetCursorPos()
-
-    x += 1
-
-    line = N10X.Editor.GetLine(y)
-    if x >= len(line):
-        return None
-
-    line = line[x:]
-    index = line.find(c)
-    if index < 0:
-        return None
-
-    index -= 1
-
-    return x + index
-
-def FindToNextOccurrenceBackward(c):
-    x, y = N10X.Editor.GetCursorPos()
-
-    line = N10X.Editor.GetLine(y)
-    if x < 0:
-        return None
-
-    line = line[:x]
-    index = line.rfind(c)
-    if index < 0:
-        return None
-
-    index += 1
-
-    return index
-
-def PerformLineSearch(action, search):
+#------------------------------------------------------------------------
+def MoveToLineText(action, search):
     global g_LastSearch
     if action == ';' and g_LastSearch:
-        PerformLineSearch(g_LastSearch[0], g_LastSearch[1])
+        MoveToLineText(g_LastSearch[0], g_LastSearch[1])
         return True
         
     if not search:
         return False
 
     if action == 'f':
-        MoveCursorWithinRange(x=FindNextOccurrenceForward(search))
+        x = FindNextOccurrenceForward(search)
+        if x:
+            SetCursorPos(x=x)
     elif action == 'F':
-        MoveCursorWithinRange(x=FindNextOccurrenceBackward(search))
+        x = FindNextOccurrenceBackward(search)
+        if x:
+            SetCursorPos(x=x)
     elif action == 't':
-        MoveCursorWithinRange(x=FindToNextOccurrenceForward(search))
+        x = FindNextOccurrenceForward(search)
+        if x:
+            SetCursorPos(x=x-1)
     elif action == 'T':
-        MoveCursorWithinRange(x=FindToNextOccurrenceBackward(search))
+        x = FindNextOccurrenceBackward(search)
+        if x:
+            SetCursorPos(x=x+1)
     else:
         return False
 
     g_LastSearch = action + search
     return True
             
-
-def ClipboardNoTrailingNewline():
+#------------------------------------------------------------------------
+def GetClipboardValue():
     win32clipboard.OpenClipboard()
     try:
         data = str(win32clipboard.GetClipboardData(win32clipboard.CF_UNICODETEXT))
-        if data[-1:] == '\n':
-            win32clipboard.SetClipboardText(data.rstrip(), win32clipboard.CF_UNICODETEXT)
-            win32clipboard.CloseClipboard()
-            return data
-        else:
-            win32clipboard.CloseClipboard()
-            return None
+        win32clipboard.CloseClipboard()
+        return data
     except:
         print("Failed to get clipboard of non-unicode text!")
         win32clipboard.CloseClipboard()
         return None
+
+#------------------------------------------------------------------------
+def RemoveNewlineFromClipboard():
+    win32clipboard.OpenClipboard()
+    try:
+        data = str(win32clipboard.GetClipboardData(win32clipboard.CF_UNICODETEXT))
+        win32clipboard.SetClipboardText(data.rstrip(), win32clipboard.CF_UNICODETEXT)
+        win32clipboard.CloseClipboard()
+    except:
+        print("Failed to get clipboard of non-unicode text!")
+        win32clipboard.CloseClipboard()
+
+#------------------------------------------------------------------------
+def AddNewlineToClipboard():
+    win32clipboard.OpenClipboard()
+    try:
+        data = str(win32clipboard.GetClipboardData(win32clipboard.CF_UNICODETEXT))
+        win32clipboard.SetClipboardText(data + "\n", win32clipboard.CF_UNICODETEXT)
+        win32clipboard.CloseClipboard()
+    except:
+        print("Failed to get clipboard of non-unicode text!")
+        win32clipboard.CloseClipboard()
+
+#------------------------------------------------------------------------
 def RestoreClipboard(content):
     win32clipboard.OpenClipboard()
     win32clipboard.SetClipboardText(content, win32clipboard.CF_UNICODETEXT)
     win32clipboard.CloseClipboard()
 
-def SendKey(k):
-    global g_HandleIntercepts
-    g_HandleIntercepts = False
-    N10X.Editor.SendKey(k)
-    g_HandleIntercepts = True
-
-
 #------------------------------------------------------------------------
-# Modes
+def SendKey(key):
+    global g_HandleKeyIntercepts
+    g_HandleKeyIntercepts = False
+    N10X.Editor.SendKey(key)
+    g_HandleKeyIntercepts = True
 
 #------------------------------------------------------------------------
 def EnterInsertMode():
@@ -240,20 +203,23 @@ def EnterInsertMode():
     if g_Mode != Mode.INSERT:
         g_Mode = Mode.INSERT
         N10X.Editor.ResetCursorBlink()
+        UpdateCursorMode()
 
 #------------------------------------------------------------------------
 def EnterCommandMode():
     global g_Mode
-    global g_CommandStr
-    if g_Mode != Mode.NORMAL:
+    global g_Command
+    if g_Mode != Mode.COMMAND:
         N10X.Editor.ClearSelection()
-        was_visual = IsVisual()
-        g_Mode = Mode.NORMAL
-        g_CommandStr = ""
+        was_visual = InVisualMode()
+        g_Mode = Mode.COMMAND
+        g_Command = ""
         N10X.Editor.ResetCursorBlink()
 
         if not was_visual:
-            MoveCursorWithinRangeDelta(x_delta=-1)
+            MoveCursorPos(x_delta=-1)
+
+        UpdateCursorMode()
 
 #------------------------------------------------------------------------
 def EnterVisualMode(mode):
@@ -272,11 +238,18 @@ def SetSelection(start, end, cursor_index=0):
 
     N10X.Editor.SetSelection(start, (end[0] + 1, end[1]), cursor_index=cursor_index)
 
+#------------------------------------------------------------------------
 def SetLineSelection(start, end, cursor_index=0):
     start_line = min(start, end)
     end_line = max(start, end)
-    N10X.Editor.SetSelection((0, start_line), (0, end_line + 1), cursor_index=cursor_index)
+    sel_start = (0, start_line)
+    if end == GetMaxY():
+        sel_end = (GetLineLength(end), end)
+    else:
+        sel_end = (0, end_line + 1)
+    N10X.Editor.SetSelection(sel_start, sel_end, cursor_index=cursor_index)
 
+#------------------------------------------------------------------------
 def UpdateVisualModeSelection():
     global g_Mode
     global g_VisualModeStartPos
@@ -291,564 +264,882 @@ def UpdateVisualModeSelection():
 
     N10X.Editor.SetCursorVisible(1, False)
 
+#------------------------------------------------------------------------
 def SubmitVisualModeSelection():
     start_pos, end_pos = N10X.Editor.GetCursorSelection(cursor_index=1)
     EnterCommandMode()
     N10X.Editor.SetSelection(start_pos, end_pos)
     return start_pos, end_pos
 
-def GetCharacterClass(c):
-    # TODO: This is what is recommended for C files... No idea if it's correct
-    if re.match('[a-zA-Z0-9_]', c):
-        return 2
-    if c.isspace(): 
-        return 0
-    return 1
-
-def MoveNextWordStart(wrap=True):
-    x, y = N10X.Editor.GetCursorPos()
-
-    contents = N10X.Editor.GetLine(y)
-    contents = contents[x:]
-    i = 1
-
-    if contents:
-        character_class = GetCharacterClass(contents[0])
-        while character_class > 0 and \
-            i < len(contents) and \
-            GetCharacterClass(contents[i]) == character_class:
-                i += 1
-
-    x += i
-    if x >= MaxLineX(y):
-        if not wrap:
-            MoveCursorWithinRange(x=MaxLineX(y), y=y, max_offset=0)
-            return False 
-        y += 1
-        x = 0
-        if y > MaxY():
-            y = MaxY()
-            MoveCursorWithinRange(x=MaxLineX(y), y=y)
-            return True
-
-    contents = N10X.Editor.GetLine(y)
-    while x < MaxLineX(y) and contents[x].isspace():
-        x += 1
-
-    MoveCursorWithinRange(x=x, y=y)
-    return x < MaxLineX(y)
-
-def MoveNextWordEnd(wrap=True):
-    x, y = N10X.Editor.GetCursorPos()
-
-    contents = N10X.Editor.GetLine(y)
-    contents = contents[:x]
-    i = 1
-
-    if contents:
-        character_class = GetCharacterClass(contents[0])
-        while character_class > 0 and \
-            i < len(contents) and \
-            GetCharacterClass(contents[i]) == character_class:
-                i += 1
-
-    x += i
-    if x >= MaxLineX(y):
-        y += 1
-        x = 0
-        if y > MaxY():
-            y = MaxY()
-            MoveCursorWithinRange(x=MaxLineX(y) - 1, y=y)
-            return
-
-    contents = N10X.Editor.GetLine(y)
-    while x < MaxLineX(y) and contents[x].isspace():
-        x += 1
-
-    MoveCursorWithinRange(x=x, y=y)
-                
+#------------------------------------------------------------------------
+def IsWhitespaceChar(c):
+    return c == ' ' or c == '\t' or c == '\r' or c == '\n'
 
 #------------------------------------------------------------------------
-# Command Functions
+def IsWhitespace(x, y):
+    line = GetLine(y)
+    return x >= len(line) or IsWhitespaceChar(line[x])
+
+#------------------------------------------------------------------------
+def IsWordChar(c):
+    return \
+        (c >= 'a' and c <= 'z') or \
+        (c >= 'A' and c <= 'Z') or \
+        (c >= '0' and c <= '9') or \
+        c == '_'
+
+#------------------------------------------------------------------------
+def IsWord(x, y):
+    line = GetLine(y)
+    return IsWordChar(line[x])
+
+#------------------------------------------------------------------------
+class CharacterClass:
+    WHITESPACE  = 0
+    DEFAULT     = 1
+    WORD        = 2
+
+#------------------------------------------------------------------------
+def GetCharacterClass(c):
+    if IsWordChar(c):
+        return CharacterClass.WORD
+    if IsWhitespaceChar(c):
+        return CharacterClass.WHITESPACE
+    return CharacterClass.DEFAULT
+
+#------------------------------------------------------------------------
+def GetCharacterClassAtPos(x, y):
+    line = GetLine(y)
+    return GetCharacterClass(line[x]) if x < len(line)  else CharacterClass.WHITESPACE
+
+#------------------------------------------------------------------------
+def GetPrevCharPos(x, y):
+    if x:
+        x -= 1
+    elif y:
+        y -= 1
+        x = max(0, GetLineLength(y) - 1)
+    else:
+        x = 0
+        y = 0
+    return x, y
+
+#------------------------------------------------------------------------
+def GetPrevNonWhitespaceCharPos(x, y):
+    while y and IsWhitespace(x, y):
+        if x == 0:
+            y -= 1
+            x = GetLineLength(y)
+            if x:
+                x -= 1
+        else:
+            x -= 1
+    return x, y
+
+#------------------------------------------------------------------------
+def GetWordStart():
+    x, y = N10X.Editor.GetCursorPos()
+
+    x, y = GetPrevCharPos(x, y)
+    x, y = GetPrevNonWhitespaceCharPos(x, y)
+
+    line = N10X.Editor.GetLine(y)
+
+    if x < len(line):
+        character_class = GetCharacterClass(line[x])
+        while x > 0:
+            if GetCharacterClass(line[x - 1]) != character_class:
+                break
+            x -= 1
+
+    return x, y
+
+#------------------------------------------------------------------------
+def MoveToWordStart():
+    new_x, new_y = GetWordStart()
+    SetCursorPos(new_x, new_y)
+
+#------------------------------------------------------------------------
+def GetTokenStart():
+    x, y = N10X.Editor.GetCursorPos()
+
+    x, y = GetPrevCharPos(x, y)
+    x, y = GetPrevNonWhitespaceCharPos(x, y)
+
+    line = N10X.Editor.GetLine(y)
+
+    if x < len(line):
+        is_whitespace = GetCharacterClass(line[x]) == CharacterClass.WHITESPACE
+        while x > 0:
+            is_whitespace_iter = GetCharacterClass(line[x - 1]) == CharacterClass.WHITESPACE
+            if is_whitespace_iter != is_whitespace:
+                break
+            x -= 1
+
+    return x, y
+
+#------------------------------------------------------------------------
+def MoveToTokenStart():
+    new_x, new_y = GetTokenStart()
+    SetCursorPos(new_x, new_y)
+
+#------------------------------------------------------------------------
+def GetNextCharPos(x, y, wrap=True):
+    if x < GetLineLength(y):
+        x += 1
+    if wrap and x >= GetLineLength(y) and y < GetMaxY():
+        x = 0
+        y += 1
+    return x, y
+
+#------------------------------------------------------------------------
+def AtEndOfFile(x, y):
+    return y >= GetMaxY() and x >= GetLineLength(GetMaxY())
+
+#------------------------------------------------------------------------
+def GetNextNonWhitespaceCharPos(x, y, wrap=True):
+    while not AtEndOfFile(x, y) and IsWhitespace(x, y):
+        if x >= GetLineLength(y):
+            if wrap and y < GetMaxY():
+                x = 0
+                y += 1
+            else:
+                break
+        else:
+            x += 1
+    return x, y
+
+#------------------------------------------------------------------------
+def MoveToNextNonWhitespaceChar(wrap=True):
+    x, y = N10X.Editor.GetCursorPos()
+    end_x, end_y = GetNextNonWhitespaceCharPos(x, y, wrap)
+    SetCursorPos(end_x, end_y)
+
+#------------------------------------------------------------------------
+def GetWordEndPos(x, y, wrap=True):
+    x, y = N10X.Editor.GetCursorPos()
+
+    x, y = GetNextCharPos(x, y, wrap)
+    x, y = GetNextNonWhitespaceCharPos(x, y, wrap)
+
+    line = N10X.Editor.GetLine(y)
+
+    if x < len(line):
+        character_class = GetCharacterClass(line[x])
+        while x < len(line):
+            if GetCharacterClass(line[x]) != character_class:
+                break
+            x += 1
+    if x:
+        x -= 1
+    return x, y
+
+#------------------------------------------------------------------------
+def MoveToWordEnd():
+    x, y = N10X.Editor.GetCursorPos()
+    new_x, new_y = GetWordEndPos(x, y)
+    SetCursorPos(new_x, new_y)
+
+#------------------------------------------------------------------------
+def GetTokenEndPos(x, y, wrap=True):
+    x, y = N10X.Editor.GetCursorPos()
+
+    x, y = GetNextCharPos(x, y, wrap)
+    x, y = GetNextNonWhitespaceCharPos(x, y, wrap)
+
+    line = N10X.Editor.GetLine(y)
+
+    if x < len(line):
+        is_whitespace = GetCharacterClass(line[x]) == CharacterClass.WHITESPACE
+        while x < len(line):
+            is_whitespace_iter = GetCharacterClass(line[x]) == CharacterClass.WHITESPACE
+            if is_whitespace_iter != is_whitespace:
+                break
+            x += 1
+    if x:
+        x -= 1
+    return x, y
+
+#------------------------------------------------------------------------
+def MoveToTokenEnd():
+    x, y = N10X.Editor.GetCursorPos()
+    new_x, new_y = GetTokenEndPos(x, y)
+    SetCursorPos(new_x, new_y)
+
+#------------------------------------------------------------------------
+def MoveToNextWordStart(wrap=True):
+    x, y = N10X.Editor.GetCursorPos()
+
+    line_y = y;
+
+    character_class = GetCharacterClassAtPos(x, y)
+    while not AtEndOfFile(x, y) and y == line_y and GetCharacterClassAtPos(x, y) == character_class:
+        x, y = GetNextCharPos(x, y, wrap)
+
+    x, y = GetNextNonWhitespaceCharPos(x, y, wrap)
+
+    SetCursorPos(x, y)
+
+    return x < GetLineLength(y)
+
+#------------------------------------------------------------------------
+def MoveToNextTokenStart(wrap=True):
+    x, y = N10X.Editor.GetCursorPos()
+
+    line_y = y;
+
+    while y == line_y and not IsWhitespace(x, y):
+        x, y = GetNextCharPos(x, y, wrap)
+
+    x, y = GetNextNonWhitespaceCharPos(x, y, wrap)
+
+    SetCursorPos(x, y)
 
 #------------------------------------------------------------------------
 def MoveToStartOfFile():
-    MoveCursorWithinRange(y=0)
+    SetCursorPos(y=0)
 
 #------------------------------------------------------------------------
 def MoveToEndOfFile():
-    MoveCursorWithinRange(y=MaxY())
+    SetCursorPos(GetLineLength(GetMaxY()), GetMaxY())
 
 #------------------------------------------------------------------------
 def MoveToStartOfLine():
-    cursor_pos = N10X.Editor.GetCursorPos()
-    N10X.Editor.SetCursorPos((0, cursor_pos[1]))
-
-def MoveToEndOfLine():
-    MoveCursorWithinRange(x=MaxLineX() - 1)
+    SetCursorPos(x=0)
 
 #------------------------------------------------------------------------
-# def JoinLine():
-#     N10X.Editor.PushUndoGroup()
-#     N10X.Editor.SendKey("Down")
-#     DeleteLine()
-#     N10X.Editor.SendKey("Up")
-#     MoveCursorWithinRange(x=MaxLineX())
-#     cursor_pos = N10X.Editor.GetCursorPos()
-#     N10X.Editor.InsertText(" ")
-#     N10X.Editor.ExecuteCommand("Paste")
-#     N10X.Editor.SetCursorPos(cursor_pos) # Need to set the cursor pos to right before join
-#     N10X.Editor.PopUndoGroup()
-
-REPEAT_MATCH = "([1-9][0-9]*)?"
+def MoveToEndOfLine():
+    SetCursorPos(x=GetLineLength() - 1)
 
 #------------------------------------------------------------------------
 # Key Intercepting
 
 #------------------------------------------------------------------------
-def HandleCommandModeChar(ch):
+def HandleCommandModeChar(char):
     global g_Mode
-    global g_CommandStr
+    global g_Command
+    global g_StartedRecordingMacro
 
-    g_CommandStr += ch
+    g_Command += char
 
-    m = re.match(REPEAT_MATCH + "(.*)", g_CommandStr)
+    m = re.match(g_RepeatMatch + "(.*)", g_Command)
     if not m:
         return
 
     repeat_count = int(m.group(1)) if m.group(1) else 1
+    has_repeat_count = m.group(1) != None
     c = m.group(2)
     if not c:
         return
 
-    if c == "i":
-        EnterInsertMode()
-    elif c == "/":
-        N10X.Editor.ExecuteCommand("FindInFile")
-    elif c == ":":
-        N10X.Editor.ExecuteCommand("ShowCommandPanel")
-        N10X.Editor.SetCommandPanelText(":")
-    elif c == "v":
-        EnterVisualMode(Mode.VISUAL)
-    elif c == "V":
-        EnterVisualMode(Mode.VISUAL_LINE)
-    elif c == "S":
-        N10X.Editor.ExecuteCommand("SaveFile")
+    # moving
+
+    if c == "h":
+        for i in range(repeat_count):
+            MoveCursorPos(x_delta=-1)
+
+    elif c == "j":
+        for i in range(repeat_count):
+            MoveCursorPos(y_delta=1)
+
+    elif c == "k":
+        for i in range(repeat_count):
+            MoveCursorPos(y_delta=-1)
+
+    elif c == "l":
+        for i in range(repeat_count):
+            MoveCursorPos(x_delta=1)
+
+    elif c == "b":
+        for i in range(repeat_count):
+            MoveToWordStart()
+
+    elif c == "B":
+        for i in range(repeat_count):
+            MoveToTokenStart()
+
+    elif c == "w":
+        for i in range(repeat_count):
+            MoveToNextWordStart()
+
+    elif c == "W":
+        for i in range(repeat_count):
+            MoveToNextTokenStart()
+
+    elif c == "e":
+        for i in range(repeat_count):
+            MoveToWordEnd()
+
+    elif c == "E":
+        for i in range(repeat_count):
+            MoveToTokenEnd()
+
     elif c == "0":
         MoveToStartOfLine()
+
     elif c == "$":
         MoveToEndOfLine()
+
+    elif c == "gg":
+        x, _ = N10X.Editor.GetCursorPos()
+        SetCursorPos(x, max(0, repeat_count - 1))
+
+    elif c == "G":
+        x, _ = N10X.Editor.GetCursorPos()
+        if has_repeat_count:
+            SetCursorPos(x, max(0, repeat_count - 1))
+        else:
+            MoveToEndOfFile();
+
+    elif c == "g":
+        return
+
+    elif c == "M":
+        scroll_line = N10X.Editor.GetScrollLine()
+        visible_line_count = N10X.Editor.GetVisibleLineCount()
+        SetCursorPos(y=scroll_line + int(visible_line_count / 2))
+
+    elif c == "%":
+        N10X.Editor.ExecuteCommand("MoveToMatchingBracket")
+
+    # Searching
+
+    elif c == "*":
+        for i in range(repeat_count):
+            SendKey("Right")
+            N10X.Editor.ExecuteCommand("FindInFileNextCurrentWord")
+            SendKey("Left")
+
+    elif c == "#":
+        for i in range(repeat_count):
+            SendKey("Right")
+            N10X.Editor.ExecuteCommand("FindInFilePrevCurrentWord")
+            SendKey("Left")
+
+    elif c == "/":
+        N10X.Editor.ExecuteCommand("FindInFile")
+
+    elif (m := re.match("([fFtT;])(.?)", c)):
+        for i in range(repeat_count):
+            action = m.group(1)
+            search = m.group(2)
+            if not MoveToLineText(action, search):
+                return
+
+    elif c == 'n':
+        N10X.Editor.ExecuteCommand("FindInFileNext")
+
+    elif c == 'N':
+        N10X.Editor.ExecuteCommand("FindInFilePrev")
+
+    # Inserting
+
+    elif c == "i":
+        EnterInsertMode()
+
+    elif c == "I":
+        MoveToStartOfLine();
+        MoveToNextNonWhitespaceChar(wrap=False)
+        EnterInsertMode();
+
+    elif c == "a":
+        EnterInsertMode();
+        MoveCursorPos(x_delta=1, max_offset=0)
+
+    elif c == "A":
+        EnterInsertMode();
+        SetCursorPos(x=GetLineLength(), max_offset=0)
+
     elif c == "o":
         N10X.Editor.PushUndoGroup()
-        MoveCursorWithinRange(x=MaxLineX(), max_offset=0)
+        SetCursorPos(x=GetLineLength(), max_offset=0)
         SendKey("Enter")
         N10X.Editor.PopUndoGroup()
         EnterInsertMode()
+
     elif c == "O":
         N10X.Editor.ExecuteCommand("InsertLine");
         EnterInsertMode()
-    elif c == "a":
-        EnterInsertMode();
-        MoveCursorWithinRangeDelta(x_delta=1, max_offset=0)
-    elif c == "A":
-        EnterInsertMode();
-        MoveCursorWithinRange(x=MaxLineX(), max_offset=0)
-    elif c == "K":
-        N10X.Editor.ExecuteCommand("ShowSymbolInfo")
+
+    # Editing
+
+    elif c == "cc":
+        N10X.Editor.PushUndoGroup()
+        x, y = N10X.Editor.GetCursorPos()
+        end_y = y + repeat_count - 1
+        SetSelection((0, y), (GetLineLength(end_y), end_y))
+        N10X.Editor.ExecuteCommand("Cut")
+        AddNewlineToClipboard()
+        EnterInsertMode()
+        N10X.Editor.PopUndoGroup()
+
+    elif c == "cgg":
+        N10X.Editor.PushUndoGroup()
+        start = N10X.Editor.GetCursorPos()
+        SetLineSelection(0, start[1])
+        N10X.Editor.ExecuteCommand("Cut")
+        AddNewlineToClipboard()
+        N10X.Editor.ExecuteCommand("InsertLine")
+        N10X.Editor.PopUndoGroup()
+        EnterInsertMode()
+
+    elif c == "cg":
+        return
+
+    elif c == "cG":
+        N10X.Editor.PushUndoGroup()
+        start = N10X.Editor.GetCursorPos()
+        SetLineSelection(start[1], GetMaxY())
+        N10X.Editor.ExecuteCommand("Cut")
+        AddNewlineToClipboard()
+        N10X.Editor.ExecuteCommand("InsertLine")
+        N10X.Editor.PopUndoGroup()
+        EnterInsertMode()
+
+    elif c == "cw":
+        x, y = N10X.Editor.GetCursorPos()
+        end_x = x
+        line = GetLine(y)
+        character_class = GetCharacterClass(line[end_x])
+        while end_x < len(line) - 1 and GetCharacterClass(line[end_x + 1]) == character_class:
+            end_x += 1
+        if end_x != x:
+            SetSelection((x, y), (end_x, y))
+            N10X.Editor.ExecuteCommand("Cut")
+        EnterInsertMode()
+
+    elif (m := re.match("c" + g_RepeatMatch + "([hl])", c)):
+        x, y = N10X.Editor.GetCursorPos()
+        count = int(m.group(1)) if m.group(1) else 1
+        action = m.group(2)
+        if m.group(2) == "l":
+            SetSelection((x, y), (x + count - 1, y))
+        else:
+            SetSelection((max(0, x - 1), y), (max(0, x - count), y))
+        N10X.Editor.ExecuteCommand("Cut")
+        EnterInsertMode()
+
+    elif c == "c0":
+        N10X.Editor.PushUndoGroup()
+        x, y = N10X.Editor.GetCursorPos()
+        SetSelection((0, y), (max(0, x - 1), y))
+        N10X.Editor.ExecuteCommand("Cut")
+        N10X.Editor.PopUndoGroup()
+        EnterInsertMode()
+
+    elif c == "c$":
+        N10X.Editor.PushUndoGroup()
+        x, y = N10X.Editor.GetCursorPos()
+        SetSelection((x, y), (GetLineLength(y), y))
+        N10X.Editor.ExecuteCommand("Cut")
+        N10X.Editor.PopUndoGroup()
+        EnterInsertMode()
+
+    elif (m := re.match("c" + g_RepeatMatch + "j", c)):
+        N10X.Editor.PushUndoGroup()
+        x, y = N10X.Editor.GetCursorPos()
+        count = int(m.group(1)) if m.group(1) else 1
+        end_y = min(y + count, GetMaxY())
+        N10X.Editor.SetSelection((0, y), (GetLineLength(end_y), end_y))
+        N10X.Editor.ExecuteCommand("Cut")
+        AddNewlineToClipboard()
+        SetCursorPos(x, min(y, end_y), max_offset=0)
+        N10X.Editor.PopUndoGroup()
+        EnterInsertMode()
+
+    elif (m := re.match("c" + g_RepeatMatch + "k", c)):
+        N10X.Editor.PushUndoGroup()
+        x, y = N10X.Editor.GetCursorPos()
+        count = int(m.group(1)) if m.group(1) else 1
+        end_y = max(0, y - count)
+        N10X.Editor.SetSelection((GetLineLength(y), y), (0, end_y))
+        N10X.Editor.ExecuteCommand("Cut")
+        AddNewlineToClipboard()
+        SetCursorPos(x, min(y, end_y), max_offset=0)
+        N10X.Editor.PopUndoGroup()
+        EnterInsertMode()
+
+    elif (m := re.match("c" + g_RepeatMatch + "([fFtT;])(.?)", c)):
+        N10X.Editor.PushUndoGroup()
+        start = N10X.Editor.GetCursorPos()
+        count = int(m.group(1)) if m.group(1) else 1
+        action = m.group(2)
+        search = m.group(3)
+        for _ in range(count):
+            if not MoveToLineText(action, search):
+                N10X.Editor.PopUndoGroup()
+                return
+        end = N10X.Editor.GetCursorPos()
+        SetSelection(start, end)
+        N10X.Editor.ExecuteCommand("Cut")
+        SetCursorPos(x=min(start[0], end[0]), max_offset=0)
+        N10X.Editor.PopUndoGroup()
+        EnterInsertMode()
+
+    elif (m := re.match("c" + g_RepeatMatch, c)):
+        return
+
+    elif c == "J":
+        N10X.Editor.PushUndoGroup()
+        SetCursorPos(x=GetLineLength(), max_offset=0)
+        N10X.Editor.InsertText(" ")
+        N10X.Editor.ExecuteCommand("Delete")
+        N10X.Editor.PopUndoGroup()
+
+    elif c == ">":
+        return
+
+    elif c == ">>":
+        N10X.Editor.PushUndoGroup()
+        x, y = N10X.Editor.GetCursorPos()
+        SetLineSelection(y, y + repeat_count - 1)
+        N10X.Editor.ExecuteCommand("IndentLine")
+        N10X.Editor.ClearSelection()
+        SetCursorPos(x, y)
+        N10X.Editor.PopUndoGroup()
+
+    elif c == "<":
+        return
+
+    elif c == "<<":
+        N10X.Editor.PushUndoGroup()
+        x, y = N10X.Editor.GetCursorPos()
+        SetLineSelection(y, y + repeat_count - 1)
+        N10X.Editor.ExecuteCommand("UnindentLine")
+        N10X.Editor.ClearSelection()
+        SetCursorPos(x, y)
+        N10X.Editor.PopUndoGroup()
+
+    # Undo/Redo
+
+    elif c == "u":
+        for i in range(repeat_count):
+            N10X.Editor.ExecuteCommand("Undo")
+            x, y = N10X.Editor.GetSelectionStart()
+            N10X.Editor.ClearSelection()
+            SetCursorPos(x, y)
+
+    # Deleting
+
+    elif c == "dd":
+        N10X.Editor.PushUndoGroup()
+        for i in range(repeat_count):
+            x, y = N10X.Editor.GetCursorPos()
+            SetLineSelection(y, y)
+            N10X.Editor.ExecuteCommand("Cut")
+            SetCursorPos(x, y)
+        N10X.Editor.PopUndoGroup()
+
+    elif c == "dw":
+        N10X.Editor.PushUndoGroup()
+        start = N10X.Editor.GetCursorPos()
+        for i in range(repeat_count):
+            MoveToNextWordStart()
+        end = N10X.Editor.GetCursorPos()
+        if start != end:
+            end = (max(0, end[0] - 1), end[1])
+            SetSelection(start, end)
+            N10X.Editor.ExecuteCommand("Cut")
+        N10X.Editor.PopUndoGroup()
+
+    elif (m := re.match("d" + g_RepeatMatch + "h", c)):
+        N10X.Editor.PushUndoGroup()
+        for i in range(repeat_count):
+            x, y = N10X.Editor.GetCursorPos()
+            count = int(m.group(1)) if m.group(1) else 1
+            start_x = max(0, x - count)
+            end_x = max(0, x - 1)
+            SetSelection((start_x, y), (end_x, y))
+            N10X.Editor.ExecuteCommand("Cut")
+        N10X.Editor.PopUndoGroup()
+
+    elif (m := re.match("d" + g_RepeatMatch + "j", c)):
+        N10X.Editor.PushUndoGroup()
+        for i in range(repeat_count):
+            x, y = N10X.Editor.GetCursorPos()
+            count = int(m.group(1)) if m.group(1) else 1
+            end_y = min(y + count, GetMaxY())
+            SetLineSelection(y, end_y)
+            N10X.Editor.ExecuteCommand("Cut")
+            SetCursorPos(0, y - 1)
+        N10X.Editor.PopUndoGroup()
+
+    elif (m := re.match("d" + g_RepeatMatch + "k", c)):
+        N10X.Editor.PushUndoGroup()
+        for i in range(repeat_count):
+            x, y = N10X.Editor.GetCursorPos()
+            count = int(m.group(1)) if m.group(1) else 1
+            end_y = min(y - count, GetMaxY())
+            SetLineSelection(y, end_y)
+            N10X.Editor.ExecuteCommand("Cut")
+        N10X.Editor.PopUndoGroup()
+
+    elif (m := re.match("d" + g_RepeatMatch + "l", c)):
+        N10X.Editor.PushUndoGroup()
+        for i in range(repeat_count):
+            x, y = N10X.Editor.GetCursorPos()
+            count = int(m.group(1)) if m.group(1) else 1
+            end_x = x + count - 1
+            max_x = max(0, GetLineLength(y) - 1)
+            end_x = Clamp(0, max_x, end_x)
+            SetSelection((x, y), (end_x, y))
+            N10X.Editor.ExecuteCommand("Cut")
+        N10X.Editor.PopUndoGroup()
+
+    elif (m := re.match("d" + g_RepeatMatch + "([fFtT;])(.?)", c)):
+        N10X.Editor.PushUndoGroup()
+        count = int(m.group(1)) if m.group(1) else 1
+        action = m.group(2)
+        search = m.group(3)
+        start = N10X.Editor.GetCursorPos()
+        for i in range(repeat_count):
+            for _ in range(count):
+                if not MoveToLineText(action, search):
+                    N10X.Editor.PopUndoGroup()
+                    return
+        end = N10X.Editor.GetCursorPos()
+        SetSelection(start, end)
+        N10X.Editor.ExecuteCommand("Cut")
+        N10X.Editor.PopUndoGroup()
+
+    elif c == "dgg":
+        x, y = N10X.Editor.GetCursorPos()
+        SetLineSelection(y, 0)
+        N10X.Editor.ExecuteCommand("Cut")
+        SetCursorPos(x, 0)
+
+    elif c == "dG":
+        N10X.Editor.PushUndoGroup()
+        x, y = N10X.Editor.GetCursorPos()
+        if y:
+            sel_start = (GetLineLength(y - 1), y - 1)
+        else:
+            sel_start = GetLineLength(0)
+        sel_end = (GetLineLength(GetMaxY()), GetMaxY())
+        SetSelection(sel_start, sel_end)
+        N10X.Editor.ExecuteCommand("Cut")
+        end_x, end_y = GetNextNonWhitespaceCharPos(0, GetMaxY(), False)
+        SetCursorPos(end_x, end_y)
+        N10X.Editor.PopUndoGroup()
+
+    elif c == "d0":
+        N10X.Editor.PushUndoGroup()
+        x, y = N10X.Editor.GetCursorPos()
+        end_x = max(0, x - 1)
+        SetSelection((0, y), (end_x, y))
+        N10X.Editor.ExecuteCommand("Cut")
+        N10X.Editor.PopUndoGroup()
+
+    elif c == "d$":
+        N10X.Editor.PushUndoGroup()
+        x, y = N10X.Editor.GetCursorPos()
+        SetSelection((x, y), (GetLineLength(), y))
+        N10X.Editor.ExecuteCommand("Cut")
+        SetCursorPos(x - 1, y)
+        N10X.Editor.PopUndoGroup()
+
+    elif (m := re.match("d" + g_RepeatMatch, c)) or c == "dg":
+        return
+
+    elif c == "x":
+        x, y = N10X.Editor.GetCursorPos()
+        N10X.Editor.PushUndoGroup()
+        SetSelection((x, y), (x + repeat_count, y))
+        N10X.Editor.ExecuteCommand("Cut")
+        N10X.Editor.PopUndoGroup()
+
+    # Copying
+
+    elif c == "yy":
+        x, y = N10X.Editor.GetCursorPos()
+        end_y = min(y + repeat_count - 1, GetMaxY())
+        SetLineSelection(y, end_y)
+        N10X.Editor.ExecuteCommand("Copy")
+        SetCursorPos(x, y)
+
+    elif c == "yg":
+        return
+
+    elif c == "ygg":
+        x, y = N10X.Editor.GetCursorPos()
+        SetLineSelection(0, y)
+        N10X.Editor.ExecuteCommand("Copy")
+        SetCursorPos(x, 0)
+
+    elif c == "yG":
+        x, y = N10X.Editor.GetCursorPos()
+        SetLineSelection(y, GetMaxY())
+        N10X.Editor.ExecuteCommand("Copy")
+        SetCursorPos(x, y)
+
+    elif c == "yw":
+        start = N10X.Editor.GetCursorPos()
+        for i in range(repeat_count):
+            if not MoveToNextWordStart(wrap=False):
+                return
+        MoveCursorPos(x_delta=-1)
+        end = N10X.Editor.GetCursorPos()
+        SetSelection(start, end)
+        N10X.Editor.ExecuteCommand("Copy")
+        SetCursorPos(x=min(start[0], end[0]))
+
+    elif (m := re.match("y" + g_RepeatMatch + "h", c)):
+        start = N10X.Editor.GetCursorPos()
+        count = int(m.group(1)) if m.group(1) else 1
+        MoveCursorPos(x_delta=-count)
+        end = N10X.Editor.GetCursorPos()
+        start = (max(0, start[0] - 1), start[1])
+        SetSelection(start, end)
+        N10X.Editor.ExecuteCommand("Copy")
+        SetCursorPos(end[0], end[1])
+
+    elif (m := re.match("y" + g_RepeatMatch + "l", c)):
+        start = N10X.Editor.GetCursorPos()
+        count = int(m.group(1)) if m.group(1) else 1
+        MoveCursorPos(x_delta=count-1)
+        end = N10X.Editor.GetCursorPos()
+        SetSelection(start, end)
+        N10X.Editor.ExecuteCommand("Copy")
+        SetCursorPos(x=min(start[0], end[0]-1))
+
+    elif c == "y0":
+        x, y = N10X.Editor.GetCursorPos()
+        SetSelection((0, y), (max(0, x - 1), y))
+        N10X.Editor.ExecuteCommand("Copy")
+        SetCursorPos(0, y)
+
+    elif c == "y$":
+        x, y = N10X.Editor.GetCursorPos()
+        SetSelection((x, y), (GetLineLength(y), y))
+        N10X.Editor.ExecuteCommand("Copy")
+        SetCursorPos(x, y)
+
+    elif (m := re.match("y" + g_RepeatMatch + "([jk])", c)):
+        start = N10X.Editor.GetCursorPos()
+        count = int(m.group(1)) if m.group(1) else 1
+        delta = 1 if m.group(2) == 'j' else -1
+        MoveCursorPos(y_delta=delta*count)
+        end = N10X.Editor.GetCursorPos()
+        SetLineSelection(start[1], end[1])
+        N10X.Editor.ExecuteCommand("Copy")
+        SetCursorPos(x=start[0], y=min(start[1], end[1]))
+
+    elif (m := re.match("y" + g_RepeatMatch + "([fFtT;])(.?)", c)):
+        start = N10X.Editor.GetCursorPos()
+        count = int(m.group(1)) if m.group(1) else 1
+        action = m.group(2)
+        search = m.group(3)
+        for _ in range(count):
+            if not MoveToLineText(action, search):
+                return
+        end = N10X.Editor.GetCursorPos()
+        SetSelection(start, end)
+        N10X.Editor.ExecuteCommand("Copy")
+        SetCursorPos(x=min(start[0], end[0]))
+
+    elif (m := re.match("y" + g_RepeatMatch, c)):
+        return
+
+    # Pasting
+
+    elif c == "p":
+        N10X.Editor.PushUndoGroup()
+        for i in range(repeat_count):
+            clipboard_value = GetClipboardValue()
+            if clipboard_value and clipboard_value[-1:] == "\n":
+                SetCursorPos(x=GetLineLength(), max_offset=0)
+                SendKey("Enter")
+                MoveToStartOfLine()
+                start = N10X.Editor.GetCursorPos()
+                RemoveNewlineFromClipboard()
+                N10X.Editor.ExecuteCommand("Paste")
+                RestoreClipboard(clipboard_value)
+                x, y = GetNextNonWhitespaceCharPos(start[0], start[1], False)
+                SetCursorPos(x, y)
+            else:
+                MoveCursorPos(x_delta=1, max_offset=0)
+                N10X.Editor.ExecuteCommand("Paste")
+                MoveCursorPos(x_delta=-1, max_offset=0)
+        N10X.Editor.PopUndoGroup()
+
+    elif c == "P":
+        N10X.Editor.PushUndoGroup()
+        for i in range(repeat_count):
+            clipboard_value = GetClipboardValue()
+            if clipboard_value and clipboard_value[-1:] == "\n":
+                SetCursorPos(x=GetLineLength(), max_offset=0)
+                SendKey("Enter")
+                MoveToStartOfLine()
+                RemoveNewlineFromClipboard()
+                N10X.Editor.ExecuteCommand("Paste")
+                RestoreClipboard(clipboard_value)
+            else:
+                N10X.Editor.ExecuteCommand("Paste")
+                MoveCursorPos(x_delta=-1, max_offset=0)
+        N10X.Editor.PopUndoGroup()
+
+    # Marcos
+
+    elif c == "qa":
+        if not g_StartedRecordingMacro:
+            N10X.Editor.ExecuteCommand("RecordKeySequence")
+            g_StartedRecordingMacro = True
+
+    elif c == "q":
+        if g_StartedRecordingMacro:
+            N10X.Editor.ExecuteCommand("RecordKeySequence")
+            g_StartedRecordingMacro = False
+        else:
+            return
+
+    elif c == "@":
+        return
+
+    elif c == "@a" or c == "@@":
+        N10X.Editor.PushUndoGroup()
+        for i in range(repeat_count):
+            N10X.Editor.ExecuteCommand("PlaybackKeySequence")
+        N10X.Editor.PopUndoGroup()
+
+    # Command Panel
+
+    elif c == ":":
+        N10X.Editor.ExecuteCommand("ShowCommandPanel")
+        N10X.Editor.SetCommandPanelText(":")
+
+    # Visual Mode
+
+    elif c == "v":
+        EnterVisualMode(Mode.VISUAL)
+
+    elif c == "V":
+        EnterVisualMode(Mode.VISUAL_LINE)
+
+    # File
+
+    elif c == "S":
+        N10X.Editor.ExecuteCommand("SaveFile")
+
     elif c == "Q":
         N10X.Editor.ExecuteCommand("CloseFile")
-    elif (m := re.match("g([gd]?)", c)):
-        action = m.group(1)
-        if not action:
-            return
-        if action == 'd':
-            N10X.Editor.ExecuteCommand("GotoSymbolDefinition");
-        elif action == 'g':
-            MoveToStartOfFile();
-    elif c == "G":
-        MoveToEndOfFile();
-    elif c == "x":
-        start = N10X.Editor.GetCursorPos()
-        N10X.Editor.SetSelection(start, (start[0] + repeat_count, start[1]))
-        N10X.Editor.ExecuteCommand("Cut")
-        MoveCursorWithinRange(x=start[0], y=start[1])
-    elif c == 'n':
-        N10X.Editor.ExecuteCommand("FindInFileNext")
-    elif c == 'N':
-        N10X.Editor.ExecuteCommand("FindInFilePrev")
+
+    # Symbols
+
+    elif c == "K":
+        N10X.Editor.ExecuteCommand("ShowSymbolInfo")
+
+    elif c == "gd":
+        N10X.Editor.ExecuteCommand("GotoSymbolDefinition");
+
     else:
-        for i in range(repeat_count):
-            if c == "h":
-                MoveCursorXOrWrapDelta(-1)
-            elif c == "l":
-                MoveCursorXOrWrapDelta(1)
-            elif c == "k":
-                MoveCursorWithinRangeDelta(y_delta=-1)
-            elif c == "j":
-                MoveCursorWithinRangeDelta(y_delta=1)
-            elif c == "w":
-                # N10X.Editor.ExecuteCommand("MoveCursorNextWord")
-                MoveNextWordStart()
-            elif c == "b":
-                N10X.Editor.ExecuteCommand("MoveCursorPrevWord")
-            elif c == "%":
-                N10X.Editor.ExecuteCommand("MoveToMatchingBracket")
-            elif c == "u":
-                N10X.Editor.ExecuteCommand("Undo")
-                x, y = N10X.Editor.GetSelectionStart()
-                N10X.Editor.ClearSelection()
-                MoveCursorWithinRange(x=x, y=y)
-            elif (m := re.match(">(>?)", c)):
-                if not m.group(1):
-                    return
-                x, y = N10X.Editor.GetCursorPos()
-                SetLineSelection(y, y)
-                N10X.Editor.ExecuteCommand("IndentLine")
-                N10X.Editor.ClearSelection()
-                MoveCursorWithinRange(x=x, y=y)
-            elif (m := re.match("<(<?)", c)):
-                if not m.group(1):
-                    return
-                x, y = N10X.Editor.GetCursorPos()
-                SetLineSelection(y, y)
-                N10X.Editor.ExecuteCommand("UnindentLine")
-                N10X.Editor.ClearSelection()
-                MoveCursorWithinRange(x=x, y=y)
-            elif c == "p":
-                if i == 0:
-                    N10X.Editor.PushUndoGroup()
+        print("Unknown command!")
 
-                if (old := ClipboardNoTrailingNewline()):
-                    start = N10X.Editor.GetCursorPos()
-                    MoveCursorWithinRange(x=MaxLineX(), max_offset=0)
-                    SendKey("Enter")
-                    MoveToStartOfLine()
-
-                    N10X.Editor.ExecuteCommand("Paste")
-
-                    RestoreClipboard(old)
-                    MoveCursorWithinRange(x=start[0], y=start[1] + 1)
-                else:
-                    MoveCursorWithinRangeDelta(x_delta=1, max_offset=0)
-                    N10X.Editor.ExecuteCommand("Paste")
-                    MoveCursorWithinRangeDelta(x_delta=-1, max_offset=0)
-
-                if i == repeat_count - 1:
-                    N10X.Editor.PopUndoGroup()
-            elif c == "P":
-                if i == 0:
-                    N10X.Editor.PushUndoGroup()
-
-                if (old := ClipboardNoTrailingNewline()):
-                    start = N10X.Editor.GetCursorPos()
-                    N10X.Editor.ExecuteCommand("InsertLine")
-                    end = N10X.Editor.GetCursorPos()
-                    MoveToStartOfLine()
-
-                    N10X.Editor.ExecuteCommand("Paste")
-
-                    RestoreClipboard(old)
-                    MoveCursorWithinRange(x=start[0], y=end[1])
-                else:
-                    N10X.Editor.ExecuteCommand("Paste")
-                    MoveCursorWithinRangeDelta(x_delta=-1, max_offset=0)
-
-                if i == repeat_count - 1:
-                    N10X.Editor.PopUndoGroup()
-
-            elif (m := re.match("([fFtT;])(.?)", c)):
-                action = m.group(1)
-                search = m.group(2)
-                if not PerformLineSearch(action, search):
-                    return
-
-            elif (m := re.match("d(.*)", c)):
-                trailing = m.group(1)
-                start = N10X.Editor.GetCursorPos()
-                def PerformCut():
-                    if i == 0:
-                        N10X.Editor.PushUndoGroup()
-                    N10X.Editor.ExecuteCommand("Cut")
-                    if i == repeat_count - 1:
-                        N10X.Editor.PopUndoGroup()
-                if not trailing or re.match("[1-9][0-9]*$", trailing):
-                    return
-
-                if trailing == 'd':
-                    SetLineSelection(start[1], start[1])
-                    PerformCut()
-                    MoveCursorWithinRange(x=start[0], y=start[1])
-                elif (m := re.match("g(g?)", trailing)):
-                    if not m.group(1):
-                        return
-                    SetLineSelection(start[1], 0)
-                    PerformCut()
-
-                    MoveCursorWithinRange(x=start[0], y=0)
-                elif trailing == 'G':
-                    SetLineSelection(start[1], MaxY())
-                    PerformCut()
-
-                    MoveCursorWithinRange(x=start[0], y=start[0])
-                elif trailing == 'w':
-                    if MoveNextWordStart(wrap=False):
-                        MoveCursorWithinRangeDelta(x_delta=-1)
-                    end = N10X.Editor.GetCursorPos()
-
-                    SetSelection(start, end)
-                    PerformCut()
-
-                    # Reset cursor position
-                    MoveCursorWithinRange(x=min(start[0], end[0]))
-                elif (m := re.match(REPEAT_MATCH + "([hl0$])", trailing)):
-                    count = int(m.group(1)) if m.group(1) else 1
-                    action = m.group(2)
-                    if action == 'l' or action == 'h':
-                        delta = 1 if m.group(2) == 'l' else -1
-                        MoveCursorWithinRangeDelta(x_delta=delta*count)
-                    elif action == '0':
-                        MoveToStartOfLine()
-                    elif action == '$':
-                        MoveToEndOfLine()
-
-                    end = N10X.Editor.GetCursorPos()
-
-                    SetSelection(start, end)
-                    PerformCut()
-
-                    # Reset cursor position
-                    MoveCursorWithinRange(x=min(start[0], end[0]))
-                elif (m := re.match(REPEAT_MATCH + "([jk])", trailing)):
-                    count = int(m.group(1)) if m.group(1) else 1
-                    delta = 1 if m.group(2) == 'j' else -1
-                    MoveCursorWithinRangeDelta(y_delta=delta*count)
-                    end = N10X.Editor.GetCursorPos()
-
-                    SetLineSelection(start[1], end[1])
-                    PerformCut()
-
-                    # Reset cursor position
-                    MoveCursorWithinRange(x=start[0], y=min(start[1], end[1]))
-                elif (m := re.match(REPEAT_MATCH + "([fFtT;])(.?)", trailing)):
-                    count = int(m.group(1)) if m.group(1) else 1
-                    action = m.group(2)
-                    search = m.group(3)
-                    for _ in range(count):
-                        if not PerformLineSearch(action, search):
-                            return
-
-                    end = N10X.Editor.GetCursorPos()
-                    SetSelection(start, end)
-                    PerformCut()
-
-                    # Reset cursor position
-                    MoveCursorWithinRange(x=min(start[0], end[0]))
-                else:
-                    print("Invalid delete command!")
-
-
-            elif (m := re.match("y(.*)", c)):
-                # TODO(Brandon): This is a lot of copypasta
-                trailing = m.group(1)
-                start = N10X.Editor.GetCursorPos()
-                def PerformCopy():
-                    N10X.Editor.ExecuteCommand("Copy")
-                    N10X.Editor.ClearSelection()
-
-                if not trailing or re.match("[1-9][0-9]*$", trailing):
-                    return
-
-                if trailing == 'y':
-                    SetLineSelection(start[1], start[1])
-                    PerformCopy()
-                    MoveCursorWithinRange(x=start[0], y=start[1])
-                elif (m := re.match("g(g?)", trailing)):
-                    if not m.group(1):
-                        return
-                    SetLineSelection(start[1], 0)
-                    PerformCopy()
-
-                    MoveCursorWithinRange(x=start[0], y=0)
-                elif trailing == 'G':
-                    SetLineSelection(start[1], MaxY())
-                    PerformCopy()
-
-                    MoveCursorWithinRange(x=start[0], y=start[0])
-                elif trailing == 'w':
-                    if MoveNextWordStart(wrap=False):
-                        MoveCursorWithinRangeDelta(x_delta=-1)
-                    end = N10X.Editor.GetCursorPos()
-
-                    SetSelection(start, end)
-                    PerformCopy()
-
-                    # Reset cursor position
-                    MoveCursorWithinRange(x=min(start[0], end[0]))
-                elif (m := re.match(REPEAT_MATCH + "([hl0$])", trailing)):
-                    count = int(m.group(1)) if m.group(1) else 1
-                    action = m.group(2)
-                    if action == 'l' or action == 'h':
-                        delta = 1 if m.group(2) == 'l' else -1
-                        MoveCursorWithinRangeDelta(x_delta=delta*count)
-                    elif action == '0':
-                        MoveToStartOfLine()
-                    elif action == '$':
-                        MoveToEndOfLine()
-
-                    end = N10X.Editor.GetCursorPos()
-
-                    SetSelection(start, end)
-                    PerformCopy()
-
-                    # Reset cursor position
-                    MoveCursorWithinRange(x=min(start[0], end[0]))
-                elif (m := re.match(REPEAT_MATCH + "([jk])", trailing)):
-                    count = int(m.group(1)) if m.group(1) else 1
-                    delta = 1 if m.group(2) == 'j' else -1
-                    MoveCursorWithinRangeDelta(y_delta=delta*count)
-                    end = N10X.Editor.GetCursorPos()
-
-                    SetLineSelection(start[1], end[1])
-                    PerformCopy()
-
-                    # Reset cursor position
-                    MoveCursorWithinRange(x=start[0], y=min(start[1], end[1]))
-                elif (m := re.match(REPEAT_MATCH + "([fFtT;])(.?)", trailing)):
-                    count = int(m.group(1)) if m.group(1) else 1
-                    action = m.group(2)
-                    search = m.group(3)
-                    for _ in range(count):
-                        if not PerformLineSearch(action, search):
-                            return
-
-                    end = N10X.Editor.GetCursorPos()
-                    SetSelection(start, end)
-                    PerformCopy()
-
-                    # Reset cursor position
-                    MoveCursorWithinRange(x=min(start[0], end[0]))
-                else:
-                    print("Invalid copy command!")
-            elif (m := re.match("c(.*)", c)):
-                trailing = m.group(1)
-                start = N10X.Editor.GetCursorPos()
-                def PerformChange():
-                    if i == 0:
-                        N10X.Editor.PushUndoGroup()
-                    N10X.Editor.ExecuteCommand("Cut")
-                    if i == repeat_count - 1:
-                        N10X.Editor.PopUndoGroup()
-                        EnterInsertMode()
-
-                if not trailing or re.match("[1-9][0-9]*$", trailing):
-                    return
-
-                if trailing == 'c':
-                    SetLineSelection(start[1], start[1])
-                    _, y = start
-                    N10X.Editor.SetSelection((0, y), (MaxLineX(y), y))
-                    PerformChange()
-                    MoveCursorWithinRange(x=start[0], y=start[1], max_offset=0)
-                elif (m := re.match("g(g?)", trailing)):
-                    if not m.group(1):
-                        return
-                    SetLineSelection(start[1], 0)
-                    PerformChange()
-
-                    MoveCursorWithinRange(x=start[0], y=0, max_offset=0)
-                elif trailing == 'G':
-                    SetLineSelection(start[1], MaxY())
-                    PerformChange()
-
-                    MoveCursorWithinRange(x=start[0], y=start[0], max_offset=0)
-                elif trailing == 'w':
-                    prevent_wrap = not MoveNextWordStart(wrap=False)
-                    if not prevent_wrap:
-                        MoveCursorWithinRangeDelta(x_delta=-1)
-                    end = N10X.Editor.GetCursorPos()
-
-                    SetSelection(start, end)
-                    PerformChange()
-
-                    # Reset cursor position
-                    if prevent_wrap:
-                        MoveCursorWithinRange(x=MaxLineX(start[1]), y=start[1], max_offset=0)
-                    else:
-                        MoveCursorWithinRange(x=min(start[0], end[0]))
-                elif (m := re.match(REPEAT_MATCH + "([hl0$])", trailing)):
-                    count = int(m.group(1)) if m.group(1) else 1
-                    action = m.group(2)
-                    if action == 'l' or action == 'h':
-                        delta = 1 if m.group(2) == 'l' else -1
-                        MoveCursorWithinRangeDelta(x_delta=delta*count)
-                    elif action == '0':
-                        MoveToStartOfLine()
-                    elif action == '$':
-                        MoveToEndOfLine()
-
-                    end = N10X.Editor.GetCursorPos()
-
-                    SetSelection(start, end)
-                    PerformChange()
-
-                    # Reset cursor position
-                    MoveCursorWithinRange(x=min(start[0], end[0]), max_offset=0)
-                elif (m := re.match(REPEAT_MATCH + "j", trailing)):
-                    count = int(m.group(1)) if m.group(1) else 1
-                    end_y = clamp(0, MaxY(), start[1] + count)
-                    N10X.Editor.SetSelection((0, start[1]), (MaxLineX(end_y), end_y))
-                    PerformChange()
-
-                    # Reset cursor position
-                    MoveCursorWithinRange(x=start[0], y=min(start[1], end_y), max_offset=0)
-                elif (m := re.match(REPEAT_MATCH + "k", trailing)):
-                    count = int(m.group(1)) if m.group(1) else 1
-                    end_y = clamp(0, MaxY(), start[1] - count)
-                    N10X.Editor.SetSelection((0, end_y), (MaxLineX(start[1]), start[1]))
-                    PerformChange()
-
-                    # Reset cursor position
-                    MoveCursorWithinRange(x=start[0], y=min(start[1], end_y), max_offset=0)
-                elif (m := re.match(REPEAT_MATCH + "([fFtT;])(.?)", trailing)):
-                    count = int(m.group(1)) if m.group(1) else 1
-                    action = m.group(2)
-                    search = m.group(3)
-                    for _ in range(count):
-                        if not PerformLineSearch(action, search):
-                            return
-
-                    end = N10X.Editor.GetCursorPos()
-                    SetSelection(start, end)
-                    PerformChange()
-
-                    # Reset cursor position
-                    MoveCursorWithinRange(x=min(start[0], end[0]), max_offset=0)
-                else:
-                    print("Invalid change command!")
-            else:
-                print("Unknown command!")
-
-    g_CommandStr = ""
-
-    # elif command == "b":
-    #     RepeatedCommand("MoveCursorPrevWord")
-
-    # elif command == "J":
-    #     JoinLine()
-
-    # elif command == "I":
-    #     MoveToStartOfLine();
-    #     N10X.Editor.ExecuteCommand("MoveCursorNextWord")
-    #     EnterInsertMode();
-
-    # elif command == "e":
-    #     cursor_pos = N10X.Editor.GetCursorPos()
-    #     MoveCursorXOrWrap(GetWordEnd())
+    g_Command = ""
 
 #------------------------------------------------------------------------
 def HandleCommandModeKey(key, shift, control, alt):
     global g_HandingKey
-    global g_CommandStr
+    global g_Command
     if g_HandingKey:
         return
     g_HandingKey = True
@@ -857,17 +1148,15 @@ def HandleCommandModeKey(key, shift, control, alt):
 
     pass_through = False
 
-    # if key == "Enter":
-    #     print("Enter key!")
-
     if key == "Escape":
         EnterCommandMode()
+
     elif key == "O" and control:
         N10X.Editor.ExecuteCommand("PrevLocation")
+
     elif key == "/" and control:
         x, y = N10X.Editor.GetCursorPos()
-
-        if IsVisual():
+        if InVisualMode():
             SubmitVisualModeSelection()
             N10X.Editor.ExecuteCommand("ToggleComment")
             N10X.Editor.ClearSelection()
@@ -875,55 +1164,76 @@ def HandleCommandModeKey(key, shift, control, alt):
             SetLineSelection(y, y)
             N10X.Editor.ExecuteCommand("ToggleComment")
             N10X.Editor.ClearSelection()
+        SetCursorPos(x=x, y=y)
 
-        MoveCursorWithinRange(x=x, y=y)
     elif key == "Tab" and shift:
         N10X.Editor.ExecuteCommand("PrevPanelTab")
+
     elif key == "Tab":
         N10X.Editor.ExecuteCommand("NextPanelTab")
+
     elif key == "H" and control:
         N10X.Editor.ExecuteCommand("MovePanelFocusLeft")
+
     elif key == "L" and control:
         N10X.Editor.ExecuteCommand("MovePanelFocusRight")
+
     elif key == "J" and control:
         N10X.Editor.ExecuteCommand("MovePanelFocusDown")
+
     elif key == "K" and control:
         N10X.Editor.ExecuteCommand("MovePanelFocusUp")
+
     elif key == "R" and control:
         N10X.Editor.ExecuteCommand("Redo")
+
     elif key == "P" and control:
         N10X.Editor.ExecuteCommand("Search")
-    elif key == "Up":
-        N10X.Editor.SendKey("Up")
-    elif key == "Down":
-        N10X.Editor.SendKey("Down")
-    elif key == "Left":
-        N10X.Editor.SendKey("Left")
-    elif key == "Right":
-        N10X.Editor.SendKey("Right")
-    elif key == "PageUp":
-        N10X.Editor.SendKey("PageUp")
-    elif key == "PageDown":
-        N10X.Editor.SendKey("PageDown")
+
     elif key == "U" and control:
-        N10X.Editor.SendKey("PageUp")
+        MoveCursorPos(y_delta=int(-N10X.Editor.GetVisibleLineCount()/2))
+        N10X.Editor.ScrollCursorIntoView()
+
     elif key == "D" and control:
-        N10X.Editor.SendKey("PageDown")
+        MoveCursorPos(y_delta=int(N10X.Editor.GetVisibleLineCount()/2))
+        N10X.Editor.ScrollCursorIntoView()
+
+    elif key == "B" and control:
+        N10X.Editor.SendKey("PageUp")
+
     elif key == "F" and control:
-        N10X.Editor.ExecuteCommand("FindReplaceInFile")
+        N10X.Editor.SendKey("PageDown")
+
+    elif key == "Y" and control:
+        scroll_line = N10X.Editor.GetScrollLine()
+        MoveCursorPos(y_delta=-1)
+        N10X.Editor.SetScrollLine(scroll_line - 1)
+
+    elif key == "E" and control:
+        scroll_line = N10X.Editor.GetScrollLine()
+        MoveCursorPos(y_delta=1)
+        N10X.Editor.SetScrollLine(scroll_line + 1)
+
+    elif key == "O" and control:
+        N10X.Editor.ExecuteCommand("PrevLocation")
+
+    elif key == "I" and control:
+        N10X.Editor.ExecuteCommand("NextLocation")
+
     else:
         handled = False
 
         pass_through = \
             control or \
             alt or \
-            key == "Escape" or \
             key == "Delete" or \
             key == "Backspace" or \
             key == "Up" or \
             key == "Down" or \
             key == "Left" or \
             key == "Right" or \
+            key == "PageUp" or \
+            key == "PageDown" or \
             key == "F1" or \
             key == "F2" or \
             key == "F3" or \
@@ -939,7 +1249,7 @@ def HandleCommandModeKey(key, shift, control, alt):
             key.startswith("Mouse")
 
     if handled or pass_through:
-        g_CommandStr = ""
+        g_Command = ""
 
     g_HandingKey = False
 
@@ -949,7 +1259,7 @@ def HandleCommandModeKey(key, shift, control, alt):
 
 #------------------------------------------------------------------------
 def HandleInsertModeKey(key, shift, control, alt):
-    if key == "Escape":
+    if key == "Escape" and not N10X.Editor.IsShowingAutocomplete():
         EnterCommandMode()
         return True
 
@@ -957,14 +1267,14 @@ def HandleInsertModeKey(key, shift, control, alt):
         EnterCommandMode()
         return True
 
-
-def HandleVisualModeChar(ch):
+#------------------------------------------------------------------------
+def HandleVisualModeChar(char):
     global g_Mode
-    global g_CommandStr
+    global g_Command
 
-    g_CommandStr += ch
+    g_Command += char
 
-    m = re.match(REPEAT_MATCH + "(.*)", g_CommandStr)
+    m = re.match(g_RepeatMatch + "(.*)", g_Command)
     if not m:
         return
 
@@ -978,78 +1288,103 @@ def HandleVisualModeChar(ch):
             EnterCommandMode()
         else:
             g_Mode = Mode.VISUAL
+
     elif c == "V":
         if g_Mode == Mode.VISUAL_LINE:
             EnterCommandMode()
         else:
             g_Mode = Mode.VISUAL_LINE
+
     elif c == "y":
         start, _ = SubmitVisualModeSelection()
         N10X.Editor.ExecuteCommand("Copy")
         N10X.Editor.ClearSelection()
-
         EnterCommandMode()
+        SetCursorPos(start[0], start[1])
 
-        MoveCursorWithinRange(start[0], start[1])
-    elif c == "d" or c == "x" or c == "c":
+    elif c == "d" or c == "x":
         start, _ = SubmitVisualModeSelection()
         N10X.Editor.ExecuteCommand("Cut")
-        N10X.Editor.ClearSelection()
+        SetCursorPos(start[0], start[1])
+        EnterCommandMode()
 
-        MoveCursorWithinRange(start[0], start[1])
-        if c == "c":
-            EnterInsertMode()
-        else:
-            EnterCommandMode()
+    elif c == "c":
+        start, _ = SubmitVisualModeSelection()
+        N10X.Editor.ExecuteCommand("Cut")
+        SetCursorPos(start[0], start[1])
+        EnterInsertMode()
+
     elif c == "0":
         MoveToStartOfLine()
+
     elif c == "$":
         MoveToEndOfLine()
+
     elif c == "G":
         MoveToEndOfFile();
-    elif (m := re.match("g(g?)", c)):
-        action = m.group(1)
-        if not action:
-            return
+
+    elif c == "g":
+        return
+
+    elif c == "gg":
         MoveToStartOfFile();
-    else:
+
+    elif c == "h":
         for _ in range(repeat_count):
-            if c == "h":
-                MoveCursorXOrWrapDelta(-1)
-            elif c == "l":
-                MoveCursorXOrWrapDelta(1)
-            elif c == "k":
-                MoveCursorWithinRangeDelta(y_delta=-1)
-            elif c == "j":
-                MoveCursorWithinRangeDelta(y_delta=1)
-            elif c == "w":
-                N10X.Editor.ExecuteCommand("MoveCursorNextWord")
-            elif c == "b":
-                N10X.Editor.ExecuteCommand("MoveCursorPrevWord")
-            elif (m := re.match("([fFtT;])(.?)", c)):
-                action = m.group(1)
-                search = m.group(2)
-                if not PerformLineSearch(action, search):
-                    return
-            elif c == "%":
-                N10X.Editor.ExecuteCommand("MoveToMatchingBracket")
-            elif c == ">":
-                N10X.Editor.ExecuteCommand("IndentLine")
-            elif c == "<":
-                N10X.Editor.ExecuteCommand("UnindentLine")
-            else:
-                print("Unknown command!")
+            MoveCursorPos(x_delta=-1)
+
+    elif c == "l":
+        for _ in range(repeat_count):
+            MoveCursorPos(x_delta=1)
+
+    elif c == "k":
+        for _ in range(repeat_count):
+            MoveCursorPos(y_delta=-1)
+
+    elif c == "j":
+        for _ in range(repeat_count):
+            MoveCursorPos(y_delta=1)
+
+    elif c == "w":
+        for _ in range(repeat_count):
+            MoveToNextWordStart()
+
+    elif c == "b":
+        for _ in range(repeat_count):
+            MoveToWordStart()
+
+    elif (m := re.match("([fFtT;])(.?)", c)):
+        for _ in range(repeat_count):
+            action = m.group(1)
+            search = m.group(2)
+            if not MoveToLineText(action, search):
+                return
+
+    elif c == "%":
+        N10X.Editor.ExecuteCommand("MoveToMatchingBracket")
+
+    elif c == ">":
+        for _ in range(repeat_count):
+            N10X.Editor.ExecuteCommand("IndentLine")
+
+    elif c == "<":
+        for _ in range(repeat_count):
+            N10X.Editor.ExecuteCommand("UnindentLine")
+
+    else:
+        print("Unknown command!")
     
-    g_CommandStr = ""
+    g_Command = ""
     UpdateVisualModeSelection()
 
+#------------------------------------------------------------------------
 def UpdateCursorMode():
     if g_Mode == Mode.INSERT:
         N10X.Editor.SetCursorMode("Line")
         N10X.Editor.SetStatusBarText("")
-    elif g_CommandStr:
+    elif g_Command:
         N10X.Editor.SetCursorMode("HalfBlock")
-        N10X.Editor.SetStatusBarText(g_CommandStr)
+        N10X.Editor.SetStatusBarText(g_Command)
     else:
         N10X.Editor.SetCursorMode("Block")
         N10X.Editor.SetStatusBarText("")
@@ -1061,8 +1396,8 @@ def UpdateCursorMode():
 # Called when a key is pressed.
 # Return true to surpress the key
 def OnInterceptKey(key, shift, control, alt):
-    global g_HandleIntercepts
-    if not g_HandleIntercepts:
+    global g_HandleKeyIntercepts
+    if not g_HandleKeyIntercepts:
         return False
 
     if N10X.Editor.TextEditorHasFocus():
@@ -1086,7 +1421,7 @@ def OnInterceptCharKey(c):
         if g_Mode == Mode.VISUAL or g_Mode == Mode.VISUAL_LINE:
             HandleVisualModeChar(c)
             N10X.Editor.SetCursorMode("Block")
-        elif g_Mode == Mode.NORMAL:
+        elif g_Mode == Mode.COMMAND:
             HandleCommandModeChar(c)
         UpdateCursorMode()
         return ret
@@ -1115,7 +1450,7 @@ def HandleCommandPanelCommand(command):
     
     split = command.split(":")
     if len(split) == 2 and split[1].isdecimal(): 
-        MoveCursorWithinRange(y=int(split[1]) - 1)
+        SetCursorPos(y=int(split[1]) - 1)
         return True
 
 #------------------------------------------------------------------------
