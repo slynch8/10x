@@ -1349,6 +1349,10 @@ def HandleVisualModeChar(char):
         for _ in range(repeat_count):
             MoveToNextWordStart()
 
+    elif c == "e":
+        for _ in range(repeat_count):
+            MoveToWordEnd()
+
     elif c == "b":
         for _ in range(repeat_count):
             MoveToWordStart()
