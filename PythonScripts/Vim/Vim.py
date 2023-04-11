@@ -944,7 +944,7 @@ def HandleCommandModeChar(char):
     elif c == "x":
         x, y = N10X.Editor.GetCursorPos()
         N10X.Editor.PushUndoGroup()
-        SetSelection((x, y), (x + repeat_count, y))
+        SetSelection((x, y), (x + repeat_count - 1, y))
         N10X.Editor.ExecuteCommand("Cut")
         N10X.Editor.PopUndoGroup()
 
