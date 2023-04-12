@@ -18,6 +18,7 @@ class Mode:
     COMMAND     = 1
     VISUAL      = 2
     VISUAL_LINE = 3
+    PANE        = 4
 
 #------------------------------------------------------------------------
 g_Mode = Mode.INSERT
@@ -36,11 +37,21 @@ g_HandleKeyIntercepts = True
 
 # the last line search performed
 g_LastSearch = None
+g_ReverseSearch = False
 
 # regex for getting the repeat count for a command
 g_RepeatMatch = "([1-9][0-9]*)?"
 
 g_StartedRecordingMacro = False
+
+# 'r' and 'R' insert modes (respectively)
+g_SingleReplace = False
+g_MultiReplace = False
+
+# position of the cursor before a significant "jump", allowing '' to target back
+g_LastJumpPoint = None
+# positions of explicitly set jump points (map of string to position)
+g_JumpMap = {}
 
 #------------------------------------------------------------------------
 def InVisualMode():
@@ -158,7 +169,7 @@ def GetClipboardValue():
         win32clipboard.CloseClipboard()
         return data
     except:
-        print("Failed to get clipboard of non-unicode text!")
+        print("[vim] Failed to get clipboard of non-unicode text!")
         win32clipboard.CloseClipboard()
         return None
 
@@ -170,7 +181,7 @@ def RemoveNewlineFromClipboard():
         win32clipboard.SetClipboardText(data.rstrip(), win32clipboard.CF_UNICODETEXT)
         win32clipboard.CloseClipboard()
     except:
-        print("Failed to get clipboard of non-unicode text!")
+        print("[vim] Failed to get clipboard of non-unicode text!")
         win32clipboard.CloseClipboard()
 
 #------------------------------------------------------------------------
@@ -181,7 +192,7 @@ def AddNewlineToClipboard():
         win32clipboard.SetClipboardText(data + "\n", win32clipboard.CF_UNICODETEXT)
         win32clipboard.CloseClipboard()
     except:
-        print("Failed to get clipboard of non-unicode text!")
+        print("[vim] Failed to get clipboard of non-unicode text!")
         win32clipboard.CloseClipboard()
 
 #------------------------------------------------------------------------
@@ -209,8 +220,13 @@ def EnterInsertMode():
 def EnterCommandMode():
     global g_Mode
     global g_Command
+    global g_SingleReplace
+    global g_MultiReplace
+
     if g_Mode != Mode.COMMAND:
         N10X.Editor.ClearSelection()
+        g_SingleReplace = False
+        g_MultiReplace = False
         was_visual = InVisualMode()
         g_Mode = Mode.COMMAND
         g_Command = ""
@@ -228,6 +244,14 @@ def EnterVisualMode(mode):
     if g_Mode != mode:
         g_Mode = mode
         g_VisualModeStartPos = N10X.Editor.GetCursorPos()
+
+    UpdateVisualModeSelection()
+
+#------------------------------------------------------------------------
+def EnterPaneMode():
+    global g_Mode
+    if g_Mode != Mode.PANE:
+        g_Mode = Mode.PANE
 
     UpdateVisualModeSelection()
 
@@ -518,7 +542,12 @@ def MoveToEndOfLine():
 def HandleCommandModeChar(char):
     global g_Mode
     global g_Command
+    global g_ReverseSearch
     global g_StartedRecordingMacro
+    global g_LastJumpPoint
+    global g_JumpMap
+    global g_SingleReplace
+    global g_MultiReplace
 
     g_Command += char
 
@@ -580,11 +609,38 @@ def HandleCommandModeChar(char):
     elif c == "$":
         MoveToEndOfLine()
 
+    elif c == "{":
+        print("[vim] "+c+" (prev empty line) unimplemented")
+
+    elif c == "}":
+        print("[vim] "+c+" (next empty line) unimplemented")
+
+    elif c == "''":
+        if g_LastJumpPoint:
+            SetCursorPos(g_LastJumpPoint[0], g_LastJumpPoint[1])
+    
+    elif c == "'":
+        return
+
+    elif len(c) > 1 and c[0] == "'":
+        if c[1] in g_JumpMap:
+            jump = g_JumpMap[c[1]]
+            g_LastJumpPoint = N10X.Editor.GetCursorPos()
+            SetCursorPos(jump[0], jump[1])
+        
     elif c == "gg":
+        g_LastJumpPoint = N10X.Editor.GetCursorPos()
         x, _ = N10X.Editor.GetCursorPos()
         SetCursorPos(x, max(0, repeat_count - 1))
 
+    elif c == "gt":
+        N10X.Editor.ExecuteCommand("NextPanelTab")
+
+    elif c == "gT":
+        N10X.Editor.ExecuteCommand("PrevPanelTab")
+
     elif c == "G":
+        g_LastJumpPoint = N10X.Editor.GetCursorPos()
         x, _ = N10X.Editor.GetCursorPos()
         if has_repeat_count:
             SetCursorPos(x, max(0, repeat_count - 1))
@@ -602,6 +658,12 @@ def HandleCommandModeChar(char):
     elif c == "%":
         N10X.Editor.ExecuteCommand("MoveToMatchingBracket")
 
+    elif c == "m":
+        return
+
+    elif len(c) > 1 and c[0] == "m":
+        g_JumpMap[c[1]] = N10X.Editor.GetCursorPos()
+
     # Searching
 
     elif c == "*":
@@ -617,6 +679,14 @@ def HandleCommandModeChar(char):
             SendKey("Left")
 
     elif c == "/":
+        g_LastJumpPoint = N10X.Editor.GetCursorPos()
+        g_ReverseSearch = False
+        N10X.Editor.ExecuteCommand("FindInFile")
+
+    elif c == "?":
+        print("[vim] "+c+" (reverse search) unimplemented- regular searching")
+        g_ReverseSearch = True
+        g_LastJumpPoint = N10X.Editor.GetCursorPos()
         N10X.Editor.ExecuteCommand("FindInFile")
 
     elif (m := re.match("([fFtT;])(.?)", c)):
@@ -626,16 +696,30 @@ def HandleCommandModeChar(char):
             if not MoveToLineText(action, search):
                 return
 
-    elif c == 'n':
-        N10X.Editor.ExecuteCommand("FindInFileNext")
+    elif c == "n":
+        if g_ReverseSearch:
+            N10X.Editor.ExecuteCommand("FindInFilePrev")
+        else:
+            N10X.Editor.ExecuteCommand("FindInFileNext")
 
-    elif c == 'N':
-        N10X.Editor.ExecuteCommand("FindInFilePrev")
+    elif c == "N":
+        if g_ReverseSearch:
+            N10X.Editor.ExecuteCommand("FindInFileNext")
+        else:
+            N10X.Editor.ExecuteCommand("FindInFilePrev")
 
     # Inserting
 
     elif c == "i":
         EnterInsertMode()
+
+    elif c == "r":
+        EnterInsertMode()
+        g_SingleReplace = True
+
+    elif c == "R":
+        EnterInsertMode()
+        g_MultiReplace = True
 
     elif c == "I":
         MoveToStartOfLine();
@@ -727,7 +811,7 @@ def HandleCommandModeChar(char):
         N10X.Editor.PopUndoGroup()
         EnterInsertMode()
 
-    elif c == "c$":
+    elif c == "C" or c == "c$":
         N10X.Editor.PushUndoGroup()
         x, y = N10X.Editor.GetCursorPos()
         SetSelection((x, y), (GetLineLength(y), y))
@@ -930,7 +1014,7 @@ def HandleCommandModeChar(char):
         N10X.Editor.ExecuteCommand("Cut")
         N10X.Editor.PopUndoGroup()
 
-    elif c == "d$":
+    elif c == "D" or c == "d$":
         N10X.Editor.PushUndoGroup()
         x, y = N10X.Editor.GetCursorPos()
         SetSelection((x, y), (GetLineLength(), y))
@@ -944,9 +1028,18 @@ def HandleCommandModeChar(char):
     elif c == "x":
         x, y = N10X.Editor.GetCursorPos()
         N10X.Editor.PushUndoGroup()
-        SetSelection((x, y), (x + repeat_count - 1, y))
+        SetSelection((x, y), (x + repeat_count-1, y))
         N10X.Editor.ExecuteCommand("Cut")
         N10X.Editor.PopUndoGroup()
+
+    elif c == "s":
+        x, y = N10X.Editor.GetCursorPos()
+        N10X.Editor.PushUndoGroup()
+        SetSelection((x, y), (x + repeat_count-1, y))
+        N10X.Editor.ExecuteCommand("Cut")
+        N10X.Editor.PopUndoGroup()
+        EnterInsertMode()
+        # NOTE- incomplete. if you "s" and type some stuff, a single "undo" should remove the typed stuff AND the deleted character
 
     # Copying
 
@@ -1132,14 +1225,44 @@ def HandleCommandModeChar(char):
         N10X.Editor.ExecuteCommand("GotoSymbolDefinition");
 
     else:
-        print("Unknown command!")
+        print("[vim] Unknown command!")
 
     g_Command = ""
+
+#------------------------------------------------------------------------
+def HandlePaneModeChar(char):
+    if char == "h":
+        N10X.Editor.ExecuteCommand("MovePanelFocusLeft")
+
+    elif char == "l":
+        N10X.Editor.ExecuteCommand("MovePanelFocusRight")
+
+    elif char == "j":
+        N10X.Editor.ExecuteCommand("MovePanelFocusDown")
+
+    elif char == "k":
+        N10X.Editor.ExecuteCommand("MovePanelFocusUp")
+
+    elif char == "H":
+        N10X.Editor.ExecuteCommand("MovePanelLeft")
+
+    elif char == "L":
+        N10X.Editor.ExecuteCommand("MovePanelRight")
+
+    elif char == "J":
+        N10X.Editor.ExecuteCommand("MovePanelDown")
+
+    elif char == "K":
+        N10X.Editor.ExecuteCommand("MovePanelUp")
+
+    UpdateVisualModeSelection()
+    EnterCommandMode()
 
 #------------------------------------------------------------------------
 def HandleCommandModeKey(key, shift, control, alt):
     global g_HandingKey
     global g_Command
+
     if g_HandingKey:
         return
     g_HandingKey = True
@@ -1150,9 +1273,6 @@ def HandleCommandModeKey(key, shift, control, alt):
 
     if key == "Escape":
         EnterCommandMode()
-
-    elif key == "O" and control:
-        N10X.Editor.ExecuteCommand("PrevLocation")
 
     elif key == "/" and control:
         x, y = N10X.Editor.GetCursorPos()
@@ -1171,6 +1291,9 @@ def HandleCommandModeKey(key, shift, control, alt):
 
     elif key == "Tab":
         N10X.Editor.ExecuteCommand("NextPanelTab")
+
+    elif key == "W" and control:
+        EnterPaneMode()
 
     elif key == "H" and control:
         N10X.Editor.ExecuteCommand("MovePanelFocusLeft")
@@ -1266,6 +1389,20 @@ def HandleInsertModeKey(key, shift, control, alt):
     if key == "C" and control:
         EnterCommandMode()
         return True
+
+#------------------------------------------------------------------------
+def HandleInsertModeChar(char):
+    global g_SingleReplace
+    global g_MultiReplace
+
+    if g_SingleReplace or g_MultiReplace:
+        x, y = N10X.Editor.GetCursorPos()
+        SetSelection((x, y), (x, y))
+        N10X.Editor.ExecuteCommand("Cut")
+    
+    if g_SingleReplace:
+        MoveCursorPos(x_delta=1, max_offset=0)
+        EnterCommandMode()
 
 #------------------------------------------------------------------------
 def HandleVisualModeChar(char):
@@ -1402,7 +1539,9 @@ def OnInterceptKey(key, shift, control, alt):
 
     if N10X.Editor.TextEditorHasFocus():
         global g_Mode
-        if g_Mode != Mode.INSERT:
+        if g_Mode == Mode.PANE:
+            ret = True
+        elif g_Mode != Mode.INSERT:
             ret = HandleCommandModeKey(key, shift, control, alt)
         else:
             ret = HandleInsertModeKey(key, shift, control, alt)
@@ -1418,9 +1557,13 @@ def OnInterceptCharKey(c):
     if N10X.Editor.TextEditorHasFocus():
         global g_Mode
         ret = g_Mode != Mode.INSERT
-        if g_Mode == Mode.VISUAL or g_Mode == Mode.VISUAL_LINE:
+        if g_Mode == Mode.INSERT:
+            HandleInsertModeChar(c)
+        elif g_Mode == Mode.VISUAL or g_Mode == Mode.VISUAL_LINE:
             HandleVisualModeChar(c)
             N10X.Editor.SetCursorMode("Block")
+        elif g_Mode == Mode.PANE:
+            HandlePaneModeChar(c)
         elif g_Mode == Mode.COMMAND:
             HandleCommandModeChar(c)
         UpdateCursorMode()
@@ -1429,6 +1572,14 @@ def OnInterceptCharKey(c):
 
 #------------------------------------------------------------------------
 def HandleCommandPanelCommand(command):
+
+    if command == ":sp":
+        print("[vim] "+command+" (split) unimplemented")
+        return True
+    
+    if command == ":vsp":
+        print("[vim] "+command+" (vertical split) unimplemented")
+        return True
 
     if command == ":w":
         N10X.Editor.ExecuteCommand("SaveFile")
