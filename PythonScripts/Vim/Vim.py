@@ -53,6 +53,8 @@ g_LastJumpPoint = None
 # positions of explicitly set jump points (map of string to position)
 g_JumpMap = {}
 
+g_SneakEnabled = False
+
 #------------------------------------------------------------------------
 def InVisualMode():
     global g_Mode
@@ -95,6 +97,7 @@ def MoveCursorPos(x_delta=0, y_delta=0, max_offset=1):
     x, y = N10X.Editor.GetCursorPos()
     x += x_delta
     y += y_delta
+    
     SetCursorPos(x, y, max_offset)
 
 #------------------------------------------------------------------------
@@ -128,6 +131,44 @@ def FindNextOccurrenceBackward(c):
         return None
 
     return index
+    
+#------------------------------------------------------------------------
+def FindNextOccurrenceBackward2(c):
+    if len(c) == 1:
+       return None, None
+    x, y = N10X.Editor.GetCursorPos()
+    line = N10X.Editor.GetLine(y)
+
+    while y >= 0 :
+        if x >= 0:
+            line = line[:x + 2]
+            index = line.rfind(c)
+            if index >= 0:
+                    return index, y
+        y -= 1
+        line = N10X.Editor.GetLine(y)
+        x = len(line) - 1
+    return None, None
+
+
+#------------------------------------------------------------------------
+def FindNextOccurrenceForward2(c):
+    if len(c) == 1:
+       return None, None
+    x, y = N10X.Editor.GetCursorPos()
+    x += 1
+    lineCount = N10X.Editor.GetLineCount()
+
+    while y < lineCount:
+        line = N10X.Editor.GetLine(y)
+        if x < len(line) - 1:
+            line = line[x - 1:]
+            index = line.find(c)
+            if index >= 0:
+                    return x + index - 1, y
+        x = 0
+        y += 1
+    return None, None
 
 #------------------------------------------------------------------------
 def MoveToLineText(action, search):
@@ -135,31 +176,48 @@ def MoveToLineText(action, search):
     if action == ';' and g_LastSearch:
         MoveToLineText(g_LastSearch[0], g_LastSearch[1])
         return True
-        
+    
     if not search:
         return False
 
-    if action == 'f':
-        x = FindNextOccurrenceForward(search)
-        if x:
-            SetCursorPos(x=x)
-    elif action == 'F':
-        x = FindNextOccurrenceBackward(search)
-        if x:
-            SetCursorPos(x=x)
-    elif action == 't':
-        x = FindNextOccurrenceForward(search)
-        if x:
-            SetCursorPos(x=x-1)
-    elif action == 'T':
-        x = FindNextOccurrenceBackward(search)
-        if x:
-            SetCursorPos(x=x+1)
+    if len(search) == 1:
+        if action == 'f':
+            x = FindNextOccurrenceForward(search)
+            if x:
+                    SetCursorPos(x=x)
+        elif action == 'F':
+            x = FindNextOccurrenceBackward(search)
+            if x:
+                SetCursorPos(x=x)
+        elif action == 't':
+            x = FindNextOccurrenceForward(search)
+            if x:
+                SetCursorPos(x=x-1)
+        elif action == 'T':
+            x = FindNextOccurrenceBackward(search)
+            if x:
+                SetCursorPos(x=x+1)
+        else:
+           return False
+    
+        g_LastSearch = action + search
+        return True
+    elif len(search) == 2 and g_SneakEnabled:
+        if action == 's':
+            x,y = FindNextOccurrenceForward2(search)
+            if x:
+                SetCursorPos(x=x, y=y)
+        elif action == 'S':
+            x,y = FindNextOccurrenceBackward2(search)
+            if x:
+                SetCursorPos(x=x, y=y)
+            else:
+                return False
+ 
+        g_LastSearch = action + search
+        return True
     else:
-        return False
-
-    g_LastSearch = action + search
-    return True
+       return False 
             
 #------------------------------------------------------------------------
 def GetClipboardValue():
@@ -536,6 +594,27 @@ def MoveToEndOfLine():
     SetCursorPos(x=GetLineLength() - 1)
 
 #------------------------------------------------------------------------
+def MoveToPreviousEmptyLine():
+    x, y = N10X.Editor.GetCursorPos()
+    while y > 0 :
+      y = y - 1
+      text = N10X.Editor.GetLine(y)
+      if text.isspace():
+        N10X.Editor.SetCursorPos((0, y))
+        break
+
+#------------------------------------------------------------------------
+def MoveToNextEmptyLine():
+    line_count = N10X.Editor.GetLineCount()
+    x, y = N10X.Editor.GetCursorPos()
+    while y < line_count:
+      text = N10X.Editor.GetLine(y + 1)
+      if not text or text.isspace():
+        N10X.Editor.SetCursorPos((0, y + 1))
+        break
+      y = y + 1
+
+#------------------------------------------------------------------------
 # Key Intercepting
 
 #------------------------------------------------------------------------
@@ -548,6 +627,7 @@ def HandleCommandModeChar(char):
     global g_JumpMap
     global g_SingleReplace
     global g_MultiReplace
+    global g_SneakEnabled
 
     g_Command += char
 
@@ -610,10 +690,10 @@ def HandleCommandModeChar(char):
         MoveToEndOfLine()
 
     elif c == "{":
-        print("[vim] "+c+" (prev empty line) unimplemented")
+       MoveToPreviousEmptyLine()
 
     elif c == "}":
-        print("[vim] "+c+" (next empty line) unimplemented")
+        MoveToNextEmptyLine()
 
     elif c == "''":
         if g_LastJumpPoint:
@@ -663,6 +743,144 @@ def HandleCommandModeChar(char):
 
     elif len(c) > 1 and c[0] == "m":
         g_JumpMap[c[1]] = N10X.Editor.GetCursorPos()
+    
+    # Deleting
+
+    elif c == "dd":
+        N10X.Editor.PushUndoGroup()
+        for i in range(repeat_count):
+            x, y = N10X.Editor.GetCursorPos()
+            SetLineSelection(y, y)
+            N10X.Editor.ExecuteCommand("Cut")
+            SetCursorPos(x, y)
+        N10X.Editor.PopUndoGroup()
+
+    elif c == "dw":
+        N10X.Editor.PushUndoGroup()
+        start = N10X.Editor.GetCursorPos()
+        for i in range(repeat_count):
+            MoveToNextWordStart()
+        end = N10X.Editor.GetCursorPos()
+        if start != end:
+            end = (max(0, end[0] - 1), end[1])
+            SetSelection(start, end)
+            N10X.Editor.ExecuteCommand("Cut")
+        N10X.Editor.PopUndoGroup()
+
+    elif (m := re.match("d" + g_RepeatMatch + "h", c)):
+        N10X.Editor.PushUndoGroup()
+        for i in range(repeat_count):
+            x, y = N10X.Editor.GetCursorPos()
+            count = int(m.group(1)) if m.group(1) else 1
+            start_x = max(0, x - count)
+            end_x = max(0, x - 1)
+            SetSelection((start_x, y), (end_x, y))
+            N10X.Editor.ExecuteCommand("Cut")
+        N10X.Editor.PopUndoGroup()
+
+    elif (m := re.match("d" + g_RepeatMatch + "j", c)):
+        N10X.Editor.PushUndoGroup()
+        for i in range(repeat_count):
+            x, y = N10X.Editor.GetCursorPos()
+            count = int(m.group(1)) if m.group(1) else 1
+            end_y = min(y + count, GetMaxY())
+            SetLineSelection(y, end_y)
+            N10X.Editor.ExecuteCommand("Cut")
+            SetCursorPos(0, y - 1)
+        N10X.Editor.PopUndoGroup()
+
+    elif (m := re.match("d" + g_RepeatMatch + "k", c)):
+        N10X.Editor.PushUndoGroup()
+        for i in range(repeat_count):
+            x, y = N10X.Editor.GetCursorPos()
+            count = int(m.group(1)) if m.group(1) else 1
+            end_y = min(y - count, GetMaxY())
+            SetLineSelection(y, end_y)
+            N10X.Editor.ExecuteCommand("Cut")
+        N10X.Editor.PopUndoGroup()
+
+    elif (m := re.match("d" + g_RepeatMatch + "l", c)):
+        N10X.Editor.PushUndoGroup()
+        for i in range(repeat_count):
+            x, y = N10X.Editor.GetCursorPos()
+            count = int(m.group(1)) if m.group(1) else 1
+            end_x = x + count - 1
+            max_x = max(0, GetLineLength(y) - 1)
+            end_x = Clamp(0, max_x, end_x)
+            SetSelection((x, y), (end_x, y))
+            N10X.Editor.ExecuteCommand("Cut")
+        N10X.Editor.PopUndoGroup()
+
+    elif (m := re.match("d" + g_RepeatMatch + "([fFtT;])(.?)", c)):
+        N10X.Editor.PushUndoGroup()
+        count = int(m.group(1)) if m.group(1) else 1
+        action = m.group(2)
+        search = m.group(3)
+        start = N10X.Editor.GetCursorPos()
+        for i in range(repeat_count):
+            for _ in range(count):
+                if not MoveToLineText(action, search):
+                    N10X.Editor.PopUndoGroup()
+                    return
+        end = N10X.Editor.GetCursorPos()
+        SetSelection(start, end)
+        N10X.Editor.ExecuteCommand("Cut")
+        N10X.Editor.PopUndoGroup()
+
+    elif c == "dgg":
+        x, y = N10X.Editor.GetCursorPos()
+        SetLineSelection(y, 0)
+        N10X.Editor.ExecuteCommand("Cut")
+        SetCursorPos(x, 0)
+
+    elif c == "dG":
+        N10X.Editor.PushUndoGroup()
+        x, y = N10X.Editor.GetCursorPos()
+        if y:
+            sel_start = (GetLineLength(y - 1), y - 1)
+        else:
+            sel_start = GetLineLength(0)
+        sel_end = (GetLineLength(GetMaxY()), GetMaxY())
+        SetSelection(sel_start, sel_end)
+        N10X.Editor.ExecuteCommand("Cut")
+        end_x, end_y = GetNextNonWhitespaceCharPos(0, GetMaxY(), False)
+        SetCursorPos(end_x, end_y)
+        N10X.Editor.PopUndoGroup()
+
+    elif c == "d0":
+        N10X.Editor.PushUndoGroup()
+        x, y = N10X.Editor.GetCursorPos()
+        end_x = max(0, x - 1)
+        SetSelection((0, y), (end_x, y))
+        N10X.Editor.ExecuteCommand("Cut")
+        N10X.Editor.PopUndoGroup()
+
+    elif c == "D" or c == "d$":
+        N10X.Editor.PushUndoGroup()
+        x, y = N10X.Editor.GetCursorPos()
+        SetSelection((x, y), (GetLineLength(), y))
+        N10X.Editor.ExecuteCommand("Cut")
+        SetCursorPos(x - 1, y)
+        N10X.Editor.PopUndoGroup()
+
+    elif (m := re.match("d" + g_RepeatMatch, c)) or c == "dg":
+        return
+
+    elif c == "x":
+        x, y = N10X.Editor.GetCursorPos()
+        N10X.Editor.PushUndoGroup()
+        SetSelection((x, y), (x + repeat_count-1, y))
+        N10X.Editor.ExecuteCommand("Cut")
+        N10X.Editor.PopUndoGroup()
+
+    elif not g_SneakEnabled and c == "s":
+        x, y = N10X.Editor.GetCursorPos()
+        N10X.Editor.PushUndoGroup()
+        SetSelection((x, y), (x + repeat_count-1, y))
+        N10X.Editor.ExecuteCommand("Cut")
+        N10X.Editor.PopUndoGroup()
+        EnterInsertMode()
+        # NOTE- incomplete. if you "s" and type some stuff, a single "undo" should remove the typed stuff AND the deleted character
 
     # Searching
 
@@ -689,7 +907,14 @@ def HandleCommandModeChar(char):
         g_LastJumpPoint = N10X.Editor.GetCursorPos()
         N10X.Editor.ExecuteCommand("FindInFile")
 
-    elif (m := re.match("([fFtT;])(.?)", c)):
+    elif g_SneakEnabled and (m := re.match("([fFtTsS;])(.{0,2})", c)):
+        for i in range(repeat_count):
+            action = m.group(1)
+            search = m.group(2)
+            if not MoveToLineText(action, search):
+                return
+
+    elif not g_SneakEnabled and (m := re.match("([fFtT;])(.?)", c)):
         for i in range(repeat_count):
             action = m.group(1)
             search = m.group(2)
@@ -720,7 +945,7 @@ def HandleCommandModeChar(char):
     elif c == "R":
         EnterInsertMode()
         g_MultiReplace = True
-
+        
     elif c == "I":
         MoveToStartOfLine();
         MoveToNextNonWhitespaceChar(wrap=False)
@@ -902,144 +1127,6 @@ def HandleCommandModeChar(char):
             x, y = N10X.Editor.GetSelectionStart()
             N10X.Editor.ClearSelection()
             SetCursorPos(x, y)
-
-    # Deleting
-
-    elif c == "dd":
-        N10X.Editor.PushUndoGroup()
-        for i in range(repeat_count):
-            x, y = N10X.Editor.GetCursorPos()
-            SetLineSelection(y, y)
-            N10X.Editor.ExecuteCommand("Cut")
-            SetCursorPos(x, y)
-        N10X.Editor.PopUndoGroup()
-
-    elif c == "dw":
-        N10X.Editor.PushUndoGroup()
-        start = N10X.Editor.GetCursorPos()
-        for i in range(repeat_count):
-            MoveToNextWordStart()
-        end = N10X.Editor.GetCursorPos()
-        if start != end:
-            end = (max(0, end[0] - 1), end[1])
-            SetSelection(start, end)
-            N10X.Editor.ExecuteCommand("Cut")
-        N10X.Editor.PopUndoGroup()
-
-    elif (m := re.match("d" + g_RepeatMatch + "h", c)):
-        N10X.Editor.PushUndoGroup()
-        for i in range(repeat_count):
-            x, y = N10X.Editor.GetCursorPos()
-            count = int(m.group(1)) if m.group(1) else 1
-            start_x = max(0, x - count)
-            end_x = max(0, x - 1)
-            SetSelection((start_x, y), (end_x, y))
-            N10X.Editor.ExecuteCommand("Cut")
-        N10X.Editor.PopUndoGroup()
-
-    elif (m := re.match("d" + g_RepeatMatch + "j", c)):
-        N10X.Editor.PushUndoGroup()
-        for i in range(repeat_count):
-            x, y = N10X.Editor.GetCursorPos()
-            count = int(m.group(1)) if m.group(1) else 1
-            end_y = min(y + count, GetMaxY())
-            SetLineSelection(y, end_y)
-            N10X.Editor.ExecuteCommand("Cut")
-            SetCursorPos(0, y - 1)
-        N10X.Editor.PopUndoGroup()
-
-    elif (m := re.match("d" + g_RepeatMatch + "k", c)):
-        N10X.Editor.PushUndoGroup()
-        for i in range(repeat_count):
-            x, y = N10X.Editor.GetCursorPos()
-            count = int(m.group(1)) if m.group(1) else 1
-            end_y = min(y - count, GetMaxY())
-            SetLineSelection(y, end_y)
-            N10X.Editor.ExecuteCommand("Cut")
-        N10X.Editor.PopUndoGroup()
-
-    elif (m := re.match("d" + g_RepeatMatch + "l", c)):
-        N10X.Editor.PushUndoGroup()
-        for i in range(repeat_count):
-            x, y = N10X.Editor.GetCursorPos()
-            count = int(m.group(1)) if m.group(1) else 1
-            end_x = x + count - 1
-            max_x = max(0, GetLineLength(y) - 1)
-            end_x = Clamp(0, max_x, end_x)
-            SetSelection((x, y), (end_x, y))
-            N10X.Editor.ExecuteCommand("Cut")
-        N10X.Editor.PopUndoGroup()
-
-    elif (m := re.match("d" + g_RepeatMatch + "([fFtT;])(.?)", c)):
-        N10X.Editor.PushUndoGroup()
-        count = int(m.group(1)) if m.group(1) else 1
-        action = m.group(2)
-        search = m.group(3)
-        start = N10X.Editor.GetCursorPos()
-        for i in range(repeat_count):
-            for _ in range(count):
-                if not MoveToLineText(action, search):
-                    N10X.Editor.PopUndoGroup()
-                    return
-        end = N10X.Editor.GetCursorPos()
-        SetSelection(start, end)
-        N10X.Editor.ExecuteCommand("Cut")
-        N10X.Editor.PopUndoGroup()
-
-    elif c == "dgg":
-        x, y = N10X.Editor.GetCursorPos()
-        SetLineSelection(y, 0)
-        N10X.Editor.ExecuteCommand("Cut")
-        SetCursorPos(x, 0)
-
-    elif c == "dG":
-        N10X.Editor.PushUndoGroup()
-        x, y = N10X.Editor.GetCursorPos()
-        if y:
-            sel_start = (GetLineLength(y - 1), y - 1)
-        else:
-            sel_start = GetLineLength(0)
-        sel_end = (GetLineLength(GetMaxY()), GetMaxY())
-        SetSelection(sel_start, sel_end)
-        N10X.Editor.ExecuteCommand("Cut")
-        end_x, end_y = GetNextNonWhitespaceCharPos(0, GetMaxY(), False)
-        SetCursorPos(end_x, end_y)
-        N10X.Editor.PopUndoGroup()
-
-    elif c == "d0":
-        N10X.Editor.PushUndoGroup()
-        x, y = N10X.Editor.GetCursorPos()
-        end_x = max(0, x - 1)
-        SetSelection((0, y), (end_x, y))
-        N10X.Editor.ExecuteCommand("Cut")
-        N10X.Editor.PopUndoGroup()
-
-    elif c == "D" or c == "d$":
-        N10X.Editor.PushUndoGroup()
-        x, y = N10X.Editor.GetCursorPos()
-        SetSelection((x, y), (GetLineLength(), y))
-        N10X.Editor.ExecuteCommand("Cut")
-        SetCursorPos(x - 1, y)
-        N10X.Editor.PopUndoGroup()
-
-    elif (m := re.match("d" + g_RepeatMatch, c)) or c == "dg":
-        return
-
-    elif c == "x":
-        x, y = N10X.Editor.GetCursorPos()
-        N10X.Editor.PushUndoGroup()
-        SetSelection((x, y), (x + repeat_count-1, y))
-        N10X.Editor.ExecuteCommand("Cut")
-        N10X.Editor.PopUndoGroup()
-
-    elif c == "s":
-        x, y = N10X.Editor.GetCursorPos()
-        N10X.Editor.PushUndoGroup()
-        SetSelection((x, y), (x + repeat_count-1, y))
-        N10X.Editor.ExecuteCommand("Cut")
-        N10X.Editor.PopUndoGroup()
-        EnterInsertMode()
-        # NOTE- incomplete. if you "s" and type some stuff, a single "undo" should remove the typed stuff AND the deleted character
 
     # Copying
 
@@ -1291,7 +1378,7 @@ def HandleCommandModeKey(key, shift, control, alt):
 
     elif key == "Tab":
         N10X.Editor.ExecuteCommand("NextPanelTab")
-
+   
     elif key == "W" and control:
         EnterPaneMode()
 
@@ -1611,6 +1698,8 @@ def HandleCommandPanelCommand(command):
 #------------------------------------------------------------------------
 def EnableVim():
     global g_VimEnabled
+    global g_SneakEnabled
+
     enable_vim = N10X.Editor.GetSetting("Vim") == "true"
 
     if g_VimEnabled != enable_vim:
@@ -1629,11 +1718,13 @@ def EnableVim():
             N10X.Editor.RemoveOnInterceptCharKeyFunction(OnInterceptCharKey)
             N10X.Editor.RemoveOnInterceptKeyFunction(OnInterceptKey)
 
+    g_SneakEnabled = N10X.Editor.GetSetting("VimSneakEnabled") == "true"
+
 #------------------------------------------------------------------------
 # enable/disable Vim when it's changed in the settings file
 def OnSettingsChanged():
     EnableVim()
-
+    
 #------------------------------------------------------------------------
 def InitialiseVim():
     EnableVim()
