@@ -536,6 +536,27 @@ def MoveToEndOfLine():
     SetCursorPos(x=GetLineLength() - 1)
 
 #------------------------------------------------------------------------
+def MoveToPreviousEmptyLine():
+    x, y = N10X.Editor.GetCursorPos()
+    while y > 0 :
+      y = y - 1
+      text = N10X.Editor.GetLine(y)
+      if text.isspace():
+        N10X.Editor.SetCursorPos((0, y))
+        break
+
+#------------------------------------------------------------------------
+def MoveToNextEmptyLine():
+    line_count = N10X.Editor.GetLineCount()
+    x, y = N10X.Editor.GetCursorPos()
+    while y < line_count:
+      text = N10X.Editor.GetLine(y + 1)
+      if not text or text.isspace():
+        N10X.Editor.SetCursorPos((0, y + 1))
+        break
+      y = y + 1
+
+#------------------------------------------------------------------------
 # Key Intercepting
 
 #------------------------------------------------------------------------
@@ -610,10 +631,10 @@ def HandleCommandModeChar(char):
         MoveToEndOfLine()
 
     elif c == "{":
-        print("[vim] "+c+" (prev empty line) unimplemented")
+        MoveToPreviousEmptyLine()
 
     elif c == "}":
-        print("[vim] "+c+" (next empty line) unimplemented")
+        MoveToNextEmptyLine()
 
     elif c == "''":
         if g_LastJumpPoint:
