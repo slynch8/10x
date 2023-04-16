@@ -231,7 +231,7 @@ def GetClipboardValue():
             data = str(win32clipboard.GetClipboardData(win32clipboard.CF_UNICODETEXT))
             win32clipboard.CloseClipboard()
             return data
-        except TypeError as te:
+        except TypeError as te: #clipboard is non-unicode.
             win32clipboard.CloseClipboard()
             break
         except Exception as ex:
@@ -244,6 +244,28 @@ def GetClipboardValue():
 
     print("[vim] Failed to get clipboard of non-unicode text!")
     return None
+
+#------------------------------------------------------------------------
+def AddNewlineToClipboard():
+    for i in range(50):
+        try:
+            win32clipboard.OpenClipboard()
+            data = str(win32clipboard.GetClipboardData(win32clipboard.CF_UNICODETEXT))
+            win32clipboard.SetClipboardText(data + "\n", win32clipboard.CF_UNICODETEXT)
+            win32clipboard.CloseClipboard()
+            return
+        except TypeError as te: #clipboard is non-unicode.
+            win32clipboard.CloseClipboard()
+            break
+        except Exception as ex:
+            if err.winerror == 5:  # access denied
+                time.sleep( 0.01 )
+            elif err.winerror == 1418:  # doesn't have board open
+                pass
+            else:
+                pass
+
+    print("[vim] Failed add newline to clipboard text!")
 
 #------------------------------------------------------------------------
 def SendKey(key):
@@ -857,6 +879,7 @@ def GetAroundWordSelection(start, wrap=True):
 #------------------------------------------------------------------------
 def GetInsideWordSelection(start):
     x, y = start
+    x = min(GetLineLength(y) - 1, x)
 
     start_x = x
     end_x = x
@@ -1356,10 +1379,11 @@ def HandleCommandModeChar(char):
 
     elif c == "cw":
         x, y = N10X.Editor.GetCursorPos()
+        x = min(GetLineLength(y) - 1, x)
         end_x = x
         line = GetLine(y)
         character_class = GetCharacterClass(line[end_x])
-        while end_x < len(line) and GetCharacterClass(line[end_x + 1]) == character_class:
+        while end_x < len(line) - 1 and GetCharacterClass(line[end_x + 1]) == character_class:
             end_x += 1
         SetSelection((x, y), (end_x, y))
         N10X.Editor.ExecuteCommand("Cut")
@@ -2219,3 +2243,4 @@ N10X.Editor.AddOnSettingsChangedFunction(OnSettingsChanged)
 N10X.Editor.AddCommandPanelHandlerFunction(HandleCommandPanelCommand)
 
 N10X.Editor.CallOnMainThread(InitialiseVim)
+
