@@ -901,7 +901,7 @@ def GetQuoteSelection(c, start, whitespace=True):
     x, y = start
 
     line = GetLine(y)
-    if matches := re.finditer('"(?:\\\\.|[^"\\\\])*"', line):
+    if matches := re.finditer(c + '(?:\\\\.|[^' + c + '\\\\])*' + c, line):
         for m in matches:
             if m.end() >= x:
                 return (m.start(), y), (m.end() - 1, y)
@@ -912,6 +912,9 @@ def GetQuoteSelection(c, start, whitespace=True):
 def GetInsideQuoteSelection(c, start, whitespace=False):
     if sel := GetQuoteSelection(c, start, whitespace):
         start, end = sel
+        if end[0] - start[0] < 2 and start[1] == end[1]:
+            return start[0] + 1, start[1]
+
         return (start[0] + 1, start[1]), (end[0] - 1, end[1]),
     return None
 
@@ -925,16 +928,19 @@ def SelectQuote(c, whitespace=True):
     return False
     
 #------------------------------------------------------------------------
-def SelectOrMoveInsideQuote(c, whitespace=False):
+def SelectOrMoveInsideQuote(c, insert_after_move=False, whitespace=False):
     start = N10X.Editor.GetCursorPos()
-    if sel := GetInsideQuoteSelection(c, start, whitespace):
-        start, end = sel
-        if start == end:
-            SetCursorPos(start[0], start[1])
+    match GetInsideQuoteSelection(c, start, whitespace):
+        case None:
             return False
-        SetSelection(start, end)
-        return start
-    return False
+        case ((a, b), (c, d)):
+            SetSelection((a, b), (c, d))
+            return (a, b), (c, d)
+        case (pos):
+            SetCursorPos(pos[0], pos[1])
+            if insert_after_move:
+                EnterInsertMode()
+            return False
 
 #------------------------------------------------------------------------
 # Key Intercepting
@@ -1418,13 +1424,13 @@ def HandleCommandModeChar(char):
         action = m.group(2)
         if pos := SelectAroundBlock(action, count):
             N10X.Editor.PushUndoGroup()
-            N10X.Editor.ExecuteCommand("Cut")
+            N10X.Editor.ExecuteCommand("")
             EnterInsertMode()
             N10X.Editor.PopUndoGroup()
     
     elif (m := re.match("ci([`'\"])", c)):
         action = m.group(1)
-        if SelectOrMoveInsideQuote(action):
+        if SelectOrMoveInsideQuote(action, True):
             N10X.Editor.PushUndoGroup()
             N10X.Editor.ExecuteCommand("Cut")
             N10X.Editor.PopUndoGroup()
