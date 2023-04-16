@@ -2243,4 +2243,3 @@ N10X.Editor.AddOnSettingsChangedFunction(OnSettingsChanged)
 N10X.Editor.AddCommandPanelHandlerFunction(HandleCommandPanelCommand)
 
 N10X.Editor.CallOnMainThread(InitialiseVim)
-
