@@ -1424,7 +1424,7 @@ def HandleCommandModeChar(char):
         action = m.group(2)
         if pos := SelectAroundBlock(action, count):
             N10X.Editor.PushUndoGroup()
-            N10X.Editor.ExecuteCommand("")
+            N10X.Editor.ExecuteCommand("Cut")
             EnterInsertMode()
             N10X.Editor.PopUndoGroup()
     
