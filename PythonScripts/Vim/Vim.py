@@ -639,18 +639,20 @@ def MoveToPreviousEmptyLine():
       text = N10X.Editor.GetLine(y)
       if text.isspace():
         N10X.Editor.SetCursorPos((0, y))
-        break
+        return
+    N10X.Editor.SetCursorPos((0, 0))
 
 #------------------------------------------------------------------------
 def MoveToNextEmptyLine():
     line_count = N10X.Editor.GetLineCount()
     x, y = N10X.Editor.GetCursorPos()
-    while y < line_count:
+    while y < line_count - 1:
       text = N10X.Editor.GetLine(y + 1)
       if not text or text.isspace():
         N10X.Editor.SetCursorPos((0, y + 1))
-        break
+        return
       y = y + 1
+    N10X.Editor.SetCursorPos((GetLineLength(y) - 1, line_count))
       
 #------------------------------------------------------------------------
 def NormalizeBlockChar(c):
