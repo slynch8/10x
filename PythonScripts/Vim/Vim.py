@@ -358,7 +358,7 @@ def AddVisualModeSelection(start, end):
     elif curr_start[1] > start[1]:
         min_start = start
     else:
-        min_start = (min(curr_start[0], start[0]), start[1])
+        min_start = (min(curr_start[0] + 1, start[0]), start[1])
 
     if curr_end[1] > end[1]:
         max_end = curr_end
@@ -769,12 +769,28 @@ def FindNextBlock(c, start, count=1):
         return start, end
 
     return None
+
+#------------------------------------------------------------------------
+def FindSameLineBlockStartPos(c, start):
+    open_char = NormalizeBlockChar(c)
+    closed_char = GetBlockClosedChar(c)
+    
+    x, y = start
+    line = GetLine(y)
+
+    while x < len(line):
+        if line[x] == closed_char:
+            return None
+        elif line[x] == open_char:
+            return x
+        x += 1
+    return None
     
 #------------------------------------------------------------------------
 def GetBlockSelection(c, start, count=1):
     c = NormalizeBlockChar(c)
-    x = FindNextOccurrenceForward(c)
-    if x:
+    x = FindSameLineBlockStartPos(c, start)
+    if x is not None:
         start = x, start[1]
     if enc_start := FindEnclosingBlockStartPos(c, start, count):
         if enc_end := FindEnclosingBlockEndPos(c, (enc_start[0] + 1, enc_start[1]), 1):
@@ -1424,7 +1440,7 @@ def HandleCommandModeChar(char):
         action = m.group(2)
         if pos := SelectAroundBlock(action, count):
             N10X.Editor.PushUndoGroup()
-            N10X.Editor.ExecuteCommand("Cut")
+            N10X.Editor.ExecuteCommand("")
             EnterInsertMode()
             N10X.Editor.PopUndoGroup()
     
@@ -2085,28 +2101,28 @@ def HandleVisualModeChar(char):
         action = m.group(1)
         if sel := GetInsideBlockSelectionOrPos(m.group(1), N10X.Editor.GetCursorPos()):
             start, end = sel
-            AddVisualModeSelection(start, end)
+            SetVisualModeSelection(start, end)
     
     elif (m := re.match("a" + g_BlockMatch, c)):
         g_Mode = Mode.VISUAL
         action = m.group(1)
         if sel := GetAroundBlockSelection(m.group(1), N10X.Editor.GetCursorPos()):
             start, end = sel
-            AddVisualModeSelection(start, end)
+            SetVisualModeSelection(start, end)
     
     elif (m := re.match("i([`'\"])", c)):
         g_Mode = Mode.VISUAL
         action = m.group(1)
         if sel := GetInsideQuoteSelection(m.group(1), N10X.Editor.GetCursorPos()):
             start, end = sel
-            AddVisualModeSelection(start, end)
+            SetVisualModeSelection(start, end)
     
     elif (m := re.match("a([`'\"])", c)):
         g_Mode = Mode.VISUAL
         action = m.group(1)
         if sel := GetAroundQuoteSelection(m.group(1), N10X.Editor.GetCursorPos()):
             start, end = sel
-            AddVisualModeSelection(start, end)
+            SetVisualModeSelection(start, end)
 
     else:
         print("[vim] Unknown command!")
