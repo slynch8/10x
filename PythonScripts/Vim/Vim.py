@@ -2233,6 +2233,10 @@ def HandleCommandPanelCommand(command):
         N10X.Editor.ExecuteCommand("SaveFile")
         return True
 
+    if command == ":wa":
+        N10X.Editor.ExecuteCommand("SaveAll")
+        return True
+
     if command == ":wq":
         N10X.Editor.ExecuteCommand("SaveFile")
         N10X.Editor.ExecuteCommand("CloseFile")
