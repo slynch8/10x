@@ -2014,6 +2014,22 @@ def HandleVisualModeChar(char):
         SetCursorPos(start[0], start[1])
         EnterCommandMode()
 
+    elif c == "p":
+        N10X.Editor.PushUndoGroup()
+        for i in range(repeat_count):
+            clipboard_value = GetClipboardValue()
+            if clipboard_value and clipboard_value[-1:] == "\n":
+                SendKey("Enter")
+                start = N10X.Editor.GetCursorPos()
+                N10X.Editor.InsertText(clipboard_value)
+                x, y = GetNextNonWhitespaceCharPos(start[0], start[1], False)
+                SetCursorPos(x, y)
+            else:
+                N10X.Editor.ExecuteCommand("Paste")
+                MoveCursorPos(x_delta=-1, max_offset=0)
+        N10X.Editor.PopUndoGroup()
+        EnterCommandMode()
+
     elif c == "c":
         start, _ = SubmitVisualModeSelection()
         N10X.Editor.ExecuteCommand("Cut")
