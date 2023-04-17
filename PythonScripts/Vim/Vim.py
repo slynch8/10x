@@ -19,7 +19,6 @@ class Mode:
     COMMAND     = 1
     VISUAL      = 2
     VISUAL_LINE = 3
-    PANE        = 4
 
 #------------------------------------------------------------------------
 g_Mode = Mode.INSERT
@@ -48,9 +47,13 @@ g_BlockMatch = "([{}[\]<>\(\)])"
 
 g_StartedRecordingMacro = False
 
+# 'Ctrl+w` motions
+g_PaneSwap = False
+
 # 'r' and 'R' insert modes (respectively)
 g_SingleReplace = False
 g_MultiReplace = False
+g_ReplaceUndoPushed = False
 
 # position of the cursor before a significant "jump", allowing '' to target back
 g_LastJumpPoint = None
@@ -288,11 +291,18 @@ def EnterCommandMode():
     global g_Command
     global g_SingleReplace
     global g_MultiReplace
+    global g_ReplaceUndoPushed
+    global g_PaneSwap
+
+    g_PaneSwap = False
 
     if g_Mode != Mode.COMMAND:
         N10X.Editor.ClearSelection()
         g_SingleReplace = False
         g_MultiReplace = False
+        if g_ReplaceUndoPushed:
+            g_ReplaceUndoPushed = False
+            N10X.Editor.PopUndoGroup()
         was_visual = InVisualMode()
         g_Mode = Mode.COMMAND
         g_Command = ""
@@ -310,14 +320,6 @@ def EnterVisualMode(mode):
     if g_Mode != mode:
         g_Mode = mode
         g_VisualModeStartPos = N10X.Editor.GetCursorPos()
-
-    UpdateVisualModeSelection()
-
-#------------------------------------------------------------------------
-def EnterPaneMode():
-    global g_Mode
-    if g_Mode != Mode.PANE:
-        g_Mode = Mode.PANE
 
     UpdateVisualModeSelection()
 
@@ -590,7 +592,7 @@ def MoveToTokenEnd():
 def MoveToNextWordStart(wrap=True):
     x, y = N10X.Editor.GetCursorPos()
 
-    line_y = y;
+    line_y = y
 
     character_class = GetCharacterClassAtPos(x, y)
     while not AtEndOfFile(x, y) and y == line_y and GetCharacterClassAtPos(x, y) == character_class:
@@ -606,7 +608,7 @@ def MoveToNextWordStart(wrap=True):
 def MoveToNextTokenStart(wrap=True):
     x, y = N10X.Editor.GetCursorPos()
 
-    line_y = y;
+    line_y = y
 
     while y == line_y and not IsWhitespace(x, y):
         x, y = GetNextCharPos(x, y, wrap)
@@ -976,6 +978,7 @@ def HandleCommandModeChar(char):
     global g_SingleReplace
     global g_MultiReplace
     global g_SneakEnabled
+    global g_PaneSwap
 
     g_Command += char
 
@@ -989,9 +992,38 @@ def HandleCommandModeChar(char):
     if not c:
         return
 
+    # pane
+
+    if g_PaneSwap:
+      if char == "h":
+          N10X.Editor.ExecuteCommand("MovePanelFocusLeft")
+
+      elif char == "l":
+          N10X.Editor.ExecuteCommand("MovePanelFocusRight")
+
+      elif char == "j":
+          N10X.Editor.ExecuteCommand("MovePanelFocusDown")
+
+      elif char == "k":
+          N10X.Editor.ExecuteCommand("MovePanelFocusUp")
+
+      elif char == "H":
+          N10X.Editor.ExecuteCommand("MovePanelLeft")
+
+      elif char == "L":
+          N10X.Editor.ExecuteCommand("MovePanelRight")
+
+      elif char == "J":
+          N10X.Editor.ExecuteCommand("MovePanelDown")
+
+      elif char == "K":
+          N10X.Editor.ExecuteCommand("MovePanelUp")
+
+      g_PaneSwap = False
+
     # moving
 
-    if c == "h":
+    elif c == "h":
         for i in range(repeat_count):
             MoveCursorPos(x_delta=-1)
 
@@ -1073,7 +1105,7 @@ def HandleCommandModeChar(char):
         if has_repeat_count:
             SetCursorPos(x, max(0, repeat_count - 1))
         else:
-            MoveToEndOfFile();
+            MoveToEndOfFile()
 
     elif c == "g":
         return
@@ -1345,16 +1377,16 @@ def HandleCommandModeChar(char):
         g_MultiReplace = True
         
     elif c == "I":
-        MoveToStartOfLine();
+        MoveToStartOfLine()
         MoveToNextNonWhitespaceChar(wrap=False)
-        EnterInsertMode();
+        EnterInsertMode()
 
     elif c == "a":
-        EnterInsertMode();
+        EnterInsertMode()
         MoveCursorPos(x_delta=1, max_offset=0)
 
     elif c == "A":
-        EnterInsertMode();
+        EnterInsertMode()
         SetCursorPos(x=GetLineLength(), max_offset=0)
 
     elif c == "o":
@@ -1365,7 +1397,7 @@ def HandleCommandModeChar(char):
         EnterInsertMode()
 
     elif c == "O":
-        N10X.Editor.ExecuteCommand("InsertLine");
+        N10X.Editor.ExecuteCommand("InsertLine")
         EnterInsertMode()
 
     # Editing
@@ -1795,7 +1827,7 @@ def HandleCommandModeChar(char):
         N10X.Editor.ExecuteCommand("ShowSymbolInfo")
 
     elif c == "gd":
-        N10X.Editor.ExecuteCommand("GotoSymbolDefinition");
+        N10X.Editor.ExecuteCommand("GotoSymbolDefinition")
 
     else:
         print("[vim] Unknown command!")
@@ -1803,38 +1835,10 @@ def HandleCommandModeChar(char):
     g_Command = ""
 
 #------------------------------------------------------------------------
-def HandlePaneModeChar(char):
-    if char == "h":
-        N10X.Editor.ExecuteCommand("MovePanelFocusLeft")
-
-    elif char == "l":
-        N10X.Editor.ExecuteCommand("MovePanelFocusRight")
-
-    elif char == "j":
-        N10X.Editor.ExecuteCommand("MovePanelFocusDown")
-
-    elif char == "k":
-        N10X.Editor.ExecuteCommand("MovePanelFocusUp")
-
-    elif char == "H":
-        N10X.Editor.ExecuteCommand("MovePanelLeft")
-
-    elif char == "L":
-        N10X.Editor.ExecuteCommand("MovePanelRight")
-
-    elif char == "J":
-        N10X.Editor.ExecuteCommand("MovePanelDown")
-
-    elif char == "K":
-        N10X.Editor.ExecuteCommand("MovePanelUp")
-
-    UpdateVisualModeSelection()
-    EnterCommandMode()
-
-#------------------------------------------------------------------------
 def HandleCommandModeKey(key, shift, control, alt):
     global g_HandingKey
     global g_Command
+    global g_PaneSwap
 
     if g_HandingKey:
         return
@@ -1846,6 +1850,9 @@ def HandleCommandModeKey(key, shift, control, alt):
 
     if key == "Escape":
         EnterCommandMode()
+
+    if g_PaneSwap:
+        pass
 
     elif key == "/" and control:
         x, y = N10X.Editor.GetCursorPos()
@@ -1866,7 +1873,7 @@ def HandleCommandModeKey(key, shift, control, alt):
         N10X.Editor.ExecuteCommand("NextPanelTab")
    
     elif key == "W" and control:
-        EnterPaneMode()
+        g_PaneSwap = True
 
     elif key == "H" and control:
         N10X.Editor.ExecuteCommand("MovePanelFocusLeft")
@@ -1961,21 +1968,29 @@ def HandleInsertModeKey(key, shift, control, alt):
 
     if key == "C" and control:
         EnterCommandMode()
+        MoveCursorPos(x_delta=1, max_offset=0)
         return True
 
 #------------------------------------------------------------------------
 def HandleInsertModeChar(char):
     global g_SingleReplace
     global g_MultiReplace
+    global g_ReplaceUndoPushed
 
     if g_SingleReplace or g_MultiReplace:
+        if not g_ReplaceUndoPushed:
+            g_ReplaceUndoPushed = True
+            N10X.Editor.PushUndoGroup()
         x, y = N10X.Editor.GetCursorPos()
         SetSelection((x, y), (x, y))
         N10X.Editor.ExecuteCommand("Cut")
     
     if g_SingleReplace:
-        MoveCursorPos(x_delta=1, max_offset=0)
-        EnterCommandMode()
+        N10X.Editor.InsertText(char)
+        EnterCommandMode() #will pop undo
+        return True
+
+    return False
 
 #------------------------------------------------------------------------
 def HandleVisualModeChar(char):
@@ -2047,7 +2062,7 @@ def HandleVisualModeChar(char):
         MoveToEndOfLine()
 
     elif c == "G":
-        MoveToEndOfFile();
+        MoveToEndOfFile()
 
     elif c == "{":
        MoveToPreviousEmptyLine()
@@ -2059,7 +2074,7 @@ def HandleVisualModeChar(char):
         return
 
     elif c == "gg":
-        MoveToStartOfFile();
+        MoveToStartOfFile()
 
     elif c == "h":
         for _ in range(repeat_count):
@@ -2158,7 +2173,7 @@ def HandleVisualModeChar(char):
 
 #------------------------------------------------------------------------
 def UpdateCursorMode():
-    if g_Command or g_SingleReplace:
+    if g_Command or g_SingleReplace or g_MultiReplace:
         N10X.Editor.SetCursorMode("HalfBlock")
         N10X.Editor.SetStatusBarText(g_Command)
     elif g_Mode == Mode.INSERT:
@@ -2187,9 +2202,7 @@ def OnInterceptKey(key, shift, control, alt):
 
     if N10X.Editor.TextEditorHasFocus():
         global g_Mode
-        if g_Mode == Mode.PANE:
-            ret = True
-        elif g_Mode != Mode.INSERT:
+        if g_Mode != Mode.INSERT:
             ret = HandleCommandModeKey(key, shift, control, alt)
         else:
             ret = HandleInsertModeKey(key, shift, control, alt)
@@ -2206,12 +2219,10 @@ def OnInterceptCharKey(c):
         global g_Mode
         ret = g_Mode != Mode.INSERT
         if g_Mode == Mode.INSERT:
-            HandleInsertModeChar(c)
+            ret |= HandleInsertModeChar(c)
         elif g_Mode == Mode.VISUAL or g_Mode == Mode.VISUAL_LINE:
             HandleVisualModeChar(c)
             N10X.Editor.SetCursorMode("Block")
-        elif g_Mode == Mode.PANE:
-            HandlePaneModeChar(c)
         elif g_Mode == Mode.COMMAND:
             HandleCommandModeChar(c)
         UpdateCursorMode()
