@@ -514,7 +514,7 @@ def GetNextCharPos(x, y, wrap=True):
 
 #------------------------------------------------------------------------
 def AtEndOfFile(x, y):
-    return y >= GetMaxY() and x >= GetLineLength(GetMaxY())
+    return y > GetMaxY() or (y == GetMaxY() and x >= GetLineLength(GetMaxY()))
 
 #------------------------------------------------------------------------
 def GetNextNonWhitespaceCharPos(x, y, wrap=True):
@@ -717,7 +717,6 @@ def FindEnclosingBlockEndPos(c, start, count=1):
 
     while not AtEndOfFile(x, y):
         line = GetLine(y)
-
         if open_char not in line and closed_char not in line:
             x, y = 0, y + 1
             continue
@@ -779,6 +778,9 @@ def FindSameLineBlockStartPos(c, start):
     
     x, y = start
     line = GetLine(y)
+
+    if open_char not in line:
+        return None
 
     while x < len(line):
         if line[x] == closed_char:
@@ -2003,7 +2005,7 @@ def HandleVisualModeChar(char):
         else:
             g_Mode = Mode.VISUAL_LINE
 
-    elif c == "y":
+    elif c == "y" or c == "Y":
         start, _ = SubmitVisualModeSelection()
         N10X.Editor.ExecuteCommand("Copy")
         N10X.Editor.ClearSelection()
