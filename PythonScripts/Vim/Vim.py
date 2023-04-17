@@ -1573,7 +1573,7 @@ def HandleCommandModeChar(char):
 
     # Copying
 
-    elif c == "yy":
+    elif c == "yy" or c == "Y":
         x, y = N10X.Editor.GetCursorPos()
         end_y = min(y + repeat_count - 1, GetMaxY())
         SetLineSelection(y, end_y)
