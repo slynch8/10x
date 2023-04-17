@@ -2029,6 +2029,12 @@ def HandleVisualModeChar(char):
     elif c == "G":
         MoveToEndOfFile();
 
+    elif c == "{":
+       MoveToPreviousEmptyLine()
+
+    elif c == "}":
+        MoveToNextEmptyLine()
+
     elif c == "g":
         return
 
