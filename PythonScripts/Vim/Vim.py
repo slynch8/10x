@@ -358,7 +358,7 @@ def AddVisualModeSelection(start, end):
     elif curr_start[1] > start[1]:
         min_start = start
     else:
-        min_start = (min(curr_start[0], start[0]), start[1])
+        min_start = (min(curr_start[0] + 1, start[0]), start[1])
 
     if curr_end[1] > end[1]:
         max_end = curr_end
@@ -514,7 +514,7 @@ def GetNextCharPos(x, y, wrap=True):
 
 #------------------------------------------------------------------------
 def AtEndOfFile(x, y):
-    return y >= GetMaxY() and x >= GetLineLength(GetMaxY())
+    return y > GetMaxY() or (y == GetMaxY() and x >= GetLineLength(GetMaxY()))
 
 #------------------------------------------------------------------------
 def GetNextNonWhitespaceCharPos(x, y, wrap=True):
@@ -639,18 +639,20 @@ def MoveToPreviousEmptyLine():
       text = N10X.Editor.GetLine(y)
       if text.isspace():
         N10X.Editor.SetCursorPos((0, y))
-        break
+        return
+    N10X.Editor.SetCursorPos((0, 0))
 
 #------------------------------------------------------------------------
 def MoveToNextEmptyLine():
     line_count = N10X.Editor.GetLineCount()
     x, y = N10X.Editor.GetCursorPos()
-    while y < line_count:
+    while y < line_count - 1:
       text = N10X.Editor.GetLine(y + 1)
       if not text or text.isspace():
         N10X.Editor.SetCursorPos((0, y + 1))
-        break
+        return
       y = y + 1
+    N10X.Editor.SetCursorPos((GetLineLength(y) - 1, line_count))
       
 #------------------------------------------------------------------------
 def NormalizeBlockChar(c):
@@ -715,7 +717,6 @@ def FindEnclosingBlockEndPos(c, start, count=1):
 
     while not AtEndOfFile(x, y):
         line = GetLine(y)
-
         if open_char not in line and closed_char not in line:
             x, y = 0, y + 1
             continue
@@ -769,12 +770,31 @@ def FindNextBlock(c, start, count=1):
         return start, end
 
     return None
+
+#------------------------------------------------------------------------
+def FindSameLineBlockStartPos(c, start):
+    open_char = NormalizeBlockChar(c)
+    closed_char = GetBlockClosedChar(c)
+    
+    x, y = start
+    line = GetLine(y)
+
+    if open_char not in line:
+        return None
+
+    while x < len(line):
+        if line[x] == closed_char:
+            return None
+        elif line[x] == open_char:
+            return x
+        x += 1
+    return None
     
 #------------------------------------------------------------------------
 def GetBlockSelection(c, start, count=1):
     c = NormalizeBlockChar(c)
-    x = FindNextOccurrenceForward(c)
-    if x:
+    x = FindSameLineBlockStartPos(c, start)
+    if x is not None:
         start = x, start[1]
     if enc_start := FindEnclosingBlockStartPos(c, start, count):
         if enc_end := FindEnclosingBlockEndPos(c, (enc_start[0] + 1, enc_start[1]), 1):
@@ -901,7 +921,7 @@ def GetQuoteSelection(c, start, whitespace=True):
     x, y = start
 
     line = GetLine(y)
-    if matches := re.finditer('"(?:\\\\.|[^"\\\\])*"', line):
+    if matches := re.finditer(c + '(?:\\\\.|[^' + c + '\\\\])*' + c, line):
         for m in matches:
             if m.end() >= x:
                 return (m.start(), y), (m.end() - 1, y)
@@ -912,6 +932,9 @@ def GetQuoteSelection(c, start, whitespace=True):
 def GetInsideQuoteSelection(c, start, whitespace=False):
     if sel := GetQuoteSelection(c, start, whitespace):
         start, end = sel
+        if end[0] - start[0] < 2 and start[1] == end[1]:
+            return start[0] + 1, start[1]
+
         return (start[0] + 1, start[1]), (end[0] - 1, end[1]),
     return None
 
@@ -925,16 +948,19 @@ def SelectQuote(c, whitespace=True):
     return False
     
 #------------------------------------------------------------------------
-def SelectOrMoveInsideQuote(c, whitespace=False):
+def SelectOrMoveInsideQuote(c, insert_after_move=False, whitespace=False):
     start = N10X.Editor.GetCursorPos()
-    if sel := GetInsideQuoteSelection(c, start, whitespace):
-        start, end = sel
-        if start == end:
-            SetCursorPos(start[0], start[1])
+    match GetInsideQuoteSelection(c, start, whitespace):
+        case None:
             return False
-        SetSelection(start, end)
-        return start
-    return False
+        case ((a, b), (c, d)):
+            SetSelection((a, b), (c, d))
+            return (a, b), (c, d)
+        case (pos):
+            SetCursorPos(pos[0], pos[1])
+            if insert_after_move:
+                EnterInsertMode()
+            return False
 
 #------------------------------------------------------------------------
 # Key Intercepting
@@ -1418,13 +1444,13 @@ def HandleCommandModeChar(char):
         action = m.group(2)
         if pos := SelectAroundBlock(action, count):
             N10X.Editor.PushUndoGroup()
-            N10X.Editor.ExecuteCommand("Cut")
+            N10X.Editor.ExecuteCommand("")
             EnterInsertMode()
             N10X.Editor.PopUndoGroup()
     
     elif (m := re.match("ci([`'\"])", c)):
         action = m.group(1)
-        if SelectOrMoveInsideQuote(action):
+        if SelectOrMoveInsideQuote(action, True):
             N10X.Editor.PushUndoGroup()
             N10X.Editor.ExecuteCommand("Cut")
             N10X.Editor.PopUndoGroup()
@@ -1551,7 +1577,7 @@ def HandleCommandModeChar(char):
 
     # Copying
 
-    elif c == "yy":
+    elif c == "yy" or c == "Y":
         x, y = N10X.Editor.GetCursorPos()
         end_y = min(y + repeat_count - 1, GetMaxY())
         SetLineSelection(y, end_y)
@@ -1979,7 +2005,7 @@ def HandleVisualModeChar(char):
         else:
             g_Mode = Mode.VISUAL_LINE
 
-    elif c == "y":
+    elif c == "y" or c == "Y":
         start, _ = SubmitVisualModeSelection()
         N10X.Editor.ExecuteCommand("Copy")
         N10X.Editor.ClearSelection()
@@ -1990,6 +2016,22 @@ def HandleVisualModeChar(char):
         start, _ = SubmitVisualModeSelection()
         N10X.Editor.ExecuteCommand("Cut")
         SetCursorPos(start[0], start[1])
+        EnterCommandMode()
+
+    elif c == "p":
+        N10X.Editor.PushUndoGroup()
+        for i in range(repeat_count):
+            clipboard_value = GetClipboardValue()
+            if clipboard_value and clipboard_value[-1:] == "\n":
+                SendKey("Enter")
+                start = N10X.Editor.GetCursorPos()
+                N10X.Editor.InsertText(clipboard_value)
+                x, y = GetNextNonWhitespaceCharPos(start[0], start[1], False)
+                SetCursorPos(x, y)
+            else:
+                N10X.Editor.ExecuteCommand("Paste")
+                MoveCursorPos(x_delta=-1, max_offset=0)
+        N10X.Editor.PopUndoGroup()
         EnterCommandMode()
 
     elif c == "c":
@@ -2006,6 +2048,12 @@ def HandleVisualModeChar(char):
 
     elif c == "G":
         MoveToEndOfFile();
+
+    elif c == "{":
+       MoveToPreviousEmptyLine()
+
+    elif c == "}":
+        MoveToNextEmptyLine()
 
     elif c == "g":
         return
@@ -2079,28 +2127,28 @@ def HandleVisualModeChar(char):
         action = m.group(1)
         if sel := GetInsideBlockSelectionOrPos(m.group(1), N10X.Editor.GetCursorPos()):
             start, end = sel
-            AddVisualModeSelection(start, end)
+            SetVisualModeSelection(start, end)
     
     elif (m := re.match("a" + g_BlockMatch, c)):
         g_Mode = Mode.VISUAL
         action = m.group(1)
         if sel := GetAroundBlockSelection(m.group(1), N10X.Editor.GetCursorPos()):
             start, end = sel
-            AddVisualModeSelection(start, end)
+            SetVisualModeSelection(start, end)
     
     elif (m := re.match("i([`'\"])", c)):
         g_Mode = Mode.VISUAL
         action = m.group(1)
         if sel := GetInsideQuoteSelection(m.group(1), N10X.Editor.GetCursorPos()):
             start, end = sel
-            AddVisualModeSelection(start, end)
+            SetVisualModeSelection(start, end)
     
     elif (m := re.match("a([`'\"])", c)):
         g_Mode = Mode.VISUAL
         action = m.group(1)
         if sel := GetAroundQuoteSelection(m.group(1), N10X.Editor.GetCursorPos()):
             start, end = sel
-            AddVisualModeSelection(start, end)
+            SetVisualModeSelection(start, end)
 
     else:
         print("[vim] Unknown command!")
