@@ -1468,8 +1468,10 @@ def HandleCommandModeChar(char):
         if sel := SelectOrMoveInsideBlock(action, count, True):
             start, end = sel
             N10X.Editor.PushUndoGroup()
+            insert_line = GetLine(start[1] - 1)[-3:-1] == action + "\r\n"
             N10X.Editor.ExecuteCommand("Cut")
-            if end[1] - start[1] > 0:
+            if insert_line:
+                pass
                 N10X.Editor.ExecuteCommand("InsertLine")
             EnterInsertMode()
             N10X.Editor.PopUndoGroup()
