@@ -1471,7 +1471,6 @@ def HandleCommandModeChar(char):
             insert_line = GetLine(start[1] - 1)[-3:-1] == action + "\r\n"
             N10X.Editor.ExecuteCommand("Cut")
             if insert_line:
-                pass
                 N10X.Editor.ExecuteCommand("InsertLine")
             EnterInsertMode()
             N10X.Editor.PopUndoGroup()
