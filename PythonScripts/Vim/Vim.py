@@ -784,14 +784,14 @@ def FindSameLineBlockStartPos(c, start):
     if open_char not in line:
         return None
 
-    if line.strip() != open_char:
-        return None
-
     while x < len(line):
-        if line[x] == closed_char:
-            return None
-        elif line[x] == open_char:
-            return x
+        if not IsWhitespaceChar(line[x]):
+            if line[x] == open_char:
+                return x
+            elif line[x] == closed_char:
+                return None
+            else:
+                return None
         x += 1
     return None
     
