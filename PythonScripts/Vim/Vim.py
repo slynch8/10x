@@ -784,6 +784,9 @@ def FindSameLineBlockStartPos(c, start):
     if open_char not in line:
         return None
 
+    if line.strip() != open_char:
+        return None
+
     while x < len(line):
         if line[x] == closed_char:
             return None
