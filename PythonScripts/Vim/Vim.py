@@ -785,10 +785,13 @@ def FindSameLineBlockStartPos(c, start):
         return None
 
     while x < len(line):
-        if line[x] == closed_char:
-            return None
-        elif line[x] == open_char:
-            return x
+        if not IsWhitespaceChar(line[x]):
+            if line[x] == open_char:
+                return x
+            elif line[x] == closed_char:
+                return None
+            else:
+                return None
         x += 1
     return None
     
@@ -1465,8 +1468,9 @@ def HandleCommandModeChar(char):
         if sel := SelectOrMoveInsideBlock(action, count, True):
             start, end = sel
             N10X.Editor.PushUndoGroup()
+            insert_line = GetLine(start[1] - 1)[-3:-1] == action + "\r\n"
             N10X.Editor.ExecuteCommand("Cut")
-            if end[1] - start[1] > 0:
+            if insert_line:
                 N10X.Editor.ExecuteCommand("InsertLine")
             EnterInsertMode()
             N10X.Editor.PopUndoGroup()
