@@ -1186,17 +1186,18 @@ def HandleCommandModeChar(char):
     
     elif (m := re.match("di([`'\"])", c)):
         action = m.group(1)
-        if pos := SelectOrMoveInsideQuote(m.group(1)):
+        if sel := SelectOrMoveInsideQuote(m.group(1)):
+            start, end = sel
             N10X.Editor.PushUndoGroup()
             N10X.Editor.ExecuteCommand("Cut")
-            SetCursorPos(pos[0], pos[1])
+            SetCursorPos(start[0], start[1])
             N10X.Editor.PopUndoGroup()
     
     elif (m := re.match("da([`'\"])", c)):
         action = m.group(1)
-        if pos := SelectOrMoveInsideQuote(m.group(1)):
+        if pos := SelectAroundQuote(m.group(1)):
             N10X.Editor.PushUndoGroup()
-            N10X.Editor.ExecuteCommand("Copy")
+            N10X.Editor.ExecuteCommand("Cut")
             SetCursorPos(pos[0], pos[1])
             N10X.Editor.PopUndoGroup()
 
