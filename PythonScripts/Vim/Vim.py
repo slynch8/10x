@@ -1771,6 +1771,7 @@ def HandleCommandModeChar(char):
             clipboard_value = GetClipboardValue()
             if clipboard_value and clipboard_value[-1:] == "\n":
                 SetCursorPos(x=GetLineLength(), max_offset=0)
+                N10X.Editor.ExecuteCommand("InsertLine")
                 MoveToStartOfLine()
                 start = N10X.Editor.GetCursorPos()
                 N10X.Editor.SetLine(start[1], "")
