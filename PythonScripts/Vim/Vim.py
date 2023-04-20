@@ -944,7 +944,7 @@ def GetInsideQuoteSelection(c, start, whitespace=False):
     return None
 
 #------------------------------------------------------------------------
-def SelectQuote(c, whitespace=True):
+def SelectAroundQuote(c, whitespace=True):
     start = N10X.Editor.GetCursorPos()
     if sel := GetQuoteSelection(c, start):
         start, end = sel
@@ -1186,17 +1186,18 @@ def HandleCommandModeChar(char):
     
     elif (m := re.match("di([`'\"])", c)):
         action = m.group(1)
-        if pos := SelectOrMoveInsideQuote(m.group(1)):
+        if sel := SelectOrMoveInsideQuote(m.group(1)):
+            start, end = sel
             N10X.Editor.PushUndoGroup()
             N10X.Editor.ExecuteCommand("Cut")
-            SetCursorPos(pos[0], pos[1])
+            SetCursorPos(start[0], start[1])
             N10X.Editor.PopUndoGroup()
     
     elif (m := re.match("da([`'\"])", c)):
         action = m.group(1)
-        if pos := SelectOrMoveInsideQuote(m.group(1)):
+        if pos := SelectAroundQuote(m.group(1)):
             N10X.Editor.PushUndoGroup()
-            N10X.Editor.ExecuteCommand("Copy")
+            N10X.Editor.ExecuteCommand("Cut")
             SetCursorPos(pos[0], pos[1])
             N10X.Editor.PopUndoGroup()
 
@@ -1494,7 +1495,7 @@ def HandleCommandModeChar(char):
     
     elif (m := re.match("ca([`'\"])", c)):
         action = m.group(1)
-        if SelectQuote(action):
+        if SelectAroundQuote(action):
             N10X.Editor.PushUndoGroup()
             N10X.Editor.ExecuteCommand("Cut")
             N10X.Editor.PopUndoGroup()
@@ -1675,13 +1676,14 @@ def HandleCommandModeChar(char):
     
     elif (m := re.match("yi([`'\"])", c)):
         action = m.group(1)
-        if pos := SelectOrMoveInsideQuote(m.group(1)):
+        if sel := SelectOrMoveInsideQuote(m.group(1)):
+            start, end = sel
             N10X.Editor.ExecuteCommand("Copy")
-            SetCursorPos(pos[0], pos[1])
+            SetCursorPos(start[0], start[1])
     
     elif (m := re.match("ya([`'\"])", c)):
         action = m.group(1)
-        if pos := SelectAroundQuotes(m.group(1), N10X.Editor.GetCursorPos()):
+        if pos := SelectAroundQuote(m.group(1), N10X.Editor.GetCursorPos()):
             N10X.Editor.ExecuteCommand("Copy")
             SetCursorPos(pos[0], pos[1])
 
@@ -1769,6 +1771,7 @@ def HandleCommandModeChar(char):
             clipboard_value = GetClipboardValue()
             if clipboard_value and clipboard_value[-1:] == "\n":
                 SetCursorPos(x=GetLineLength(), max_offset=0)
+                N10X.Editor.ExecuteCommand("InsertLine")
                 MoveToStartOfLine()
                 start = N10X.Editor.GetCursorPos()
                 N10X.Editor.SetLine(start[1], "")
