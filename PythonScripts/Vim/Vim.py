@@ -165,14 +165,13 @@ def FindNextOccurrenceForward2(c):
     x, y = N10X.Editor.GetCursorPos()
     x += 1
     lineCount = N10X.Editor.GetLineCount()
-
     while y < lineCount:
         line = N10X.Editor.GetLine(y)
         if x < len(line) - 1:
-            line = line[x - 1:]
+            line = line[x:]
             index = line.find(c)
             if index >= 0:
-                    return x + index - 1, y
+                    return x + index, y
         x = 0
         y += 1
     return None, None
@@ -181,7 +180,7 @@ def FindNextOccurrenceForward2(c):
 def MoveToLineText(action, search):
     global g_LastSearch
     if action == ';' and g_LastSearch:
-        MoveToLineText(g_LastSearch[0], g_LastSearch[1])
+        MoveToLineText(g_LastSearch[0], g_LastSearch[1:])
         return True
     
     if not search:
@@ -218,8 +217,8 @@ def MoveToLineText(action, search):
             x,y = FindNextOccurrenceBackward2(search)
             if x:
                 SetCursorPos(x=x, y=y)
-            else:
-                return False
+        else:
+            return False
  
         g_LastSearch = action + search
         return True
