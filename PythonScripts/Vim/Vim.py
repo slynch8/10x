@@ -107,17 +107,15 @@ def SetCursorPos(x=None, y=None, max_offset=1, override_horizontal_target=True):
       _, y = N10X.Editor.GetCursorPos()
 
     y = Clamp(0, GetMaxY(), y)
-
-    N10X.Editor.SetCursorPos((x, y))
     
     # This is to keep the horizontal target when we are moving vertically  
     global g_HorizontalTarget
     if override_horizontal_target:
         g_HorizontalTarget = x;
     else:
-        line_start_x, line_start_y = GetFirstNonWhitespace()
+        line_start_x, line_start_y = GetFirstNonWhitespace(y)
         x = max(g_HorizontalTarget, line_start_x)
-        x = min(GetLineLength(y), x)
+        x = min(GetLineLength(y) - 1, x)
 
     N10X.Editor.SetCursorPos((x, y))
     g_PrevCursorX, g_PrevCursorY = N10X.Editor.GetCursorPos()
@@ -482,9 +480,7 @@ def GetPrevNonWhitespaceCharPos(x, y):
     return x, y
     
 #------------------------------------------------------------------------
-def GetFirstNonWhitespace():
-    x, y = N10X.Editor.GetCursorPos()
-
+def GetFirstNonWhitespace(y):
     line = N10X.Editor.GetLine(y)
     x = 0
     
@@ -498,7 +494,8 @@ def GetFirstNonWhitespace():
 
 #------------------------------------------------------------------------
 def MoveToFirstNonWhitespace():
-    new_x, new_y = GetFirstNonWhitespace()
+    x, y = N10X.Editor.GetCursorPos()
+    new_x, new_y = GetFirstNonWhitespace(y)
     SetCursorPos(new_x, new_y)
 
 #------------------------------------------------------------------------
@@ -683,9 +680,9 @@ def MoveToPreviousEmptyLine():
       y = y - 1
       text = N10X.Editor.GetLine(y)
       if text.isspace():
-        N10X.Editor.SetCursorPos((0, y))
+        SetCursorPos(0, y)
         return
-    N10X.Editor.SetCursorPos((0, 0))
+    SetCursorPos(0, 0)
 
 #------------------------------------------------------------------------
 def MoveToNextEmptyLine():
@@ -694,10 +691,10 @@ def MoveToNextEmptyLine():
     while y < line_count - 1:
       text = N10X.Editor.GetLine(y + 1)
       if not text or text.isspace():
-        N10X.Editor.SetCursorPos((0, y + 1))
+        SetCursorPos(0, y + 1)
         return
       y = y + 1
-    N10X.Editor.SetCursorPos((GetLineLength(y) - 1, line_count))
+    SetCursorPos(GetLineLength(y) - 1, line_count)
       
 #------------------------------------------------------------------------
 def NormalizeBlockChar(c):
@@ -2136,11 +2133,11 @@ def HandleVisualModeChar(char):
 
     elif c == "k":
         for _ in range(repeat_count):
-            MoveCursorPos(y_delta=-1)
+            MoveCursorPos(y_delta=-1, override_horizontal_target=False)
 
     elif c == "j":
         for _ in range(repeat_count):
-            MoveCursorPos(y_delta=1)
+            MoveCursorPos(y_delta=1, override_horizontal_target=False)
 
     elif c == "w":
         for _ in range(repeat_count):
