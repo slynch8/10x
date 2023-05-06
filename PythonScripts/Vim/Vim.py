@@ -62,6 +62,10 @@ g_JumpMap = {}
 
 g_SneakEnabled = False
 
+g_HorizontalTarget = 0
+g_PrevCursorY = 0
+g_PrevCursorX = 0
+
 #------------------------------------------------------------------------
 def InVisualMode():
     global g_Mode
@@ -88,24 +92,41 @@ def GetMaxY():
     return max(0, N10X.Editor.GetLineCount() - 1)
 
 #------------------------------------------------------------------------
-def SetCursorPos(x=None, y=None, max_offset=1):
+def SetCursorPos(x=None, y=None, max_offset=1, override_horizontal_target=True):
+
+    # If the program moved our cursor then always override the horizontal target
+    global g_PrevCursorX
+    global g_PrevCursorY
+    CurrentX, CurrentY = N10X.Editor.GetCursorPos()
+    if CurrentX != g_PrevCursorX or CurrentY != g_PrevCursorY:
+        override_horizontal_target=True
+        
     if x is None:
       x, _ = N10X.Editor.GetCursorPos()
     if y is None:
       _, y = N10X.Editor.GetCursorPos()
 
     y = Clamp(0, GetMaxY(), y)
-    x = Clamp(0, GetLineLength(y) - max_offset, x)
+    
+    # This is to keep the horizontal target when we are moving vertically  
+    global g_HorizontalTarget
+    if override_horizontal_target:
+        g_HorizontalTarget = x;
+    else:
+        line_start_x, line_start_y = GetFirstNonWhitespace(y)
+        x = max(g_HorizontalTarget, line_start_x)
+        x = min(GetLineLength(y) - 1, x)
 
     N10X.Editor.SetCursorPos((x, y))
+    g_PrevCursorX, g_PrevCursorY = N10X.Editor.GetCursorPos()
 
 #------------------------------------------------------------------------
-def MoveCursorPos(x_delta=0, y_delta=0, max_offset=1):
+def MoveCursorPos(x_delta=0, y_delta=0, max_offset=1, override_horizontal_target=True):
     x, y = N10X.Editor.GetCursorPos()
     x += x_delta
     y += y_delta
     
-    SetCursorPos(x, y, max_offset)
+    SetCursorPos(x, y, max_offset, override_horizontal_target)
 
 #------------------------------------------------------------------------
 def FindNextOccurrenceForward(c):
@@ -309,7 +330,7 @@ def EnterCommandMode():
         N10X.Editor.ResetCursorBlink()
 
         if not was_visual:
-            MoveCursorPos(x_delta=-1)
+            MoveCursorPos(x_delta=-1, override_horizontal_target=False)
 
         UpdateCursorMode()
 
@@ -457,6 +478,25 @@ def GetPrevNonWhitespaceCharPos(x, y):
         else:
             x -= 1
     return x, y
+    
+#------------------------------------------------------------------------
+def GetFirstNonWhitespace(y):
+    line = N10X.Editor.GetLine(y)
+    x = 0
+    
+    while x < len(line):
+         first_character = GetCharacterClass(line[x]) != CharacterClass.WHITESPACE
+         if first_character:
+            break;
+         x +=1;
+    
+    return x, y
+
+#------------------------------------------------------------------------
+def MoveToFirstNonWhitespace():
+    x, y = N10X.Editor.GetCursorPos()
+    new_x, new_y = GetFirstNonWhitespace(y)
+    SetCursorPos(new_x, new_y)
 
 #------------------------------------------------------------------------
 def GetWordStart():
@@ -640,9 +680,9 @@ def MoveToPreviousEmptyLine():
       y = y - 1
       text = N10X.Editor.GetLine(y)
       if text.isspace():
-        N10X.Editor.SetCursorPos((0, y))
+        SetCursorPos(0, y)
         return
-    N10X.Editor.SetCursorPos((0, 0))
+    SetCursorPos(0, 0)
 
 #------------------------------------------------------------------------
 def MoveToNextEmptyLine():
@@ -651,10 +691,10 @@ def MoveToNextEmptyLine():
     while y < line_count - 1:
       text = N10X.Editor.GetLine(y + 1)
       if not text or text.isspace():
-        N10X.Editor.SetCursorPos((0, y + 1))
+        SetCursorPos(0, y + 1)
         return
       y = y + 1
-    N10X.Editor.SetCursorPos((GetLineLength(y) - 1, line_count))
+    SetCursorPos(GetLineLength(y) - 1, line_count)
       
 #------------------------------------------------------------------------
 def NormalizeBlockChar(c):
@@ -1032,11 +1072,11 @@ def HandleCommandModeChar(char):
 
     elif c == "j":
         for i in range(repeat_count):
-            MoveCursorPos(y_delta=1)
+            MoveCursorPos(y_delta=1, override_horizontal_target=False)
 
     elif c == "k":
         for i in range(repeat_count):
-            MoveCursorPos(y_delta=-1)
+            MoveCursorPos(y_delta=-1, override_horizontal_target=False)
 
     elif c == "l":
         for i in range(repeat_count):
@@ -1067,7 +1107,7 @@ def HandleCommandModeChar(char):
             MoveToTokenEnd()
 
     elif c == "0":
-        MoveToStartOfLine()
+        MoveToFirstNonWhitespace()
 
     elif c == "$":
         MoveToEndOfLine()
@@ -2093,11 +2133,11 @@ def HandleVisualModeChar(char):
 
     elif c == "k":
         for _ in range(repeat_count):
-            MoveCursorPos(y_delta=-1)
+            MoveCursorPos(y_delta=-1, override_horizontal_target=False)
 
     elif c == "j":
         for _ in range(repeat_count):
-            MoveCursorPos(y_delta=1)
+            MoveCursorPos(y_delta=1, override_horizontal_target=False)
 
     elif c == "w":
         for _ in range(repeat_count):
