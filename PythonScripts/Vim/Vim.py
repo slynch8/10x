@@ -115,9 +115,9 @@ def SetCursorPos(x=None, y=None, max_offset=1, override_horizontal_target=True):
     if override_horizontal_target:
         g_HorizontalTarget = x;
     else:
-        line_start_x, line_start_y = GetFirstNonWhitespace() 
-        x = min(GetLineLength(y), g_HorizontalTarget)
-        x = max(line_start_x, x)
+        line_start_x, line_start_y = GetFirstNonWhitespace()
+        x = max(g_HorizontalTarget, line_start_x)
+        x = min(GetLineLength(y), x)
 
     N10X.Editor.SetCursorPos((x, y))
     g_PrevCursorX, g_PrevCursorY = N10X.Editor.GetCursorPos()
