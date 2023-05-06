@@ -1110,7 +1110,7 @@ def HandleCommandModeChar(char):
             MoveToTokenEnd()
 
     elif c == "0":
-        MoveToStartOfLine()
+        MoveToFirstNonWhitespace()
 
     elif c == "$":
         MoveToEndOfLine()
