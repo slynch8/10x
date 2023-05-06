@@ -8,6 +8,7 @@ RDBG_Options:
     - RemedyBG.Hook: (default=False) Hook RemedyBg into default Start/Stop/Restart debugging commands instead of the default msvc debugger integration
     - RemedyBG.Path: Path to remedybg.exe. If not set, the script will assume remedybg.exe is in PATH or current dir
     - RemedyBG.OutputDebugText: (default=True) receives and output debug text to 10x output
+    - RemedyBG.WorkDir: Path that remedy will use as a working directory
     - RemedyBG.KeepSessionOnActiveChange: (default=False) when active project or config is changed, it leaves the previously opened RemedyBG session
                                            This is useful when you want to debug multiple binaries within a project like client/server apps
     - RemedyBG.StartProcessExtraCommand: Extra 10x command that will be executed after process is started in RemedyBG
@@ -442,14 +443,18 @@ class RDBG_Session:
             if debug_cmd == '':
                 Editor.ShowMessageBox(RDBG_TITLE, 'Debug command is empty. Perhaps active project is not set in workspace tree?')
                 return False
-                
-            full_path = os.path.dirname(os.path.abspath(Editor.GetWorkspaceFilename()))
-            full_path = os.path.join(full_path, debug_cwd)
-            if full_path != '' and not os.path.isdir(full_path):
-                Editor.ShowMessageBox(RDBG_TITLE, 'Debugger working directory is invalid: ' + full_path)
+
+            work_dir = Editor.GetSetting("RemedyBG.WorkDir")
+            # if not working dir explicitly declared in the settings just use the workspace dir
+            if work_dir == '':
+                work_dir = os.path.dirname(os.path.abspath(Editor.GetWorkspaceFilename()))
+                work_dir = os.path.join(work_dir, debug_cwd)
+
+            if work_dir != '' and not os.path.isdir(work_dir):
+                Editor.ShowMessageBox(RDBG_TITLE, 'Debugger working directory is invalid: ' + work_dir)
 
             args = _rdbg_options.executable + ' --servername ' + self.name + ' "' + debug_cmd + '"' + (' ' if debug_args!='' else '') + debug_args
-            self.process = subprocess.Popen(args, cwd=full_path)
+            self.process = subprocess.Popen(args, cwd=work_dir)
             time.sleep(0.1)
 
             assert self.cmd_pipe == None
