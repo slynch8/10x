@@ -17,10 +17,10 @@ Version: 0.1.0
 To install these modules in 10x's python use the pip command with python3 and set  
 the target to be 10x's installation directory:
 
-> python3 -m pip install --target="C:\Program Files\PureDevSoftware\10x"
+> python3 -m pip install --target="C:\Program Files\PureDevSoftware\10x\Lib\site-packages"
 > requests
 
-> python3 -m pip install --target="C:\Program Files\PureDevSoftware\10x"
+> python3 -m pip install --target="C:\Program Files\PureDevSoftware\10x\Lib\site-packages"
 > BeautifulSoup4
 
 **You can get the Portal Token from the itch.io download page url for RemedyBG:**  
