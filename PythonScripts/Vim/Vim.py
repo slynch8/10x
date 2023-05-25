@@ -1982,11 +1982,11 @@ def HandleCommandModeKey(key, shift, control, alt):
 
     elif key == "U" and control:
         MoveCursorPos(y_delta=int(-N10X.Editor.GetVisibleLineCount()/2))
-        N10X.Editor.CenterViewAtLinePos(N10X.Editor.GetCursorPos()[1])
+        N10X.Editor.ScrollCursorIntoView()
 
     elif key == "D" and control:
         MoveCursorPos(y_delta=int(N10X.Editor.GetVisibleLineCount()/2))
-        N10X.Editor.CenterViewAtLinePos(N10X.Editor.GetCursorPos()[1])
+        N10X.Editor.ScrollCursorIntoView()
 
     elif key == "B" and control:
         N10X.Editor.SendKey("PageUp")
