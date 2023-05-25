@@ -1289,6 +1289,33 @@ def HandleCommandModeChar(char):
             N10X.Editor.ExecuteCommand("Cut")
         N10X.Editor.PopUndoGroup()
 
+    elif (m := re.match("d" + g_RepeatMatch + "{", c)):
+        count = int(m.group(1)) if m.group(1) else 1
+        N10X.Editor.PushUndoGroup()
+        for i in range(repeat_count):
+            x, y = N10X.Editor.GetCursorPos()
+            for i in range(count):
+                MoveToPreviousEmptyLine()
+                x, end_y = N10X.Editor.GetCursorPos()
+            SetLineSelection(y, end_y)
+            N10X.Editor.ExecuteCommand("Cut")
+            SetCursorPos(0, end_y - 1)
+        N10X.Editor.PopUndoGroup()
+
+    elif (m := re.match("d" + g_RepeatMatch + "}", c)):
+        count = int(m.group(1)) if m.group(1) else 1
+        N10X.Editor.PushUndoGroup()
+        for i in range(repeat_count):
+            x, y = N10X.Editor.GetCursorPos()
+            for i in range(count):
+                MoveToNextEmptyLine()
+                x, end_y = N10X.Editor.GetCursorPos()
+            SetLineSelection(y, end_y)
+            N10X.Editor.ExecuteCommand("Cut")
+            SetCursorPos(0, y - 1)
+        MoveCursorPos(y_delta=1, override_horizontal_target=False)
+        N10X.Editor.PopUndoGroup()
+
     elif (m := re.match("d" + g_RepeatMatch + "([fFtT;])(.?)", c)):
         N10X.Editor.PushUndoGroup()
         count = int(m.group(1)) if m.group(1) else 1
