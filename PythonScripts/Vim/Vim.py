@@ -148,7 +148,7 @@ def FindNextOccurrenceBackward2(c):
 
     while y >= 0 :
         if x >= 0:
-            line = line[:x + 2]
+            line = line[:x + 1]
             index = line.rfind(c)
             if index >= 0:
                     return index, y
@@ -1901,11 +1901,11 @@ def HandleCommandModeKey(key, shift, control, alt):
 
     elif key == "U" and control:
         MoveCursorPos(y_delta=int(-N10X.Editor.GetVisibleLineCount()/2))
-        N10X.Editor.ScrollCursorIntoView()
+        N10X.Editor.CenterViewAtLinePos(N10X.Editor.GetCursorPos()[1])
 
     elif key == "D" and control:
         MoveCursorPos(y_delta=int(N10X.Editor.GetVisibleLineCount()/2))
-        N10X.Editor.ScrollCursorIntoView()
+        N10X.Editor.CenterViewAtLinePos(N10X.Editor.GetCursorPos()[1])
 
     elif key == "B" and control:
         N10X.Editor.SendKey("PageUp")
