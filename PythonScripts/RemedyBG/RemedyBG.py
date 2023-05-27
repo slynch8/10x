@@ -17,7 +17,7 @@ To get this to work with regular StartDebugging command, you can edit Workspace 
     remedybg.exe start-debugging
 This assumes though that remedy is defined in PATH environments.
 
-RDBG_Options 
+RDBG_Options: 
     - RemedyBG.Hook: (default=False) Hook RemedyBg into default Start/Stop/Restart debugging commands instead of the default msvc debugger integration
     - RemedyBG.Path: Path to remedybg.exe. If not set, the script will assume remedybg.exe is in PATH or current dir
     - RemedyBG.OutputDebugText: (default=True) receives and output debug text to 10x output
