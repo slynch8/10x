@@ -849,21 +849,27 @@ def _RDBG_ProjectBuild(filename:str)->bool:
         _rdbg_session.stop()        
     return False
 
+def InitialiseRemedy():
+    _rdbg_options:RDBG_Options = RDBG_Options()
+
+    Editor.AddBreakpointAddedFunction(_RDBG_AddBreakpoint)
+    Editor.AddBreakpointRemovedFunction(_RDBG_RemoveBreakpoint)
+    Editor.AddBreakpointUpdatedFunction(_RDBG_UpdateBreakpoint)
+
+    Editor.AddOnWorkspaceOpenedFunction(_RDBG_WorkspaceOpened)
+    Editor.AddBuildFinishedFunction(_RDBG_BuildFinished)
+    Editor.AddUpdateFunction(_RDBG_Update)
+    Editor.AddOnSettingsChangedFunction(_RDBG_SettingsChanged)
+
+    Editor.AddStartDebuggingFunction(_RDBG_StartDebugging)
+    Editor.AddStopDebuggingFunction(_RDBG_StopDebugging)
+    Editor.AddRestartDebuggingFunction(_RDBG_RestartDebugging)
+
+    Editor.AddProjectBuildFunction(_RDBG_ProjectBuild)
+
 _rdbg_session:RDBG_Session = None
-_rdbg_options:RDBG_Options = RDBG_Options()
+_rdbg_options:RDBG_Options = None
 _rdbg_options_override:bool = False
 
-Editor.AddBreakpointAddedFunction(_RDBG_AddBreakpoint)
-Editor.AddBreakpointRemovedFunction(_RDBG_RemoveBreakpoint)
-Editor.AddBreakpointUpdatedFunction(_RDBG_UpdateBreakpoint)
+Editor.CallOnMainThread(InitialiseRemedy)
 
-Editor.AddOnWorkspaceOpenedFunction(_RDBG_WorkspaceOpened)
-Editor.AddBuildFinishedFunction(_RDBG_BuildFinished)
-Editor.AddUpdateFunction(_RDBG_Update)
-Editor.AddOnSettingsChangedFunction(_RDBG_SettingsChanged)
-
-Editor.AddStartDebuggingFunction(_RDBG_StartDebugging)
-Editor.AddStopDebuggingFunction(_RDBG_StopDebugging)
-Editor.AddRestartDebuggingFunction(_RDBG_RestartDebugging)
-
-Editor.AddProjectBuildFunction(_RDBG_ProjectBuild)
