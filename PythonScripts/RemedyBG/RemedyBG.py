@@ -4,7 +4,20 @@ RemedyBG: https://remedybg.handmade.network/ (should be above 0.3.8)
 Version: 0.10.1
 Original Script author: septag@discord
 
-RDBG_Options:
+To get started go to Settings.10x_settings, and enable the hook, by adding this line:
+    RemedyBG.Hook: true
+You can add other options listed below in 'RDBG_Options' as individual lines in the settings file.
+You can also hook commands to key bindings by going to Settings->Key Bindings... and adding the lines in the file. for example:
+    F10:	    RDBG_StepOver
+    F11:		RDBG_StepInto
+    Shift F11:	RDBG_StepOut
+Other commands are listed below in 'Commands'
+
+To get this to work with regular StartDebugging command, you can edit Workspace Settings and add this as a Debug Command:
+    remedybg.exe start-debugging
+This assumes though that remedy is defined in PATH environments.
+
+RDBG_Options: 
     - RemedyBG.Hook: (default=False) Hook RemedyBg into default Start/Stop/Restart debugging commands instead of the default msvc debugger integration
     - RemedyBG.Path: Path to remedybg.exe. If not set, the script will assume remedybg.exe is in PATH or current dir
     - RemedyBG.OutputDebugText: (default=True) receives and output debug text to 10x output
