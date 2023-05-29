@@ -34,6 +34,7 @@ g_Command = ""
 
 # flag to enable/disable whether we handle key intercepts
 g_HandleKeyIntercepts = True
+g_HandleCharKeyIntercepts = True
 
 # the last line search performed
 g_LastSearch = None
@@ -65,6 +66,21 @@ g_SneakEnabled = False
 g_HorizontalTarget = 0
 g_PrevCursorY = 0
 g_PrevCursorX = 0
+
+class RecordedKey:
+    KEY = 0
+    CHAR_KEY = 1
+
+    type = KEY
+    char = ""
+    key = ""
+    shift = False
+    control = False
+    alt = False
+
+g_LastCommand = ""
+g_InsertBuffer = []
+g_PerformingDot = False
 
 #------------------------------------------------------------------------
 def InVisualMode():
@@ -292,19 +308,50 @@ def AddNewlineToClipboard():
     print("[vim] Failed add newline to clipboard text!")
 
 #------------------------------------------------------------------------
-def SendKey(key):
+def SendKey(key, shift=None, control=None, alt=None):
     global g_HandleKeyIntercepts
     g_HandleKeyIntercepts = False
-    N10X.Editor.SendKey(key)
+    N10X.Editor.SendKey(key, shift, control, alt)
     g_HandleKeyIntercepts = True
+
+def SendCharKey(char):
+    global g_HandleCharKeyIntercepts
+    g_HandleCharKeyIntercepts = False
+    N10X.Editor.SendCharKey(char)
+    g_HandleCharKeyIntercepts = True
+
+def PlaybackBuffer(buffer):
+    for r in buffer:
+        if r.type == RecordedKey.KEY:
+            SendKey(r.key,r.shift,r.control,r.alt)
+        elif r.type == RecordedKey.CHAR_KEY:
+            SendCharKey(r.char)
 
 #------------------------------------------------------------------------
 def EnterInsertMode():
     global g_Mode
+    global g_PerformingDot
+    global g_InsertBuffer
+
     if g_Mode != Mode.INSERT:
         g_Mode = Mode.INSERT
         N10X.Editor.ResetCursorBlink()
         UpdateCursorMode()
+
+    if g_PerformingDot:
+        PlaybackBuffer(g_InsertBuffer)
+        EnterCommandMode(True)
+    else:
+        g_InsertBuffer = []
+
+#------------------------------------------------------------------------
+def ClearCommandStr(save=False):
+    global g_Command
+    global g_LastCommand
+
+    if save:
+        g_LastCommand = g_Command
+    g_Command = ""
 
 #------------------------------------------------------------------------
 def EnterCommandMode(clear):
@@ -316,7 +363,7 @@ def EnterCommandMode(clear):
     global g_PaneSwap
 
     g_PaneSwap = False
-    g_Command = ""
+    ClearCommandStr(False)
 
     if g_Mode != Mode.COMMAND:
         clear = True
@@ -1017,6 +1064,7 @@ def SelectOrMoveInsideQuote(c, insert_after_move=False, whitespace=False):
 def HandleCommandModeChar(char):
     global g_Mode
     global g_Command
+    global g_LastCommand
     global g_ReverseSearch
     global g_StartedRecordingMacro
     global g_LastJumpPoint
@@ -1025,8 +1073,12 @@ def HandleCommandModeChar(char):
     global g_MultiReplace
     global g_SneakEnabled
     global g_PaneSwap
+    global g_PerformingDot
 
     g_Command += char
+
+    if g_Command == "":
+        return
 
     m = re.match(g_RepeatMatch + "(.*)", g_Command)
     if not m:
@@ -1037,6 +1089,8 @@ def HandleCommandModeChar(char):
     c = m.group(2)
     if not c:
         return
+    
+    should_save = False
 
     # pane
 
@@ -1067,8 +1121,21 @@ def HandleCommandModeChar(char):
 
       g_PaneSwap = False
 
-    # moving
+    elif c == ".":
+        global g_InsertBuffer
+        last = g_LastCommand
+        if last == ".":
+            return
 
+        g_PerformingDot = True
+        for i in range(repeat_count):
+            g_Command = last
+            HandleCommandModeChar("")
+
+        g_PerformingDot = False
+        g_LastCommand = last
+
+    # moving
     elif c == "h":
         for i in range(repeat_count):
             MoveCursorPos(x_delta=-1)
@@ -1179,6 +1246,7 @@ def HandleCommandModeChar(char):
         N10X.Editor.ExecuteCommand("Cut")
         SetCursorPos(x, y)
         N10X.Editor.PopUndoGroup()
+        should_save = True
 
     elif c == "dw":
         N10X.Editor.PushUndoGroup()
@@ -1191,6 +1259,7 @@ def HandleCommandModeChar(char):
             SetSelection(start, end)
             N10X.Editor.ExecuteCommand("Cut")
         N10X.Editor.PopUndoGroup()
+        should_save = True
 
     elif c == "diw":
         N10X.Editor.PushUndoGroup() 
@@ -1199,6 +1268,7 @@ def HandleCommandModeChar(char):
         N10X.Editor.ExecuteCommand("Cut")
         SetCursorPos(start[0], start[1])
         N10X.Editor.PopUndoGroup()
+        should_save = True
 
     elif c == "daw":
         N10X.Editor.PushUndoGroup()
@@ -1207,6 +1277,7 @@ def HandleCommandModeChar(char):
         N10X.Editor.ExecuteCommand("Cut")
         SetCursorPos(start[0], start[1])
         N10X.Editor.PopUndoGroup()
+        should_save = True
 
     elif (m := re.match("d" + g_RepeatMatch + "i" + g_BlockMatch, c)):
         N10X.Editor.PushUndoGroup()
@@ -1217,6 +1288,7 @@ def HandleCommandModeChar(char):
             N10X.Editor.ExecuteCommand("Cut")
             SetCursorPos(start[0], start[1])
         N10X.Editor.PopUndoGroup()
+        should_save = True
 
     elif (m := re.match("d" + g_RepeatMatch + "a" + g_BlockMatch, c)):
         N10X.Editor.PushUndoGroup()
@@ -1226,6 +1298,7 @@ def HandleCommandModeChar(char):
             N10X.Editor.ExecuteCommand("Cut")
             SetCursorPos(pos[0], pos[1])
         N10X.Editor.PopUndoGroup()
+        should_save = True
     
     elif (m := re.match("di([`'\"])", c)):
         action = m.group(1)
@@ -1235,6 +1308,7 @@ def HandleCommandModeChar(char):
             N10X.Editor.ExecuteCommand("Cut")
             SetCursorPos(start[0], start[1])
             N10X.Editor.PopUndoGroup()
+        should_save = True
     
     elif (m := re.match("da([`'\"])", c)):
         action = m.group(1)
@@ -1243,6 +1317,7 @@ def HandleCommandModeChar(char):
             N10X.Editor.ExecuteCommand("Cut")
             SetCursorPos(pos[0], pos[1])
             N10X.Editor.PopUndoGroup()
+        should_save = True
 
     elif (m := re.match("d" + g_RepeatMatch + "h", c)):
         N10X.Editor.PushUndoGroup()
@@ -1254,6 +1329,7 @@ def HandleCommandModeChar(char):
             SetSelection((start_x, y), (end_x, y))
             N10X.Editor.ExecuteCommand("Cut")
         N10X.Editor.PopUndoGroup()
+        should_save = True
 
     elif (m := re.match("d" + g_RepeatMatch + "j", c)):
         N10X.Editor.PushUndoGroup()
@@ -1266,6 +1342,7 @@ def HandleCommandModeChar(char):
             SetCursorPos(0, y - 1)
         MoveCursorPos(y_delta=1, override_horizontal_target=False)
         N10X.Editor.PopUndoGroup()
+        should_save = True
 
     elif (m := re.match("d" + g_RepeatMatch + "k", c)):
         N10X.Editor.PushUndoGroup()
@@ -1276,6 +1353,7 @@ def HandleCommandModeChar(char):
             SetLineSelection(y, end_y)
             N10X.Editor.ExecuteCommand("Cut")
         N10X.Editor.PopUndoGroup()
+        should_save = True
 
     elif (m := re.match("d" + g_RepeatMatch + "l", c)):
         N10X.Editor.PushUndoGroup()
@@ -1288,6 +1366,7 @@ def HandleCommandModeChar(char):
             SetSelection((x, y), (end_x, y))
             N10X.Editor.ExecuteCommand("Cut")
         N10X.Editor.PopUndoGroup()
+        should_save = True
 
     elif (m := re.match("d" + g_RepeatMatch + "{", c)):
         count = int(m.group(1)) if m.group(1) else 1
@@ -1301,6 +1380,7 @@ def HandleCommandModeChar(char):
             N10X.Editor.ExecuteCommand("Cut")
             SetCursorPos(0, end_y - 1)
         N10X.Editor.PopUndoGroup()
+        should_save = True
 
     elif (m := re.match("d" + g_RepeatMatch + "}", c)):
         count = int(m.group(1)) if m.group(1) else 1
@@ -1315,6 +1395,7 @@ def HandleCommandModeChar(char):
             SetCursorPos(0, y - 1)
         MoveCursorPos(y_delta=1, override_horizontal_target=False)
         N10X.Editor.PopUndoGroup()
+        should_save = True
 
     elif (m := re.match("d" + g_RepeatMatch + "([fFtT;])(.?)", c)):
         N10X.Editor.PushUndoGroup()
@@ -1331,6 +1412,7 @@ def HandleCommandModeChar(char):
         SetSelection(start, end)
         N10X.Editor.ExecuteCommand("Cut")
         N10X.Editor.PopUndoGroup()
+        should_save = True
 
     elif c == "d%":
         N10X.Editor.PushUndoGroup()
@@ -1341,12 +1423,14 @@ def HandleCommandModeChar(char):
             SetSelection(start, end)
             N10X.Editor.ExecuteCommand("Cut")
         N10X.Editor.PopUndoGroup()
+        should_save = True
 
     elif c == "dgg":
         x, y = N10X.Editor.GetCursorPos()
         SetLineSelection(y, 0)
         N10X.Editor.ExecuteCommand("Cut")
         SetCursorPos(x, 0)
+        should_save = True
 
     elif c == "dG":
         N10X.Editor.PushUndoGroup()
@@ -1361,6 +1445,7 @@ def HandleCommandModeChar(char):
         end_x, end_y = GetNextNonWhitespaceCharPos(0, GetMaxY(), False)
         SetCursorPos(end_x, end_y)
         N10X.Editor.PopUndoGroup()
+        should_save = True
 
     elif c == "d0":
         N10X.Editor.PushUndoGroup()
@@ -1369,6 +1454,7 @@ def HandleCommandModeChar(char):
         SetSelection((0, y), (end_x, y))
         N10X.Editor.ExecuteCommand("Cut")
         N10X.Editor.PopUndoGroup()
+        should_save = True
 
     elif c == "D" or c == "d$":
         N10X.Editor.PushUndoGroup()
@@ -1377,6 +1463,7 @@ def HandleCommandModeChar(char):
         N10X.Editor.ExecuteCommand("Cut")
         SetCursorPos(x - 1, y)
         N10X.Editor.PopUndoGroup()
+        should_save = True
 
     elif (m := re.match("d" + g_RepeatMatch, c)) or c == "dg":
         return
@@ -1387,6 +1474,7 @@ def HandleCommandModeChar(char):
         SetSelection((x, y), (x + repeat_count-1, y))
         N10X.Editor.ExecuteCommand("Cut")
         N10X.Editor.PopUndoGroup()
+        should_save = True
 
     elif not g_SneakEnabled and c == "s":
         x, y = N10X.Editor.GetCursorPos()
@@ -1395,6 +1483,7 @@ def HandleCommandModeChar(char):
         N10X.Editor.ExecuteCommand("Cut")
         N10X.Editor.PopUndoGroup()
         EnterInsertMode()
+        should_save = True
         # NOTE- incomplete. if you "s" and type some stuff, a single "undo" should remove the typed stuff AND the deleted character
 
     # Searching
@@ -1452,27 +1541,33 @@ def HandleCommandModeChar(char):
 
     elif c == "i":
         EnterInsertMode()
+        should_save = True
 
     elif c == "r":
         EnterInsertMode()
         g_SingleReplace = True
+        should_save = True
 
     elif c == "R":
         EnterInsertMode()
         g_MultiReplace = True
+        should_save = True
         
     elif c == "I":
         MoveToStartOfLine()
         MoveToNextNonWhitespaceChar(wrap=False)
         EnterInsertMode()
+        should_save = True
 
     elif c == "a":
         EnterInsertMode()
         MoveCursorPos(x_delta=1, max_offset=0)
+        should_save = True
 
     elif c == "A":
         EnterInsertMode()
         SetCursorPos(x=GetLineLength(), max_offset=0)
+        should_save = True
 
     elif c == "o":
         N10X.Editor.PushUndoGroup()
@@ -1480,10 +1575,12 @@ def HandleCommandModeChar(char):
         SendKey("Enter")
         N10X.Editor.PopUndoGroup()
         EnterInsertMode()
+        should_save = True
 
     elif c == "O":
         N10X.Editor.ExecuteCommand("InsertLine")
         EnterInsertMode()
+        should_save = True
 
     # Editing
 
@@ -1496,6 +1593,7 @@ def HandleCommandModeChar(char):
         AddNewlineToClipboard()
         EnterInsertMode()
         N10X.Editor.PopUndoGroup()
+        should_save = True
 
     elif c == "cgg":
         N10X.Editor.PushUndoGroup()
@@ -1506,6 +1604,7 @@ def HandleCommandModeChar(char):
         N10X.Editor.ExecuteCommand("InsertLine")
         N10X.Editor.PopUndoGroup()
         EnterInsertMode()
+        should_save = True
 
     elif c == "cg":
         return
@@ -1519,6 +1618,7 @@ def HandleCommandModeChar(char):
         N10X.Editor.ExecuteCommand("InsertLine")
         N10X.Editor.PopUndoGroup()
         EnterInsertMode()
+        should_save = True
 
     elif c == "cw":
         x, y = N10X.Editor.GetCursorPos()
@@ -1531,18 +1631,21 @@ def HandleCommandModeChar(char):
         SetSelection((x, y), (end_x, y))
         N10X.Editor.ExecuteCommand("Cut")
         EnterInsertMode()
+        should_save = True
 
     elif c == "ciw":
         start, end = GetInsideWordSelection(N10X.Editor.GetCursorPos())
         SetSelection(start, end)
         N10X.Editor.ExecuteCommand("Cut")
         EnterInsertMode()
+        should_save = True
 
     elif c == "caw":
         start, end = GetAroundWordSelection(N10X.Editor.GetCursorPos())
         SetSelection(start, end)
         N10X.Editor.ExecuteCommand("Cut")
         EnterInsertMode()
+        should_save = True
 
     elif (m := re.match("c" + g_RepeatMatch + "i" + g_BlockMatch, c)):
         count = int(m.group(1)) if m.group(1) else 1
@@ -1556,6 +1659,7 @@ def HandleCommandModeChar(char):
                 N10X.Editor.ExecuteCommand("InsertLine")
             EnterInsertMode()
             N10X.Editor.PopUndoGroup()
+        should_save = True
 
     elif (m := re.match("c" + g_RepeatMatch + "a" + g_BlockMatch, c)):
         count = int(m.group(1)) if m.group(1) else 1
@@ -1565,6 +1669,7 @@ def HandleCommandModeChar(char):
             N10X.Editor.ExecuteCommand("")
             EnterInsertMode()
             N10X.Editor.PopUndoGroup()
+        should_save = True
     
     elif (m := re.match("ci([`'\"])", c)):
         action = m.group(1)
@@ -1573,6 +1678,7 @@ def HandleCommandModeChar(char):
             N10X.Editor.ExecuteCommand("Cut")
             N10X.Editor.PopUndoGroup()
             EnterInsertMode()
+        should_save = True
     
     elif (m := re.match("ca([`'\"])", c)):
         action = m.group(1)
@@ -1581,6 +1687,7 @@ def HandleCommandModeChar(char):
             N10X.Editor.ExecuteCommand("Cut")
             N10X.Editor.PopUndoGroup()
             EnterInsertMode()
+        should_save = True
 
     elif (m := re.match("c" + g_RepeatMatch + "([hl])", c)):
         x, y = N10X.Editor.GetCursorPos()
@@ -1592,6 +1699,7 @@ def HandleCommandModeChar(char):
             SetSelection((max(0, x - 1), y), (max(0, x - count), y))
         N10X.Editor.ExecuteCommand("Cut")
         EnterInsertMode()
+        should_save = True
 
     elif c == "c0":
         N10X.Editor.PushUndoGroup()
@@ -1600,6 +1708,7 @@ def HandleCommandModeChar(char):
         N10X.Editor.ExecuteCommand("Cut")
         N10X.Editor.PopUndoGroup()
         EnterInsertMode()
+        should_save = True
 
     elif c == "C" or c == "c$":
         N10X.Editor.PushUndoGroup()
@@ -1608,6 +1717,7 @@ def HandleCommandModeChar(char):
         N10X.Editor.ExecuteCommand("Cut")
         N10X.Editor.PopUndoGroup()
         EnterInsertMode()
+        should_save = True
 
     elif (m := re.match("c" + g_RepeatMatch + "j", c)):
         N10X.Editor.PushUndoGroup()
@@ -1620,6 +1730,7 @@ def HandleCommandModeChar(char):
         SetCursorPos(x, min(y, end_y), max_offset=0)
         N10X.Editor.PopUndoGroup()
         EnterInsertMode()
+        should_save = True
 
     elif (m := re.match("c" + g_RepeatMatch + "k", c)):
         N10X.Editor.PushUndoGroup()
@@ -1632,6 +1743,7 @@ def HandleCommandModeChar(char):
         SetCursorPos(x, min(y, end_y), max_offset=0)
         N10X.Editor.PopUndoGroup()
         EnterInsertMode()
+        should_save = True
 
     elif (m := re.match("c" + g_RepeatMatch + "([fFtT;])(.?)", c)):
         N10X.Editor.PushUndoGroup()
@@ -1649,6 +1761,7 @@ def HandleCommandModeChar(char):
         SetCursorPos(x=min(start[0], end[0]), max_offset=0)
         N10X.Editor.PopUndoGroup()
         EnterInsertMode()
+        should_save = True
 
     elif (m := re.match("c" + g_RepeatMatch, c)):
         return
@@ -1659,6 +1772,7 @@ def HandleCommandModeChar(char):
         N10X.Editor.InsertText(" ")
         N10X.Editor.ExecuteCommand("Delete")
         N10X.Editor.PopUndoGroup()
+        should_save = True
 
     elif c == ">":
         return
@@ -1671,6 +1785,7 @@ def HandleCommandModeChar(char):
         N10X.Editor.ClearSelection()
         SetCursorPos(x, y)
         N10X.Editor.PopUndoGroup()
+        should_save = True
 
     elif c == "<":
         return
@@ -1683,6 +1798,7 @@ def HandleCommandModeChar(char):
         N10X.Editor.ClearSelection()
         SetCursorPos(x, y)
         N10X.Editor.PopUndoGroup()
+        should_save = True
 
     # Undo/Redo
 
@@ -1845,6 +1961,7 @@ def HandleCommandModeChar(char):
                 N10X.Editor.ExecuteCommand("Paste")
                 MoveCursorPos(x_delta=-1, max_offset=0)
         N10X.Editor.PopUndoGroup()
+        should_save = True
 
     elif c == "P":
         N10X.Editor.PushUndoGroup()
@@ -1863,6 +1980,7 @@ def HandleCommandModeChar(char):
                 N10X.Editor.ExecuteCommand("Paste")
                 MoveCursorPos(x_delta=-1, max_offset=0)
         N10X.Editor.PopUndoGroup()
+        should_save = True
 
     # Marcos
 
@@ -1920,7 +2038,7 @@ def HandleCommandModeChar(char):
     else:
         print("[vim] Unknown command!")
 
-    g_Command = ""
+    ClearCommandStr(should_save)
 
 #------------------------------------------------------------------------
 def HandleCommandModeKey(key, shift, control, alt):
@@ -2040,7 +2158,7 @@ def HandleCommandModeKey(key, shift, control, alt):
             key.startswith("Mouse")
 
     if handled or pass_through:
-        g_Command = ""
+        ClearCommandStr(False)
 
     g_HandingKey = False
 
@@ -2048,8 +2166,25 @@ def HandleCommandModeKey(key, shift, control, alt):
 
     return not pass_through
 
+def RecordKey(buffer, key, shift, control, alt):
+    r = RecordedKey()
+    r.type = RecordedKey.KEY
+    r.key = key
+    r.shift = shift
+    r.control = control
+    r.alt = alt
+    buffer.append(r)
+
+def RecordCharKey(buffer, char):
+    r = RecordedKey()
+    r.type = RecordedKey.CHAR_KEY
+    r.char = char
+    buffer.append(r)
+
 #------------------------------------------------------------------------
 def HandleInsertModeKey(key, shift, control, alt):
+    global g_InsertBuffer
+
     if key == "Escape":
         EnterCommandMode(True)
         return True
@@ -2058,12 +2193,16 @@ def HandleInsertModeKey(key, shift, control, alt):
         EnterCommandMode(True)
         MoveCursorPos(x_delta=1, max_offset=0)
         return True
+    
+    RecordKey(g_InsertBuffer, key, shift, control, alt)
+    return False
 
 #------------------------------------------------------------------------
 def HandleInsertModeChar(char):
     global g_SingleReplace
     global g_MultiReplace
     global g_ReplaceUndoPushed
+    global g_InsertBuffer
 
     if g_SingleReplace or g_MultiReplace:
         if not g_ReplaceUndoPushed:
@@ -2078,6 +2217,7 @@ def HandleInsertModeChar(char):
         EnterCommandMode(True) #will pop undo
         return True
 
+    RecordCharKey(g_InsertBuffer, char)
     return False
 
 #------------------------------------------------------------------------
@@ -2095,6 +2235,8 @@ def HandleVisualModeChar(char):
     c = m.group(2)
     if not c:
         return
+
+    should_save = False
 
     if c == "v":
         if g_Mode == Mode.VISUAL:
@@ -2120,6 +2262,7 @@ def HandleVisualModeChar(char):
         N10X.Editor.ExecuteCommand("Cut")
         SetCursorPos(start[0], start[1])
         EnterCommandMode(True)
+        should_save = True
 
     elif c == "p":
         N10X.Editor.PushUndoGroup()
@@ -2136,12 +2279,14 @@ def HandleVisualModeChar(char):
                 MoveCursorPos(x_delta=-1, max_offset=0)
         N10X.Editor.PopUndoGroup()
         EnterCommandMode(True)
+        should_save = True
 
     elif c == "c":
         start, _ = SubmitVisualModeSelection()
         N10X.Editor.ExecuteCommand("Cut")
         SetCursorPos(start[0], start[1])
         EnterInsertMode()
+        should_save = True
 
     elif c == "0":
         MoveToStartOfLine()
@@ -2153,7 +2298,7 @@ def HandleVisualModeChar(char):
         MoveToEndOfFile()
 
     elif c == "{":
-       MoveToPreviousEmptyLine()
+        MoveToPreviousEmptyLine()
 
     elif c == "}":
         MoveToNextEmptyLine()
@@ -2256,7 +2401,7 @@ def HandleVisualModeChar(char):
     else:
         print("[vim] Unknown command!")
     
-    g_Command = ""
+    ClearCommandStr(should_save)
     UpdateVisualModeSelection()
 
 #------------------------------------------------------------------------
@@ -2303,6 +2448,10 @@ def OnInterceptKey(key, shift, control, alt):
 # Return true to surpress the char key.
 # If we are in command mode surpress all char keys
 def OnInterceptCharKey(c):
+    global g_HandleCharKeyIntercepts
+    if not g_HandleCharKeyIntercepts:
+        return False
+
     if N10X.Editor.TextEditorHasFocus():
         global g_Mode
         ret = g_Mode != Mode.INSERT
