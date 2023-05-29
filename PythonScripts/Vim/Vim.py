@@ -116,7 +116,7 @@ def SetCursorPos(x=None, y=None, max_offset=1, override_horizontal_target=True):
         line_start_x, line_start_y = GetFirstNonWhitespace(y)
         x = max(g_HorizontalTarget, line_start_x)
 
-    x = min(GetLineLength(y) - 1, x)
+    x = min(GetLineLength(y) - max_offset, x)
 
     N10X.Editor.SetCursorPos((x, y))
     g_PrevCursorX, g_PrevCursorY = N10X.Editor.GetCursorPos()
@@ -212,7 +212,7 @@ def MoveToLineText(action, search):
         if action == 'f':
             x = FindNextOccurrenceForward(search)
             if x:
-                    SetCursorPos(x=x)
+                SetCursorPos(x=x)
         elif action == 'F':
             x = FindNextOccurrenceBackward(search)
             if x:
