@@ -167,7 +167,7 @@ def FindNextOccurrenceBackward2(c):
     x, y = N10X.Editor.GetCursorPos()
     line = N10X.Editor.GetLine(y)
 
-    while y >= 0 :
+    while y >= 0:
         if x >= 0:
             line = line[:x + 1]
             index = line.rfind(c)
@@ -315,6 +315,7 @@ def EnterCommandMode(clear):
     global g_PaneSwap
 
     g_PaneSwap = False
+    g_Command = ""
 
     if g_Mode != Mode.COMMAND:
         clear = True
@@ -327,11 +328,10 @@ def EnterCommandMode(clear):
             g_ReplaceUndoPushed = False
             N10X.Editor.PopUndoGroup()
         was_visual = InVisualMode()
-        g_Command = ""
         N10X.Editor.ResetCursorBlink()
 
         if not was_visual:
-            MoveCursorPos(x_delta=-1, override_horizontal_target=False)
+            MoveCursorPos(x_delta=-1, override_horizontal_target=True)
 
     g_Mode = Mode.COMMAND
     UpdateCursorMode()
@@ -2049,7 +2049,7 @@ def HandleCommandModeKey(key, shift, control, alt):
 
 #------------------------------------------------------------------------
 def HandleInsertModeKey(key, shift, control, alt):
-    if key == "Escape" and not N10X.Editor.IsShowingAutocomplete():
+    if key == "Escape":
         EnterCommandMode(True)
         return True
 
