@@ -54,7 +54,6 @@ g_PaneSwap = False
 # 'r' and 'R' insert modes (respectively)
 g_SingleReplace = False
 g_MultiReplace = False
-g_ReplaceUndoPushed = False
 
 # position of the cursor before a significant "jump", allowing '' to target back
 g_LastJumpPoint = None
@@ -338,6 +337,7 @@ def EnterInsertMode():
         N10X.Editor.ResetCursorBlink()
         UpdateCursorMode()
 
+    N10X.Editor.PushUndoGroup()
     if g_PerformingDot:
         PlaybackBuffer(g_InsertBuffer)
         EnterCommandMode()
@@ -359,7 +359,6 @@ def EnterCommandMode():
     global g_Command
     global g_SingleReplace
     global g_MultiReplace
-    global g_ReplaceUndoPushed
     global g_PaneSwap
 
     g_PaneSwap = False
@@ -369,9 +368,8 @@ def EnterCommandMode():
         N10X.Editor.ClearSelection()
         g_SingleReplace = False
         g_MultiReplace = False
-        if g_ReplaceUndoPushed:
-            g_ReplaceUndoPushed = False
-            N10X.Editor.PopUndoGroup()
+        N10X.Editor.PopUndoGroup()
+
         was_visual = InVisualMode()
         N10X.Editor.ResetCursorBlink()
 
@@ -1125,9 +1123,11 @@ def HandleCommandModeChar(char):
             return
 
         g_PerformingDot = True
+        N10X.Editor.PushUndoGroup()
         for i in range(repeat_count):
             g_Command = last
             HandleCommandModeChar("")
+        N10X.Editor.PopUndoGroup();
 
         g_PerformingDot = False
         g_LastCommand = last
@@ -2198,13 +2198,9 @@ def HandleInsertModeKey(key, shift, control, alt):
 def HandleInsertModeChar(char):
     global g_SingleReplace
     global g_MultiReplace
-    global g_ReplaceUndoPushed
     global g_InsertBuffer
 
     if g_SingleReplace or g_MultiReplace:
-        if not g_ReplaceUndoPushed:
-            g_ReplaceUndoPushed = True
-            N10X.Editor.PushUndoGroup()
         x, y = N10X.Editor.GetCursorPos()
         SetSelection((x, y), (x, y))
         N10X.Editor.ExecuteCommand("Cut")
