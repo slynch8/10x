@@ -340,7 +340,7 @@ def EnterInsertMode():
 
     if g_PerformingDot:
         PlaybackBuffer(g_InsertBuffer)
-        EnterCommandMode(True)
+        EnterCommandMode()
     else:
         g_InsertBuffer = []
 
@@ -354,7 +354,7 @@ def ClearCommandStr(save=False):
     g_Command = ""
 
 #------------------------------------------------------------------------
-def EnterCommandMode(clear):
+def EnterCommandMode():
     global g_Mode
     global g_Command
     global g_SingleReplace
@@ -366,9 +366,6 @@ def EnterCommandMode(clear):
     ClearCommandStr(False)
 
     if g_Mode != Mode.COMMAND:
-        clear = True
-
-    if clear:
         N10X.Editor.ClearSelection()
         g_SingleReplace = False
         g_MultiReplace = False
@@ -460,7 +457,7 @@ def UpdateVisualModeSelection():
 #------------------------------------------------------------------------
 def SubmitVisualModeSelection():
     start_pos, end_pos = N10X.Editor.GetCursorSelection(cursor_index=1)
-    EnterCommandMode(True)
+    EnterCommandMode()
     N10X.Editor.SetSelection(start_pos, end_pos)
     return start_pos, end_pos
 
@@ -2055,7 +2052,7 @@ def HandleCommandModeKey(key, shift, control, alt):
     pass_through = False
 
     if key == "Escape":
-        EnterCommandMode(True)
+        EnterCommandMode()
 
     if g_PaneSwap:
         pass
@@ -2186,11 +2183,11 @@ def HandleInsertModeKey(key, shift, control, alt):
     global g_InsertBuffer
 
     if key == "Escape":
-        EnterCommandMode(True)
+        EnterCommandMode()
         return True
 
     if key == "C" and control:
-        EnterCommandMode(True)
+        EnterCommandMode()
         MoveCursorPos(x_delta=1, max_offset=0)
         return True
     
@@ -2214,7 +2211,7 @@ def HandleInsertModeChar(char):
     
     if g_SingleReplace:
         N10X.Editor.InsertText(char)
-        EnterCommandMode(True) #will pop undo
+        EnterCommandMode() #will pop undo
         return True
 
     RecordCharKey(g_InsertBuffer, char)
@@ -2240,13 +2237,13 @@ def HandleVisualModeChar(char):
 
     if c == "v":
         if g_Mode == Mode.VISUAL:
-            EnterCommandMode(True)
+            EnterCommandMode()
         else:
             g_Mode = Mode.VISUAL
 
     elif c == "V":
         if g_Mode == Mode.VISUAL_LINE:
-            EnterCommandMode(True)
+            EnterCommandMode()
         else:
             g_Mode = Mode.VISUAL_LINE
 
@@ -2254,14 +2251,14 @@ def HandleVisualModeChar(char):
         start, _ = SubmitVisualModeSelection()
         N10X.Editor.ExecuteCommand("Copy")
         N10X.Editor.ClearSelection()
-        EnterCommandMode(True)
+        EnterCommandMode()
         SetCursorPos(start[0], start[1])
 
     elif c == "d" or c == "x":
         start, _ = SubmitVisualModeSelection()
         N10X.Editor.ExecuteCommand("Cut")
         SetCursorPos(start[0], start[1])
-        EnterCommandMode(True)
+        EnterCommandMode()
         should_save = True
 
     elif c == "p":
@@ -2278,7 +2275,7 @@ def HandleVisualModeChar(char):
                 N10X.Editor.ExecuteCommand("Paste")
                 MoveCursorPos(x_delta=-1, max_offset=0)
         N10X.Editor.PopUndoGroup()
-        EnterCommandMode(True)
+        EnterCommandMode()
         should_save = True
 
     elif c == "c":
@@ -2518,7 +2515,7 @@ def EnableVim():
             print("[vim] Enabling Vim")
             N10X.Editor.AddOnInterceptCharKeyFunction(OnInterceptCharKey)
             N10X.Editor.AddOnInterceptKeyFunction(OnInterceptKey)
-            EnterCommandMode(True)
+            EnterCommandMode()
 
         else:
             print("[vim] Disabling Vim")
