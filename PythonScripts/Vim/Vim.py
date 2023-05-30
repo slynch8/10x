@@ -2184,7 +2184,7 @@ def HandleInsertModeKey(key, shift, control, alt):
 
     if key == "Escape":
         EnterCommandMode()
-        return True
+        return False
 
     if key == "C" and control:
         EnterCommandMode()
