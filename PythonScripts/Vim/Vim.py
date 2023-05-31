@@ -20,10 +20,6 @@ class Mode:
     VISUAL      = 2
     VISUAL_LINE = 3
 
-class Buffer:
-    records = []
-    tmp = []
-
 #------------------------------------------------------------------------
 g_Mode = Mode.INSERT
 
