@@ -348,7 +348,7 @@ def EnterInsertMode():
         UpdateCursorMode()
 
     if g_PerformingDot:
-        PlaybackBuffer(g_InsertBuffer)
+        PlaybackBuffer(g_InsertBuffer, True)
         EnterCommandMode()
     else:
         g_InsertBuffer = []
@@ -2477,12 +2477,19 @@ def ClearBuffer(buffer):
     buffer = []
 
 #------------------------------------------------------------------------
-def PlaybackBuffer(buffer):
-    for r in buffer:
-        if r.type == RecordedKey.KEY:
-            SendKey(r.key,r.shift,r.control,r.alt)
-        elif r.type == RecordedKey.CHAR_KEY:
-            SendCharKey(r.char)
+def PlaybackBuffer(buffer, ignoreIntercepts = False):
+    if ignoreIntercepts:
+        for r in buffer:
+            if r.type == RecordedKey.KEY:
+                SendKey(r.key,r.shift,r.control,r.alt)
+            elif r.type == RecordedKey.CHAR_KEY:
+                SendCharKey(r.char)
+    else:
+        for r in buffer:
+            if r.type == RecordedKey.KEY:
+                N10X.Editor.SendKey(r.key,r.shift,r.control,r.alt)
+            elif r.type == RecordedKey.CHAR_KEY:
+                N10X.Editor.SendCharKey(r.char)
 
 #------------------------------------------------------------------------
 # 10X Callbacks
