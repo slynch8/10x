@@ -46,8 +46,6 @@ g_RepeatMatch = "([1-9][0-9]*)?"
 # regex for getting the block tag
 g_BlockMatch = "([{}[\]<>\(\)])"
 
-g_StartedRecordingMacro = False
-
 # 'Ctrl+w` motions
 g_PaneSwap = False
 
@@ -81,6 +79,9 @@ class RecordedKey:
 g_LastCommand = ""
 g_InsertBuffer = []
 g_PerformingDot = False
+
+g_RecordingName = ""
+g_NamedBuffers = {}
 
 #------------------------------------------------------------------------
 def InVisualMode():
@@ -320,13 +321,6 @@ def SendCharKey(char):
     N10X.Editor.SendCharKey(char)
     g_HandleCharKeyIntercepts = True
 
-def PlaybackBuffer(buffer):
-    for r in buffer:
-        if r.type == RecordedKey.KEY:
-            SendKey(r.key,r.shift,r.control,r.alt)
-        elif r.type == RecordedKey.CHAR_KEY:
-            SendCharKey(r.char)
-
 #------------------------------------------------------------------------
 def EnterInsertMode():
     global g_Mode
@@ -339,7 +333,7 @@ def EnterInsertMode():
         UpdateCursorMode()
 
     if g_PerformingDot:
-        PlaybackBuffer(g_InsertBuffer)
+        PlaybackBuffer(g_InsertBuffer, True)
         EnterCommandMode()
     else:
         g_InsertBuffer = []
@@ -1063,7 +1057,6 @@ def HandleCommandModeChar(char):
     global g_Command
     global g_LastCommand
     global g_ReverseSearch
-    global g_StartedRecordingMacro
     global g_LastJumpPoint
     global g_JumpMap
     global g_SingleReplace
@@ -1071,6 +1064,8 @@ def HandleCommandModeChar(char):
     global g_SneakEnabled
     global g_PaneSwap
     global g_PerformingDot
+    global g_RecordingName
+    global g_NamedBuffers
 
     g_Command += char
 
@@ -1979,28 +1974,41 @@ def HandleCommandModeChar(char):
         N10X.Editor.PopUndoGroup()
         should_save = True
 
-    # Marcos
+    # Macros
 
-    elif c == "qa":
-        if not g_StartedRecordingMacro:
+    elif (m := re.match("q(.)", c)):
+        if g_RecordingName == "":
             N10X.Editor.ExecuteCommand("RecordKeySequence")
-            g_StartedRecordingMacro = True
+            g_RecordingName = m.group(1)
+            print("[vim] recording to "+g_RecordingName)
+            if not g_RecordingName in g_NamedBuffers:
+                g_NamedBuffers[g_RecordingName] = []
+            ClearBuffer(g_NamedBuffers[g_RecordingName])
 
     elif c == "q":
-        if g_StartedRecordingMacro:
+        if g_RecordingName != "":
+            # Stop Recording
             N10X.Editor.ExecuteCommand("RecordKeySequence")
-            g_StartedRecordingMacro = False
+            TrimBuffer(g_NamedBuffers[g_RecordingName]) # KEY(Q)
+            TrimBuffer(g_NamedBuffers[g_RecordingName]) # CHAR_KEY(q)
+            g_RecordingName = ""
         else:
             return
 
     elif c == "@":
         return
 
-    elif c == "@a" or c == "@@":
-        N10X.Editor.PushUndoGroup()
-        for i in range(repeat_count):
-            N10X.Editor.ExecuteCommand("PlaybackKeySequence")
-        N10X.Editor.PopUndoGroup()
+    elif (m := re.match("@(.)", c)):
+        if m.group(1) in g_NamedBuffers:
+            g_Command = "" # MUST CLEAR BEFORE PLAYBACK!
+            N10X.Editor.PushUndoGroup()
+            for i in range(repeat_count):
+                PlaybackBuffer(g_NamedBuffers[m.group(1)])
+                # N10X.Editor.ExecuteCommand("PlaybackKeySequence") # editor PlaybackKeySequence would play most recent, need to play named
+            N10X.Editor.PopUndoGroup()
+            return
+        else:
+            print("[vim] no named buffer \""+m.group(1)+"\" recorded")
 
     # Command Panel
 
@@ -2036,6 +2044,7 @@ def HandleCommandModeChar(char):
         print("[vim] Unknown command!")
 
     ClearCommandStr(should_save)
+
 
 #------------------------------------------------------------------------
 def HandleCommandModeKey(key, shift, control, alt):
@@ -2163,26 +2172,12 @@ def HandleCommandModeKey(key, shift, control, alt):
 
     return not pass_through
 
-def RecordKey(buffer, key, shift, control, alt):
-    r = RecordedKey()
-    r.type = RecordedKey.KEY
-    r.key = key
-    r.shift = shift
-    r.control = control
-    r.alt = alt
-    buffer.append(r)
-
-def RecordCharKey(buffer, char):
-    r = RecordedKey()
-    r.type = RecordedKey.CHAR_KEY
-    r.char = char
-    buffer.append(r)
 
 #------------------------------------------------------------------------
 def HandleInsertModeKey(key, shift, control, alt):
     global g_InsertBuffer
 
-    if key == "Escape":
+    if key == "Escape" and not N10X.Editor.IsShowingAutocomplete():
         EnterCommandMode()
         return True
 
@@ -2347,10 +2342,12 @@ def HandleVisualModeChar(char):
     elif c == ">":
         for _ in range(repeat_count):
             N10X.Editor.ExecuteCommand("IndentLine")
+        should_save = True
 
     elif c == "<":
         for _ in range(repeat_count):
             N10X.Editor.ExecuteCommand("UnindentLine")
+        should_save = True
     
     elif c == "i" or c == "a":
         # Stub for text-object motions.
@@ -2420,6 +2417,49 @@ def UpdateCursorMode():
         N10X.Editor.SetStatusBarText("")
 
 #------------------------------------------------------------------------
+# Recording
+
+#------------------------------------------------------------------------
+def RecordKey(buffer, key, shift, control, alt):
+    r = RecordedKey()
+    r.type = RecordedKey.KEY
+    r.key = key
+    r.shift = shift
+    r.control = control
+    r.alt = alt
+    buffer.append(r)
+
+#------------------------------------------------------------------------
+def RecordCharKey(buffer, char):
+    r = RecordedKey()
+    r.type = RecordedKey.CHAR_KEY
+    r.char = char
+    buffer.append(r)
+
+#------------------------------------------------------------------------
+def TrimBuffer(buffer):
+    buffer.pop()
+
+#------------------------------------------------------------------------
+def ClearBuffer(buffer):
+    buffer = []
+
+#------------------------------------------------------------------------
+def PlaybackBuffer(buffer, ignoreIntercepts = False):
+    if ignoreIntercepts:
+        for r in buffer:
+            if r.type == RecordedKey.KEY:
+                SendKey(r.key,r.shift,r.control,r.alt)
+            elif r.type == RecordedKey.CHAR_KEY:
+                SendCharKey(r.char)
+    else:
+        for r in buffer:
+            if r.type == RecordedKey.KEY:
+                N10X.Editor.SendKey(r.key,r.shift,r.control,r.alt)
+            elif r.type == RecordedKey.CHAR_KEY:
+                N10X.Editor.SendCharKey(r.char)
+
+#------------------------------------------------------------------------
 # 10X Callbacks
 
 #------------------------------------------------------------------------
@@ -2429,6 +2469,12 @@ def OnInterceptKey(key, shift, control, alt):
     global g_HandleKeyIntercepts
     if not g_HandleKeyIntercepts:
         return False
+
+    global g_RecordingName
+    global g_NamedBuffers
+
+    if g_RecordingName != "":
+        RecordKey(g_NamedBuffers[g_RecordingName],key,shift,control,alt)
 
     if N10X.Editor.TextEditorHasFocus():
         global g_Mode
@@ -2445,12 +2491,19 @@ def OnInterceptKey(key, shift, control, alt):
 # Return true to surpress the char key.
 # If we are in command mode surpress all char keys
 def OnInterceptCharKey(c):
+    global g_Mode
+
+    global g_RecordingName
+    global g_NamedBuffers
+
+    if g_RecordingName != "":
+        RecordCharKey(g_NamedBuffers[g_RecordingName],c)
+
     global g_HandleCharKeyIntercepts
     if not g_HandleCharKeyIntercepts:
         return False
 
     if N10X.Editor.TextEditorHasFocus():
-        global g_Mode
         ret = g_Mode != Mode.INSERT
         if g_Mode == Mode.INSERT:
             ret |= HandleInsertModeChar(c)
@@ -2487,11 +2540,11 @@ def HandleCommandPanelCommand(command):
         N10X.Editor.ExecuteCommand("CloseFile")
         return True
 
-    if command == ":q":
+    if command == ":q" or command == ":x":
         N10X.Editor.ExecuteCommand("CloseFile")
         return True
 
-    if command == ":q!":
+    if command == ":q!" or command == ":x!":
         N10X.Editor.DiscardUnsavedChanges()
         N10X.Editor.ExecuteCommand("CloseFile")
         return True
