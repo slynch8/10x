@@ -20,17 +20,6 @@ class Mode:
     VISUAL      = 2
     VISUAL_LINE = 3
 
-class Record:
-    KEY = 0
-    CHAR_KEY = 1
-
-    type = KEY
-    char = ""
-    key = ""
-    shift = False
-    control = False
-    alt = False
-
 class Buffer:
     records = []
     tmp = []
@@ -2189,23 +2178,6 @@ def HandleCommandModeKey(key, shift, control, alt):
 
 
 #------------------------------------------------------------------------
-def RecordKey(buffer, key, shift, control, alt):
-    r = RecordedKey()
-    r.type = RecordedKey.KEY
-    r.key = key
-    r.shift = shift
-    r.control = control
-    r.alt = alt
-    buffer.append(r)
-
-#------------------------------------------------------------------------
-def RecordCharKey(buffer, char):
-    r = RecordedKey()
-    r.type = RecordedKey.CHAR_KEY
-    r.char = char
-    buffer.append(r)
-
-#------------------------------------------------------------------------
 def HandleInsertModeKey(key, shift, control, alt):
     global g_InsertBuffer
 
@@ -2453,8 +2425,8 @@ def UpdateCursorMode():
 
 #------------------------------------------------------------------------
 def RecordKey(buffer, key, shift, control, alt):
-    r = Record()
-    r.type = Record.KEY
+    r = RecordedKey()
+    r.type = RecordedKey.KEY
     r.key = key
     r.shift = shift
     r.control = control
@@ -2463,8 +2435,8 @@ def RecordKey(buffer, key, shift, control, alt):
 
 #------------------------------------------------------------------------
 def RecordCharKey(buffer, char):
-    r = Record()
-    r.type = Record.CHAR_KEY
+    r = RecordedKey()
+    r.type = RecordedKey.CHAR_KEY
     r.char = char
     buffer.append(r)
 
