@@ -368,12 +368,12 @@ def EnterCommandMode():
         N10X.Editor.ClearSelection()
         g_SingleReplace = False
         g_MultiReplace = False
-        N10X.Editor.PopUndoGroup()
 
         was_visual = InVisualMode()
         N10X.Editor.ResetCursorBlink()
 
         if not was_visual:
+            N10X.Editor.PopUndoGroup()
             MoveCursorPos(x_delta=-1, override_horizontal_target=True)
 
     g_Mode = Mode.COMMAND
