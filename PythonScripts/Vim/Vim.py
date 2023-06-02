@@ -2562,6 +2562,7 @@ def EnableVim():
             print("[vim] Enabling Vim")
             N10X.Editor.AddOnInterceptCharKeyFunction(OnInterceptCharKey)
             N10X.Editor.AddOnInterceptKeyFunction(OnInterceptKey)
+            N10X.Editor.OverrideSetting("ReverseFindSelection","true")
             EnterCommandMode()
 
         else:
@@ -2570,6 +2571,7 @@ def EnableVim():
             N10X.Editor.ResetCursorMode()
             N10X.Editor.RemoveOnInterceptCharKeyFunction(OnInterceptCharKey)
             N10X.Editor.RemoveOnInterceptKeyFunction(OnInterceptKey)
+            N10X.Editor.RemoveSettingOverride("ReverseFindSelection")
 
     g_SneakEnabled = N10X.Editor.GetSetting("VimSneakEnabled") == "true"
 
