@@ -333,7 +333,7 @@ def EnterInsertMode():
 
     N10X.Editor.PushUndoGroup()
     if g_PerformingDot:
-        PlaybackBuffer(g_InsertBuffer, True)
+        PlaybackBuffer(g_InsertBuffer)
         EnterCommandMode()
     else:
         g_InsertBuffer = []
@@ -1552,13 +1552,13 @@ def HandleCommandModeChar(char):
         should_save = True
 
     elif c == "a":
-        EnterInsertMode()
         MoveCursorPos(x_delta=1, max_offset=0)
+        EnterInsertMode()
         should_save = True
 
     elif c == "A":
-        EnterInsertMode()
         SetCursorPos(x=GetLineLength(), max_offset=0)
+        EnterInsertMode()
         should_save = True
 
     elif c == "o":
@@ -1594,8 +1594,8 @@ def HandleCommandModeChar(char):
         N10X.Editor.ExecuteCommand("Cut")
         AddNewlineToClipboard()
         N10X.Editor.ExecuteCommand("InsertLine")
-        N10X.Editor.PopUndoGroup()
         EnterInsertMode()
+        N10X.Editor.PopUndoGroup()
         should_save = True
 
     elif c == "cg":
@@ -1608,8 +1608,8 @@ def HandleCommandModeChar(char):
         N10X.Editor.ExecuteCommand("Cut")
         AddNewlineToClipboard()
         N10X.Editor.ExecuteCommand("InsertLine")
-        N10X.Editor.PopUndoGroup()
         EnterInsertMode()
+        N10X.Editor.PopUndoGroup()
         should_save = True
 
     elif c == "cw":
@@ -1668,8 +1668,8 @@ def HandleCommandModeChar(char):
         if SelectOrMoveInsideQuote(action, True):
             N10X.Editor.PushUndoGroup()
             N10X.Editor.ExecuteCommand("Cut")
-            N10X.Editor.PopUndoGroup()
             EnterInsertMode()
+            N10X.Editor.PopUndoGroup()
         should_save = True
     
     elif (m := re.match("ca([`'\"])", c)):
@@ -1677,8 +1677,8 @@ def HandleCommandModeChar(char):
         if SelectAroundQuote(action):
             N10X.Editor.PushUndoGroup()
             N10X.Editor.ExecuteCommand("Cut")
-            N10X.Editor.PopUndoGroup()
             EnterInsertMode()
+            N10X.Editor.PopUndoGroup()
         should_save = True
 
     elif (m := re.match("c" + g_RepeatMatch + "([hl])", c)):
@@ -1698,8 +1698,8 @@ def HandleCommandModeChar(char):
         x, y = N10X.Editor.GetCursorPos()
         SetSelection((0, y), (max(0, x - 1), y))
         N10X.Editor.ExecuteCommand("Cut")
-        N10X.Editor.PopUndoGroup()
         EnterInsertMode()
+        N10X.Editor.PopUndoGroup()
         should_save = True
 
     elif c == "C" or c == "c$":
@@ -1707,8 +1707,8 @@ def HandleCommandModeChar(char):
         x, y = N10X.Editor.GetCursorPos()
         SetSelection((x, y), (GetLineLength(y), y))
         N10X.Editor.ExecuteCommand("Cut")
-        N10X.Editor.PopUndoGroup()
         EnterInsertMode()
+        N10X.Editor.PopUndoGroup()
         should_save = True
 
     elif (m := re.match("c" + g_RepeatMatch + "j", c)):
@@ -1720,8 +1720,8 @@ def HandleCommandModeChar(char):
         N10X.Editor.ExecuteCommand("Cut")
         AddNewlineToClipboard()
         SetCursorPos(x, min(y, end_y), max_offset=0)
-        N10X.Editor.PopUndoGroup()
         EnterInsertMode()
+        N10X.Editor.PopUndoGroup()
         should_save = True
 
     elif (m := re.match("c" + g_RepeatMatch + "k", c)):
@@ -1733,8 +1733,8 @@ def HandleCommandModeChar(char):
         N10X.Editor.ExecuteCommand("Cut")
         AddNewlineToClipboard()
         SetCursorPos(x, min(y, end_y), max_offset=0)
-        N10X.Editor.PopUndoGroup()
         EnterInsertMode()
+        N10X.Editor.PopUndoGroup()
         should_save = True
 
     elif (m := re.match("c" + g_RepeatMatch + "([fFtT;])(.?)", c)):
@@ -1751,8 +1751,8 @@ def HandleCommandModeChar(char):
         SetSelection(start, end)
         N10X.Editor.ExecuteCommand("Cut")
         SetCursorPos(x=min(start[0], end[0]), max_offset=0)
-        N10X.Editor.PopUndoGroup()
         EnterInsertMode()
+        N10X.Editor.PopUndoGroup()
         should_save = True
 
     elif (m := re.match("c" + g_RepeatMatch, c)):
@@ -1981,9 +1981,7 @@ def HandleCommandModeChar(char):
             N10X.Editor.ExecuteCommand("RecordKeySequence")
             g_RecordingName = m.group(1)
             print("[vim] recording to "+g_RecordingName)
-            if not g_RecordingName in g_NamedBuffers:
-                g_NamedBuffers[g_RecordingName] = []
-            ClearBuffer(g_NamedBuffers[g_RecordingName])
+            g_NamedBuffers[g_RecordingName] = []
 
     elif c == "q":
         if g_RecordingName != "":
@@ -2176,6 +2174,7 @@ def HandleCommandModeKey(key, shift, control, alt):
 #------------------------------------------------------------------------
 def HandleInsertModeKey(key, shift, control, alt):
     global g_InsertBuffer
+    global g_PerformingDot
 
     if key == "Escape" and not N10X.Editor.IsShowingAutocomplete():
         EnterCommandMode()
@@ -2186,7 +2185,8 @@ def HandleInsertModeKey(key, shift, control, alt):
         MoveCursorPos(x_delta=1, max_offset=0)
         return True
     
-    RecordKey(g_InsertBuffer, key, shift, control, alt)
+    if not g_PerformingDot:
+        RecordKey(g_InsertBuffer, key, shift, control, alt)
     return False
 
 #------------------------------------------------------------------------
@@ -2205,7 +2205,8 @@ def HandleInsertModeChar(char):
         EnterCommandMode() #will pop undo
         return True
 
-    RecordCharKey(g_InsertBuffer, char)
+    if not g_PerformingDot:
+        RecordCharKey(g_InsertBuffer, char)
     return False
 
 #------------------------------------------------------------------------
@@ -2437,23 +2438,13 @@ def TrimBuffer(buffer):
     buffer.pop()
 
 #------------------------------------------------------------------------
-def ClearBuffer(buffer):
-    buffer = []
-
-#------------------------------------------------------------------------
-def PlaybackBuffer(buffer, ignoreIntercepts = False):
-    if ignoreIntercepts:
-        for r in buffer:
-            if r.type == RecordedKey.KEY:
-                SendKey(r.key,r.shift,r.control,r.alt)
-            elif r.type == RecordedKey.CHAR_KEY:
-                SendCharKey(r.char)
-    else:
-        for r in buffer:
-            if r.type == RecordedKey.KEY:
-                N10X.Editor.SendKey(r.key,r.shift,r.control,r.alt)
-            elif r.type == RecordedKey.CHAR_KEY:
-                N10X.Editor.SendCharKey(r.char)
+def PlaybackBuffer(buffer):
+    global g_RecordingName
+    for r in buffer:
+        if r.type == RecordedKey.KEY:
+            N10X.Editor.SendKey(r.key,r.shift,r.control,r.alt)
+        elif r.type == RecordedKey.CHAR_KEY:
+            N10X.Editor.SendCharKey(r.char)
 
 #------------------------------------------------------------------------
 # 10X Callbacks
@@ -2466,51 +2457,58 @@ def OnInterceptKey(key, shift, control, alt):
     if not g_HandleKeyIntercepts:
         return False
 
-    global g_RecordingName
-    global g_NamedBuffers
-
-    if g_RecordingName != "":
-        RecordKey(g_NamedBuffers[g_RecordingName],key,shift,control,alt)
-
+    ret = False
     if N10X.Editor.TextEditorHasFocus():
+        global g_RecordingName
+        global g_NamedBuffers
+    
+        if g_RecordingName != "":
+            RecordKey(g_NamedBuffers[g_RecordingName],key,shift,control,alt)
+
         global g_Mode
-        if g_Mode != Mode.INSERT:
-            ret = HandleCommandModeKey(key, shift, control, alt)
-        else:
-            ret = HandleInsertModeKey(key, shift, control, alt)
+        match g_Mode:
+            case Mode.INSERT:
+                ret = HandleInsertModeKey(key, shift, control, alt)
+            case Mode.COMMAND:
+                ret = HandleCommandModeKey(key, shift, control, alt)
+            case Mode.VISUAL:
+                ret = HandleCommandModeKey(key, shift, control, alt)
+            case Mode.VISUAL_LINE:
+                ret = HandleCommandModeKey(key, shift, control, alt)
         UpdateCursorMode()
-        return ret
-    return False
+        
+    return ret
 
 #------------------------------------------------------------------------
 # Called when a char is to be inserted into the text editor.
 # Return true to surpress the char key.
 # If we are in command mode surpress all char keys
 def OnInterceptCharKey(c):
-    global g_Mode
-
-    global g_RecordingName
-    global g_NamedBuffers
-
-    if g_RecordingName != "":
-        RecordCharKey(g_NamedBuffers[g_RecordingName],c)
-
     global g_HandleCharKeyIntercepts
     if not g_HandleCharKeyIntercepts:
         return False
 
+    ret = False
     if N10X.Editor.TextEditorHasFocus():
-        ret = g_Mode != Mode.INSERT
-        if g_Mode == Mode.INSERT:
-            ret |= HandleInsertModeChar(c)
-        elif g_Mode == Mode.VISUAL or g_Mode == Mode.VISUAL_LINE:
-            HandleVisualModeChar(c)
-            N10X.Editor.SetCursorMode("Block")
-        elif g_Mode == Mode.COMMAND:
-            HandleCommandModeChar(c)
+        global g_RecordingName
+        global g_NamedBuffers
+    
+        if g_RecordingName != "":
+            RecordCharKey(g_NamedBuffers[g_RecordingName],c)
+
+        ret = True
+        global g_Mode
+        match g_Mode:
+            case Mode.INSERT:
+                ret = HandleInsertModeChar(c)
+            case Mode.COMMAND:
+                HandleCommandModeChar(c)
+            case Mode.VISUAL:
+                HandleVisualModeChar(c)
+            case Mode.VISUAL_LINE:
+                HandleVisualModeChar(c)
         UpdateCursorMode()
-        return ret
-    return False
+    return ret
 
 #------------------------------------------------------------------------
 def HandleCommandPanelCommand(command):
@@ -2564,6 +2562,7 @@ def EnableVim():
             print("[vim] Enabling Vim")
             N10X.Editor.AddOnInterceptCharKeyFunction(OnInterceptCharKey)
             N10X.Editor.AddOnInterceptKeyFunction(OnInterceptKey)
+            N10X.Editor.OverrideSetting("ReverseFindSelection","true")
             EnterCommandMode()
 
         else:
@@ -2572,6 +2571,7 @@ def EnableVim():
             N10X.Editor.ResetCursorMode()
             N10X.Editor.RemoveOnInterceptCharKeyFunction(OnInterceptCharKey)
             N10X.Editor.RemoveOnInterceptKeyFunction(OnInterceptKey)
+            N10X.Editor.RemoveSettingOverride("ReverseFindSelection")
 
     g_SneakEnabled = N10X.Editor.GetSetting("VimSneakEnabled") == "true"
 
