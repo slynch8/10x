@@ -869,6 +869,8 @@ def InitialiseRemedy():
     Editor.AddRestartDebuggingFunction(_RDBG_RestartDebugging)
 
     Editor.AddProjectBuildFunction(_RDBG_ProjectBuild)
+	
+    _RDBG_SettingsChanged()
 
 _rdbg_session:RDBG_Session = None
 _rdbg_options:RDBG_Options = None
