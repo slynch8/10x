@@ -108,6 +108,10 @@ def GetMaxY():
     return max(0, N10X.Editor.GetLineCount() - 1)
 
 #------------------------------------------------------------------------
+def Unhilight():
+    N10X.Editor.SetCursorPos(N10X.Editor.GetCursorPos())
+
+#------------------------------------------------------------------------
 def SetCursorPos(x=None, y=None, max_offset=1, override_horizontal_target=True):
 
     # If the program moved our cursor then always override the horizontal target
@@ -1128,6 +1132,7 @@ def HandleCommandModeChar(char):
         g_LastCommand = last
 
     # moving
+
     elif c == "h":
         for i in range(repeat_count):
             MoveCursorPos(x_delta=-1)
@@ -1228,6 +1233,11 @@ def HandleCommandModeChar(char):
 
     elif len(c) > 1 and c[0] == "m":
         g_JumpMap[c[1]] = N10X.Editor.GetCursorPos()
+
+    # misc
+
+    elif c == " ":
+        Unhilight()
     
     # Deleting
 
@@ -1532,15 +1542,18 @@ def HandleCommandModeChar(char):
     # Inserting
 
     elif c == "i":
+        Unhilight()
         EnterInsertMode()
         should_save = True
 
     elif c == "r":
+        Unhilight()
         EnterInsertMode()
         g_SingleReplace = True
         should_save = True
 
     elif c == "R":
+        Unhilight()
         EnterInsertMode()
         g_MultiReplace = True
         should_save = True
@@ -2337,13 +2350,25 @@ def HandleVisualModeChar(char):
         N10X.Editor.ExecuteCommand("MoveToMatchingBracket")
 
     elif c == ">":
+        N10X.Editor.PushUndoGroup()
         for _ in range(repeat_count):
             N10X.Editor.ExecuteCommand("IndentLine")
+        Unhilight()
+        # HACK FOR BROKEN ExecuteCommand("IndentLine")
+        N10X.Editor.ExecuteCommand("UnindentLine")
+        # /HACK
+        N10X.Editor.PopUndoGroup()
         should_save = True
 
     elif c == "<":
+        N10X.Editor.PushUndoGroup()
         for _ in range(repeat_count):
             N10X.Editor.ExecuteCommand("UnindentLine")
+        Unhilight()
+        # HACK FOR BROKEN ExecuteCommand("UnindentLine")
+        N10X.Editor.ExecuteCommand("IndentLine")
+        # /HACK
+        N10X.Editor.PopUndoGroup()
         should_save = True
     
     elif c == "i" or c == "a":
