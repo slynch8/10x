@@ -12,6 +12,7 @@ import time
 #
 #------------------------------------------------------------------------
 g_VimEnabled = False
+g_VimOverrideKeybindings = True
 
 #------------------------------------------------------------------------
 class Mode:
@@ -106,6 +107,10 @@ def GetLineLength(y=None):
 #------------------------------------------------------------------------
 def GetMaxY():
     return max(0, N10X.Editor.GetLineCount() - 1)
+
+#------------------------------------------------------------------------
+def Unhilight():
+    N10X.Editor.SetCursorPos(N10X.Editor.GetCursorPos())
 
 #------------------------------------------------------------------------
 def SetCursorPos(x=None, y=None, max_offset=1, override_horizontal_target=True):
@@ -1128,6 +1133,7 @@ def HandleCommandModeChar(char):
         g_LastCommand = last
 
     # moving
+
     elif c == "h":
         for i in range(repeat_count):
             MoveCursorPos(x_delta=-1)
@@ -1228,6 +1234,11 @@ def HandleCommandModeChar(char):
 
     elif len(c) > 1 and c[0] == "m":
         g_JumpMap[c[1]] = N10X.Editor.GetCursorPos()
+
+    # misc
+
+    elif c == " ":
+        Unhilight()
     
     # Deleting
 
@@ -1532,15 +1543,18 @@ def HandleCommandModeChar(char):
     # Inserting
 
     elif c == "i":
+        Unhilight()
         EnterInsertMode()
         should_save = True
 
     elif c == "r":
+        Unhilight()
         EnterInsertMode()
         g_SingleReplace = True
         should_save = True
 
     elif c == "R":
+        Unhilight()
         EnterInsertMode()
         g_MultiReplace = True
         should_save = True
@@ -2046,6 +2060,7 @@ def HandleCommandModeChar(char):
 
 #------------------------------------------------------------------------
 def HandleCommandModeKey(key, shift, control, alt):
+    global g_VimOverrideKeybindings
     global g_HandingKey
     global g_Command
     global g_PaneSwap
@@ -2054,6 +2069,11 @@ def HandleCommandModeKey(key, shift, control, alt):
         return
     g_HandingKey = True
 
+    overridden = False #not g_VimOverrideKeybindings and N10X.Editor.HasKeybinding(key, shift, control, alt)
+    if overridden:
+        ClearCommandStr(False)
+        return False
+
     handled = True
 
     pass_through = False
@@ -2061,7 +2081,7 @@ def HandleCommandModeKey(key, shift, control, alt):
     if key == "Escape":
         EnterCommandMode()
 
-    if g_PaneSwap:
+    elif g_PaneSwap:
         pass
 
     elif key == "/" and control:
@@ -2337,13 +2357,25 @@ def HandleVisualModeChar(char):
         N10X.Editor.ExecuteCommand("MoveToMatchingBracket")
 
     elif c == ">":
+        N10X.Editor.PushUndoGroup()
         for _ in range(repeat_count):
             N10X.Editor.ExecuteCommand("IndentLine")
+        Unhilight()
+        # HACK FOR BROKEN ExecuteCommand("IndentLine")
+        N10X.Editor.ExecuteCommand("UnindentLine")
+        # /HACK
+        N10X.Editor.PopUndoGroup()
         should_save = True
 
     elif c == "<":
+        N10X.Editor.PushUndoGroup()
         for _ in range(repeat_count):
             N10X.Editor.ExecuteCommand("UnindentLine")
+        Unhilight()
+        # HACK FOR BROKEN ExecuteCommand("UnindentLine")
+        N10X.Editor.ExecuteCommand("IndentLine")
+        # /HACK
+        N10X.Editor.PopUndoGroup()
         should_save = True
     
     elif c == "i" or c == "a":
@@ -2551,9 +2583,12 @@ def HandleCommandPanelCommand(command):
 #------------------------------------------------------------------------
 def EnableVim():
     global g_VimEnabled
+    global g_VimOverrideKeybindings
     global g_SneakEnabled
 
     enable_vim = N10X.Editor.GetSetting("Vim") == "true"
+    if N10X.Editor.GetSetting("VimOverrideKeybindings") == "false":
+        g_VimOverrideKeybindings = False;
 
     if g_VimEnabled != enable_vim:
         g_VimEnabled = enable_vim
