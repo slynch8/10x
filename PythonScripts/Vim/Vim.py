@@ -12,6 +12,7 @@ import time
 #
 #------------------------------------------------------------------------
 g_VimEnabled = False
+g_VimOverrideKeybindings = True
 
 #------------------------------------------------------------------------
 class Mode:
@@ -2059,6 +2060,7 @@ def HandleCommandModeChar(char):
 
 #------------------------------------------------------------------------
 def HandleCommandModeKey(key, shift, control, alt):
+    global g_VimOverrideKeybindings
     global g_HandingKey
     global g_Command
     global g_PaneSwap
@@ -2067,6 +2069,11 @@ def HandleCommandModeKey(key, shift, control, alt):
         return
     g_HandingKey = True
 
+    overridden = False #not g_VimOverrideKeybindings and N10X.Editor.HasKeybinding(key, shift, control, alt)
+    if overridden:
+        ClearCommandStr(False)
+        return False
+
     handled = True
 
     pass_through = False
@@ -2074,7 +2081,7 @@ def HandleCommandModeKey(key, shift, control, alt):
     if key == "Escape":
         EnterCommandMode()
 
-    if g_PaneSwap:
+    elif g_PaneSwap:
         pass
 
     elif key == "/" and control:
@@ -2576,9 +2583,12 @@ def HandleCommandPanelCommand(command):
 #------------------------------------------------------------------------
 def EnableVim():
     global g_VimEnabled
+    global g_VimOverrideKeybindings
     global g_SneakEnabled
 
     enable_vim = N10X.Editor.GetSetting("Vim") == "true"
+    if N10X.Editor.GetSetting("VimOverrideKeybindings") == "false":
+        g_VimOverrideKeybindings = False;
 
     if g_VimEnabled != enable_vim:
         g_VimEnabled = enable_vim
