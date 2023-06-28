@@ -1549,8 +1549,8 @@ def HandleCommandModeChar(char):
 
     elif c == "r":
         Unhilight()
-        EnterInsertMode()
         g_SingleReplace = True
+        EnterInsertMode()
         should_save = True
 
     elif c == "R":
@@ -2215,18 +2215,19 @@ def HandleInsertModeChar(char):
     global g_MultiReplace
     global g_InsertBuffer
 
+    if not g_PerformingDot:
+        RecordCharKey(g_InsertBuffer, char)
+
     if g_SingleReplace or g_MultiReplace:
         x, y = N10X.Editor.GetCursorPos()
         SetSelection((x, y), (x, y))
         N10X.Editor.ExecuteCommand("Cut")
-    
+
     if g_SingleReplace:
         N10X.Editor.InsertText(char)
         EnterCommandMode() #will pop undo
         return True
 
-    if not g_PerformingDot:
-        RecordCharKey(g_InsertBuffer, char)
     return False
 
 #------------------------------------------------------------------------
@@ -2483,13 +2484,13 @@ def PlaybackBuffer(buffer):
 
 #------------------------------------------------------------------------
 # Called when a key is pressed.
-# Return true to surpress the key
+# Return true to supress the key
 def OnInterceptKey(key, shift, control, alt):
     global g_HandleKeyIntercepts
     if not g_HandleKeyIntercepts:
         return False
 
-    ret = False
+    supress = False
     if N10X.Editor.TextEditorHasFocus():
         global g_RecordingName
         global g_NamedBuffers
@@ -2500,27 +2501,27 @@ def OnInterceptKey(key, shift, control, alt):
         global g_Mode
         match g_Mode:
             case Mode.INSERT:
-                ret = HandleInsertModeKey(key, shift, control, alt)
+                supress = HandleInsertModeKey(key, shift, control, alt)
             case Mode.COMMAND:
-                ret = HandleCommandModeKey(key, shift, control, alt)
+                supress = HandleCommandModeKey(key, shift, control, alt)
             case Mode.VISUAL:
-                ret = HandleCommandModeKey(key, shift, control, alt)
+                supress = HandleCommandModeKey(key, shift, control, alt)
             case Mode.VISUAL_LINE:
-                ret = HandleCommandModeKey(key, shift, control, alt)
+                supress = HandleCommandModeKey(key, shift, control, alt)
         UpdateCursorMode()
         
-    return ret
+    return supress
 
 #------------------------------------------------------------------------
 # Called when a char is to be inserted into the text editor.
 # Return true to surpress the char key.
-# If we are in command mode surpress all char keys
+# If we are in command mode supress all char keys
 def OnInterceptCharKey(c):
     global g_HandleCharKeyIntercepts
     if not g_HandleCharKeyIntercepts:
         return False
 
-    ret = False
+    supress = False
     if N10X.Editor.TextEditorHasFocus():
         global g_RecordingName
         global g_NamedBuffers
@@ -2528,11 +2529,11 @@ def OnInterceptCharKey(c):
         if g_RecordingName != "":
             RecordCharKey(g_NamedBuffers[g_RecordingName],c)
 
-        ret = True
+        supress = True
         global g_Mode
         match g_Mode:
             case Mode.INSERT:
-                ret = HandleInsertModeChar(c)
+                supress = HandleInsertModeChar(c)
             case Mode.COMMAND:
                 HandleCommandModeChar(c)
             case Mode.VISUAL:
@@ -2540,7 +2541,7 @@ def OnInterceptCharKey(c):
             case Mode.VISUAL_LINE:
                 HandleVisualModeChar(c)
         UpdateCursorMode()
-    return ret
+    return supress
 
 #------------------------------------------------------------------------
 def HandleCommandPanelCommand(command):
