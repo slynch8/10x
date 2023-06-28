@@ -1555,8 +1555,8 @@ def HandleCommandModeChar(char):
 
     elif c == "R":
         Unhilight()
-        EnterInsertMode()
         g_MultiReplace = True
+        EnterInsertMode()
         should_save = True
         
     elif c == "I":
