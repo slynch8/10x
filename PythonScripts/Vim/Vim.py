@@ -280,9 +280,9 @@ def GetClipboardValue():
             win32clipboard.CloseClipboard()
             break
         except Exception as ex:
-            if err.winerror == 5:  # access denied
+            if ex.winerror == 5:  # access denied
                 time.sleep( 0.01 )
-            elif err.winerror == 1418:  # doesn't have board open
+            elif ex.winerror == 1418:  # doesn't have board open
                 pass
             else:
                 pass
