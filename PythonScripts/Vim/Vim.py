@@ -222,9 +222,13 @@ def FindNextOccurrenceForward2(c):
 #------------------------------------------------------------------------
 def MoveToLineText(action, search):
     global g_LastSearch
-    if action == ';' and g_LastSearch:
-        MoveToLineText(g_LastSearch[0], g_LastSearch[1:])
-        return True
+    if g_LastSearch:
+        if action == ';':
+            MoveToLineText(g_LastSearch[0].lower(), g_LastSearch[1:])
+            return True
+        elif action == ',':
+            MoveToLineText(g_LastSearch[0].upper(), g_LastSearch[1:])
+            return True
     
     if not search:
         return False
@@ -1400,7 +1404,7 @@ def HandleCommandModeChar(char):
         N10X.Editor.PopUndoGroup()
         should_save = True
 
-    elif (m := re.match("d" + g_RepeatMatch + "([fFtT;])(.?)", c)):
+    elif (m := re.match("d" + g_RepeatMatch + "([fFtT;,])(.?)", c)):
         N10X.Editor.PushUndoGroup()
         count = int(m.group(1)) if m.group(1) else 1
         action = m.group(2)
@@ -1514,14 +1518,14 @@ def HandleCommandModeChar(char):
         g_LastJumpPoint = N10X.Editor.GetCursorPos()
         N10X.Editor.ExecuteCommand("FindInFile")
 
-    elif g_SneakEnabled and (m := re.match("([fFtTsS;])(.{0,2})", c)):
+    elif g_SneakEnabled and (m := re.match("([fFtTsS;,])(.{0,2})", c)):
         for i in range(repeat_count):
             action = m.group(1)
             search = m.group(2)
             if not MoveToLineText(action, search):
                 return
 
-    elif not g_SneakEnabled and (m := re.match("([fFtT;])(.?)", c)):
+    elif not g_SneakEnabled and (m := re.match("([fFtT;,])(.?)", c)):
         for i in range(repeat_count):
             action = m.group(1)
             search = m.group(2)
@@ -1751,7 +1755,7 @@ def HandleCommandModeChar(char):
         N10X.Editor.PopUndoGroup()
         should_save = True
 
-    elif (m := re.match("c" + g_RepeatMatch + "([fFtT;])(.?)", c)):
+    elif (m := re.match("c" + g_RepeatMatch + "([fFtT;,])(.?)", c)):
         N10X.Editor.PushUndoGroup()
         start = N10X.Editor.GetCursorPos()
         count = int(m.group(1)) if m.group(1) else 1
@@ -1931,7 +1935,7 @@ def HandleCommandModeChar(char):
         N10X.Editor.ExecuteCommand("Copy")
         SetCursorPos(x=start[0], y=min(start[1], end[1]))
 
-    elif (m := re.match("y" + g_RepeatMatch + "([fFtT;])(.?)", c)):
+    elif (m := re.match("y" + g_RepeatMatch + "([fFtT;,])(.?)", c)):
         start = N10X.Editor.GetCursorPos()
         count = int(m.group(1)) if m.group(1) else 1
         action = m.group(2)
@@ -2347,7 +2351,7 @@ def HandleVisualModeChar(char):
         for _ in range(repeat_count):
             MoveToWordStart()
 
-    elif (m := re.match("([fFtT;])(.?)", c)):
+    elif (m := re.match("([fFtT;,])(.?)", c)):
         for _ in range(repeat_count):
             action = m.group(1)
             search = m.group(2)
