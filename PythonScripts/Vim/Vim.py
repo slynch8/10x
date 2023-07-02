@@ -1174,6 +1174,9 @@ def HandleCommandModeChar(char):
         for i in range(repeat_count):
             MoveToTokenEnd()
 
+    elif c == "_":
+        MoveToFirstNonWhitespace()
+        
     elif c == "0":
         MoveToStartOfLine()
 
@@ -1458,6 +1461,16 @@ def HandleCommandModeChar(char):
         N10X.Editor.ExecuteCommand("Cut")
         N10X.Editor.PopUndoGroup()
         should_save = True
+        
+    elif c == "d_":
+        N10X.Editor.PushUndoGroup()
+        x, y = N10X.Editor.GetCursorPos()
+        end_x = max(0, x - 1)
+        first_x, first_y = GetFirstNonWhitespace(y) 
+        SetSelection((first_x, y), (end_x, y))
+        N10X.Editor.ExecuteCommand("Cut")
+        N10X.Editor.PopUndoGroup()
+        should_save = True
 
     elif c == "D" or c == "d$":
         N10X.Editor.PushUndoGroup()
@@ -1715,6 +1728,16 @@ def HandleCommandModeChar(char):
         EnterInsertMode()
         N10X.Editor.PopUndoGroup()
         should_save = True
+        
+    elif c == "c_":
+        N10X.Editor.PushUndoGroup()
+        x, y = N10X.Editor.GetCursorPos()
+        first_x, first_y = GetFirstNonWhitespace(y) 
+        SetSelection((first_x, y), (max(0, x - 1), y))
+        N10X.Editor.ExecuteCommand("Cut")
+        EnterInsertMode()
+        N10X.Editor.PopUndoGroup()
+        should_save = True
 
     elif c == "C" or c == "c$":
         N10X.Editor.PushUndoGroup()
@@ -1914,6 +1937,13 @@ def HandleCommandModeChar(char):
         SetSelection((0, y), (max(0, x - 1), y))
         N10X.Editor.ExecuteCommand("Copy")
         SetCursorPos(0, y)
+        
+    elif c == "y_":
+        x, y = N10X.Editor.GetCursorPos()
+        first_x, first_y = GetFirstNonWhitespace(y) 
+        SetSelection((first_x, y), (max(0, x - 1), y))
+        N10X.Editor.ExecuteCommand("Copy")
+        SetCursorPos(first_x, y)
 
     elif c == "y$":
         x, y = N10X.Editor.GetCursorPos()
@@ -2297,6 +2327,10 @@ def HandleVisualModeChar(char):
         SetCursorPos(start[0], start[1])
         EnterInsertMode()
         should_save = True
+    
+    elif c == "_":
+        MoveToFirstNonWhitespace()
+
 
     elif c == "0":
         MoveToStartOfLine()
