@@ -469,7 +469,7 @@ class RDBG_Session:
             if work_dir != '' and not os.path.isdir(work_dir):
                 Editor.ShowMessageBox(RDBG_TITLE, 'Debugger working directory is invalid: ' + work_dir)
 
-            args = _rdbg_options.executable + ' --servername ' + self.name + ' "' + debug_cmd + '"' + (' ' if debug_args!='' else '') + debug_args
+            args = _rdbg_options.executable + ' --servername ' + self.name + ' "' + Editor.GetWorkspaceExePath() + '"' + (' ' if debug_args!='' else '') + debug_args
             self.process = subprocess.Popen(args, cwd=work_dir)
             time.sleep(0.1)
 
