@@ -1281,6 +1281,12 @@ def HandleCommandModeChar(char):
 
     # misc
 
+    elif c == "z":
+        return
+
+    elif c == "zz":
+        N10X.Editor.CenterViewAtLinePos(N10X.Editor.GetCursorPos()[1])
+
     elif c == " ":
         Unhilight()
     
