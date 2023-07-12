@@ -1174,7 +1174,7 @@ def HandleCommandModeChar(char):
         for i in range(repeat_count):
             MoveToTokenEnd()
 
-    elif c == "_":
+    elif c == "_" or c == "^":
         MoveToFirstNonWhitespace()
         
     elif c == "0":
@@ -1462,7 +1462,7 @@ def HandleCommandModeChar(char):
         N10X.Editor.PopUndoGroup()
         should_save = True
         
-    elif c == "d_":
+    elif c == "d_" or c == "d^":
         N10X.Editor.PushUndoGroup()
         x, y = N10X.Editor.GetCursorPos()
         end_x = max(0, x - 1)
@@ -1729,7 +1729,7 @@ def HandleCommandModeChar(char):
         N10X.Editor.PopUndoGroup()
         should_save = True
         
-    elif c == "c_":
+    elif c == "c_" or c == "c^":
         N10X.Editor.PushUndoGroup()
         x, y = N10X.Editor.GetCursorPos()
         first_x, first_y = GetFirstNonWhitespace(y) 
@@ -1938,7 +1938,7 @@ def HandleCommandModeChar(char):
         N10X.Editor.ExecuteCommand("Copy")
         SetCursorPos(0, y)
         
-    elif c == "y_":
+    elif c == "y_" or c == "y^":
         x, y = N10X.Editor.GetCursorPos()
         first_x, first_y = GetFirstNonWhitespace(y) 
         SetSelection((first_x, y), (max(0, x - 1), y))
@@ -2328,7 +2328,7 @@ def HandleVisualModeChar(char):
         EnterInsertMode()
         should_save = True
     
-    elif c == "_":
+    elif c == "_" or c == "^":
         MoveToFirstNonWhitespace()
 
 
