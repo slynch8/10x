@@ -419,22 +419,32 @@ def AddVisualModeSelection(start, end):
 
     curr_start = g_VisualModeStartPos
     curr_end = N10X.Editor.GetCursorPos()
+    if curr_start == curr_end:
+        SetVisualModeSelection(start, end)
+        return
 
-    if curr_start[1] < start[1]:
-        min_start = curr_start
-    elif curr_start[1] > start[1]:
-        min_start = start
+    a = (0,0)
+    b = (0,0)
+    if start[1] < end[1]:
+        a = start
+        b = end
+    elif start[1] > end[1]:
+        a = end
+        b = start
     else:
-        min_start = (min(curr_start[0] + 1, start[0]), start[1])
+        a = (min(start[0], end[0]), start[1]) 
+        b = (max(start[0], end[0]), start[1])
 
-    if curr_end[1] > end[1]:
-        max_end = curr_end
-    elif curr_end[1] < end[1]:
-        max_end = end
+    if curr_start[1] < curr_end[1]:
+        curr_end = b 
+    elif curr_start[1] > curr_end[1]:
+        curr_end = a
+    elif curr_start[0] < curr_end[0]:
+        curr_end = b
     else:
-        max_end = (max(curr_end[0], end[0]), end[1])
+        curr_end = a
 
-    SetVisualModeSelection(min_start, max_end)
+    SetVisualModeSelection(curr_start, curr_end)
 
 #------------------------------------------------------------------------
 def UpdateVisualModeSelection():
@@ -716,30 +726,61 @@ def MoveToStartOfLine():
 #------------------------------------------------------------------------
 def MoveToEndOfLine():
     SetCursorPos(x=GetLineLength() - 1)
-
+    
 #------------------------------------------------------------------------
-def MoveToPreviousEmptyLine():
+def FindPreviousEmptyLine():
     x, y = N10X.Editor.GetCursorPos()
     while y > 0 :
       y = y - 1
       text = N10X.Editor.GetLine(y)
       if text.isspace():
-        SetCursorPos(0, y)
-        return
-    SetCursorPos(0, 0)
+        return y
+    return 0
 
 #------------------------------------------------------------------------
-def MoveToNextEmptyLine():
+def FindNextEmptyLine():
     line_count = N10X.Editor.GetLineCount()
     x, y = N10X.Editor.GetCursorPos()
     while y < line_count - 1:
       text = N10X.Editor.GetLine(y + 1)
       if not text or text.isspace():
-        SetCursorPos(0, y + 1)
-        return
+        return y
       y = y + 1
-    SetCursorPos(GetLineLength(y) - 1, line_count)
-      
+    return y
+
+#------------------------------------------------------------------------
+def MoveToPreviousEmptyLine():
+    SetCursorPos(0, FindPreviousEmptyLine())
+
+#------------------------------------------------------------------------
+def MoveToNextEmptyLine():
+    line_count = N10X.Editor.GetLineCount()
+    y = FindNextEmptyLine()
+    if y != line_count:
+        SetCursorPos(0, y + 1)
+    else:
+        SetCursorPos(GetLineLength(line_count - 1) - 1, line_count)
+
+#------------------------------------------------------------------------
+def GetAroundParagraphSelection():
+    line_count = N10X.Editor.GetLineCount()
+    start = (0, FindPreviousEmptyLine())
+    y_end = FindNextEmptyLine()
+    end = (0, 0) 
+    if y_end != line_count:
+        end = (0, y_end + 1)
+    else:
+        end = (GetLineLength(line_count - 1) - 1, line_count)
+    return (start, end)
+
+#------------------------------------------------------------------------
+def GetInsideParagraphSelection():
+    line_count = N10X.Editor.GetLineCount()
+    start = (0, FindPreviousEmptyLine() + 1)
+    y_end = FindNextEmptyLine()
+    end = (GetLineLength(y_end) - 1, y_end)
+    return (start, end)
+
 #------------------------------------------------------------------------
 def NormalizeBlockChar(c):
     match c:
@@ -1174,7 +1215,7 @@ def HandleCommandModeChar(char):
         for i in range(repeat_count):
             MoveToTokenEnd()
 
-    elif c == "_":
+    elif c == "_" or c == "^":
         MoveToFirstNonWhitespace()
         
     elif c == "0":
@@ -1240,6 +1281,12 @@ def HandleCommandModeChar(char):
 
     # misc
 
+    elif c == "z":
+        return
+
+    elif c == "zz":
+        N10X.Editor.CenterViewAtLinePos(N10X.Editor.GetCursorPos()[1])
+
     elif c == " ":
         Unhilight()
     
@@ -1279,6 +1326,24 @@ def HandleCommandModeChar(char):
     elif c == "daw":
         N10X.Editor.PushUndoGroup()
         start, end = GetAroundWordSelection(N10X.Editor.GetCursorPos())
+        SetSelection(start, end)
+        N10X.Editor.ExecuteCommand("Cut")
+        SetCursorPos(start[0], start[1])
+        N10X.Editor.PopUndoGroup()
+        should_save = True
+
+    elif c == "dip":
+        N10X.Editor.PushUndoGroup() 
+        start, end = GetInsideParagraphSelection()
+        SetSelection(start, end)
+        N10X.Editor.ExecuteCommand("Cut")
+        SetCursorPos(start[0], start[1])
+        N10X.Editor.PopUndoGroup()
+        should_save = True
+
+    elif c == "dap":
+        N10X.Editor.PushUndoGroup()
+        start, end = GetAroundParagraphSelection()
         SetSelection(start, end)
         N10X.Editor.ExecuteCommand("Cut")
         SetCursorPos(start[0], start[1])
@@ -1462,7 +1527,7 @@ def HandleCommandModeChar(char):
         N10X.Editor.PopUndoGroup()
         should_save = True
         
-    elif c == "d_":
+    elif c == "d_" or c == "d^":
         N10X.Editor.PushUndoGroup()
         x, y = N10X.Editor.GetCursorPos()
         end_x = max(0, x - 1)
@@ -1666,6 +1731,21 @@ def HandleCommandModeChar(char):
         EnterInsertMode()
         should_save = True
 
+    elif c == "cip":
+        start, end = GetInsideParagraphSelection()
+        SetSelection(start, end)
+        N10X.Editor.ExecuteCommand("Cut")
+        EnterInsertMode()
+        should_save = True
+
+    elif c == "cap":
+        start, end = GetAroundParagraphSelection()
+        SetSelection(start, end)
+        N10X.Editor.ExecuteCommand("Cut")
+        EnterInsertMode()
+        should_save = True
+
+
     elif (m := re.match("c" + g_RepeatMatch + "i" + g_BlockMatch, c)):
         count = int(m.group(1)) if m.group(1) else 1
         action = m.group(2)
@@ -1729,7 +1809,7 @@ def HandleCommandModeChar(char):
         N10X.Editor.PopUndoGroup()
         should_save = True
         
-    elif c == "c_":
+    elif c == "c_" or c == "c^":
         N10X.Editor.PushUndoGroup()
         x, y = N10X.Editor.GetCursorPos()
         first_x, first_y = GetFirstNonWhitespace(y) 
@@ -1885,6 +1965,18 @@ def HandleCommandModeChar(char):
         N10X.Editor.ExecuteCommand("Copy")
         SetCursorPos(start[0], start[1])
 
+    elif c == "yip":
+        start, end = GetInsideParagraphSelection()
+        SetSelection(start, end)
+        N10X.Editor.ExecuteCommand("Copy")
+        SetCursorPos(start[0], start[1])
+
+    elif c == "yap":
+        start, end = GetAroundParagraphSelection()
+        SetSelection(start, end)
+        N10X.Editor.ExecuteCommand("Copy")
+        SetCursorPos(start[0], start[1])
+
     elif (m := re.match("y" + g_RepeatMatch + "i" + g_BlockMatch, c)):
         count = int(m.group(1)) if m.group(1) else 1
         action = m.group(2)
@@ -1930,7 +2022,7 @@ def HandleCommandModeChar(char):
         end = N10X.Editor.GetCursorPos()
         SetSelection(start, end)
         N10X.Editor.ExecuteCommand("Copy")
-        SetCursorPos(x=min(start[0], end[0]-1))
+        SetCursorPos(x = start[0])
 
     elif c == "y0":
         x, y = N10X.Editor.GetCursorPos()
@@ -1938,7 +2030,7 @@ def HandleCommandModeChar(char):
         N10X.Editor.ExecuteCommand("Copy")
         SetCursorPos(0, y)
         
-    elif c == "y_":
+    elif c == "y_" or c == "y^":
         x, y = N10X.Editor.GetCursorPos()
         first_x, first_y = GetFirstNonWhitespace(y) 
         SetSelection((first_x, y), (max(0, x - 1), y))
@@ -2169,12 +2261,10 @@ def HandleCommandModeKey(key, shift, control, alt):
 
     elif key == "Y" and control:
         scroll_line = N10X.Editor.GetScrollLine()
-        MoveCursorPos(y_delta=-1)
         N10X.Editor.SetScrollLine(scroll_line - 1)
 
     elif key == "E" and control:
         scroll_line = N10X.Editor.GetScrollLine()
-        MoveCursorPos(y_delta=1)
         N10X.Editor.SetScrollLine(scroll_line + 1)
 
     elif key == "O" and control:
@@ -2328,7 +2418,7 @@ def HandleVisualModeChar(char):
         EnterInsertMode()
         should_save = True
     
-    elif c == "_":
+    elif c == "_" or c == "^":
         MoveToFirstNonWhitespace()
 
 
@@ -2416,6 +2506,14 @@ def HandleVisualModeChar(char):
     elif c == "i" or c == "a":
         # Stub for text-object motions.
         return
+
+    elif c == "ip":
+        start, end = GetInsideParagraphSelection()
+        AddVisualModeSelection(start, end)
+
+    elif c == "ap":
+        start, end = GetAroundParagraphSelection()
+        AddVisualModeSelection(start, end)
 
     # Following commands are visual char mode only, and will switch your mode.
     elif c == "iw":
