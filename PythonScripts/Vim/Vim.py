@@ -419,22 +419,32 @@ def AddVisualModeSelection(start, end):
 
     curr_start = g_VisualModeStartPos
     curr_end = N10X.Editor.GetCursorPos()
+    if curr_start == curr_end:
+        SetVisualModeSelection(start, end)
+        return
 
-    if curr_start[1] < start[1]:
-        min_start = curr_start
-    elif curr_start[1] > start[1]:
-        min_start = start
+    a = (0,0)
+    b = (0,0)
+    if start[1] < end[1]:
+        a = start
+        b = end
+    elif start[1] > end[1]:
+        a = end
+        b = start
     else:
-        min_start = (min(curr_start[0] + 1, start[0]), start[1])
+        a = (min(start[0], end[0]), start[1]) 
+        b = (max(start[0], end[0]), start[1])
 
-    if curr_end[1] > end[1]:
-        max_end = curr_end
-    elif curr_end[1] < end[1]:
-        max_end = end
+    if curr_start[1] < curr_end[1]:
+        curr_end = b 
+    elif curr_start[1] > curr_end[1]:
+        curr_end = a
+    elif curr_start[0] < curr_end[0]:
+        curr_end = b
     else:
-        max_end = (max(curr_end[0], end[0]), end[1])
+        curr_end = a
 
-    SetVisualModeSelection(min_start, max_end)
+    SetVisualModeSelection(curr_start, curr_end)
 
 #------------------------------------------------------------------------
 def UpdateVisualModeSelection():
