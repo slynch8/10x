@@ -726,30 +726,61 @@ def MoveToStartOfLine():
 #------------------------------------------------------------------------
 def MoveToEndOfLine():
     SetCursorPos(x=GetLineLength() - 1)
-
+    
 #------------------------------------------------------------------------
-def MoveToPreviousEmptyLine():
+def FindPreviousEmptyLine():
     x, y = N10X.Editor.GetCursorPos()
     while y > 0 :
       y = y - 1
       text = N10X.Editor.GetLine(y)
       if text.isspace():
-        SetCursorPos(0, y)
-        return
-    SetCursorPos(0, 0)
+        return y
+    return 0
 
 #------------------------------------------------------------------------
-def MoveToNextEmptyLine():
+def FindNextEmptyLine():
     line_count = N10X.Editor.GetLineCount()
     x, y = N10X.Editor.GetCursorPos()
     while y < line_count - 1:
       text = N10X.Editor.GetLine(y + 1)
       if not text or text.isspace():
-        SetCursorPos(0, y + 1)
-        return
+        return y
       y = y + 1
-    SetCursorPos(GetLineLength(y) - 1, line_count)
-      
+    return y
+
+#------------------------------------------------------------------------
+def MoveToPreviousEmptyLine():
+    SetCursorPos(0, FindPreviousEmptyLine())
+
+#------------------------------------------------------------------------
+def MoveToNextEmptyLine():
+    line_count = N10X.Editor.GetLineCount()
+    y = FindNextEmptyLine()
+    if y != line_count:
+        SetCursorPos(0, y + 1)
+    else:
+        SetCursorPos(GetLineLength(line_count - 1) - 1, line_count)
+
+#------------------------------------------------------------------------
+def GetAroundParagraphSelection():
+    line_count = N10X.Editor.GetLineCount()
+    start = (0, FindPreviousEmptyLine())
+    y_end = FindNextEmptyLine()
+    end = (0, 0) 
+    if y_end != line_count:
+        end = (0, y_end + 1)
+    else:
+        end = (GetLineLength(line_count - 1) - 1, line_count)
+    return (start, end)
+
+#------------------------------------------------------------------------
+def GetInsideParagraphSelection():
+    line_count = N10X.Editor.GetLineCount()
+    start = (0, FindPreviousEmptyLine() + 1)
+    y_end = FindNextEmptyLine()
+    end = (GetLineLength(y_end) - 1, y_end)
+    return (start, end)
+
 #------------------------------------------------------------------------
 def NormalizeBlockChar(c):
     match c:
@@ -2426,6 +2457,14 @@ def HandleVisualModeChar(char):
     elif c == "i" or c == "a":
         # Stub for text-object motions.
         return
+
+    elif c == "ip":
+        start, end = GetInsideParagraphSelection()
+        AddVisualModeSelection(start, end)
+
+    elif c == "ap":
+        start, end = GetAroundParagraphSelection()
+        AddVisualModeSelection(start, end)
 
     # Following commands are visual char mode only, and will switch your mode.
     elif c == "iw":
