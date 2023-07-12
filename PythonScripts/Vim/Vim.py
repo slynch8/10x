@@ -1326,6 +1326,24 @@ def HandleCommandModeChar(char):
         N10X.Editor.PopUndoGroup()
         should_save = True
 
+    elif c == "dip":
+        N10X.Editor.PushUndoGroup() 
+        start, end = GetInsideParagraphSelection()
+        SetSelection(start, end)
+        N10X.Editor.ExecuteCommand("Cut")
+        SetCursorPos(start[0], start[1])
+        N10X.Editor.PopUndoGroup()
+        should_save = True
+
+    elif c == "dap":
+        N10X.Editor.PushUndoGroup()
+        start, end = GetAroundParagraphSelection()
+        SetSelection(start, end)
+        N10X.Editor.ExecuteCommand("Cut")
+        SetCursorPos(start[0], start[1])
+        N10X.Editor.PopUndoGroup()
+        should_save = True
+
     elif (m := re.match("d" + g_RepeatMatch + "i" + g_BlockMatch, c)):
         N10X.Editor.PushUndoGroup()
         count = int(m.group(1)) if m.group(1) else 1
@@ -1707,6 +1725,21 @@ def HandleCommandModeChar(char):
         EnterInsertMode()
         should_save = True
 
+    elif c == "cip":
+        start, end = GetInsideParagraphSelection()
+        SetSelection(start, end)
+        N10X.Editor.ExecuteCommand("Cut")
+        EnterInsertMode()
+        should_save = True
+
+    elif c == "cap":
+        start, end = GetAroundParagraphSelection()
+        SetSelection(start, end)
+        N10X.Editor.ExecuteCommand("Cut")
+        EnterInsertMode()
+        should_save = True
+
+
     elif (m := re.match("c" + g_RepeatMatch + "i" + g_BlockMatch, c)):
         count = int(m.group(1)) if m.group(1) else 1
         action = m.group(2)
@@ -1922,6 +1955,18 @@ def HandleCommandModeChar(char):
 
     elif c == "yaw":
         start, end = GetAroundWordSelection(N10X.Editor.GetCursorPos())
+        SetSelection(start, end)
+        N10X.Editor.ExecuteCommand("Copy")
+        SetCursorPos(start[0], start[1])
+
+    elif c == "yip":
+        start, end = GetInsideParagraphSelection()
+        SetSelection(start, end)
+        N10X.Editor.ExecuteCommand("Copy")
+        SetCursorPos(start[0], start[1])
+
+    elif c == "yap":
+        start, end = GetAroundParagraphSelection()
         SetSelection(start, end)
         N10X.Editor.ExecuteCommand("Copy")
         SetCursorPos(start[0], start[1])
