@@ -2022,7 +2022,7 @@ def HandleCommandModeChar(char):
         end = N10X.Editor.GetCursorPos()
         SetSelection(start, end)
         N10X.Editor.ExecuteCommand("Copy")
-        SetCursorPos(x=min(start[0], end[0]-1))
+        SetCursorPos(x = start[0])
 
     elif c == "y0":
         x, y = N10X.Editor.GetCursorPos()
