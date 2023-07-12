@@ -2255,12 +2255,10 @@ def HandleCommandModeKey(key, shift, control, alt):
 
     elif key == "Y" and control:
         scroll_line = N10X.Editor.GetScrollLine()
-        MoveCursorPos(y_delta=-1)
         N10X.Editor.SetScrollLine(scroll_line - 1)
 
     elif key == "E" and control:
         scroll_line = N10X.Editor.GetScrollLine()
-        MoveCursorPos(y_delta=1)
         N10X.Editor.SetScrollLine(scroll_line + 1)
 
     elif key == "O" and control:
