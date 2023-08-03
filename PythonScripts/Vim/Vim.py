@@ -1253,10 +1253,12 @@ def HandleCommandModeChar(char):
         SetCursorPos(x, max(0, repeat_count - 1))
 
     elif c == "gt":
-        N10X.Editor.ExecuteCommand("NextPanelTab")
+        for i in range(repeat_count):
+            N10X.Editor.ExecuteCommand("NextPanelTab")
 
     elif c == "gT":
-        N10X.Editor.ExecuteCommand("PrevPanelTab")
+        for i in range(repeat_count):
+            N10X.Editor.ExecuteCommand("PrevPanelTab")
 
     elif c == "G":
         g_LastJumpPoint = N10X.Editor.GetCursorPos()
@@ -2486,25 +2488,25 @@ def HandleVisualModeChar(char):
         N10X.Editor.ExecuteCommand("MoveToMatchingBracket")
 
     elif c == ">":
+        start, end = SubmitVisualModeSelection()
         N10X.Editor.PushUndoGroup()
         for _ in range(repeat_count):
             N10X.Editor.ExecuteCommand("IndentLine")
         Unhilight()
-        # HACK FOR BROKEN ExecuteCommand("IndentLine")
-        N10X.Editor.ExecuteCommand("UnindentLine")
-        # /HACK
         N10X.Editor.PopUndoGroup()
+        g_Mode = Mode.VISUAL
+        SetVisualModeSelection(start, end)
         should_save = True
 
     elif c == "<":
+        start, end = SubmitVisualModeSelection()
         N10X.Editor.PushUndoGroup()
         for _ in range(repeat_count):
             N10X.Editor.ExecuteCommand("UnindentLine")
         Unhilight()
-        # HACK FOR BROKEN ExecuteCommand("UnindentLine")
-        N10X.Editor.ExecuteCommand("IndentLine")
-        # /HACK
         N10X.Editor.PopUndoGroup()
+        g_Mode = Mode.VISUAL
+        SetVisualModeSelection(start, end)
         should_save = True
     
     elif c == "i" or c == "a":
