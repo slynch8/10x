@@ -1253,7 +1253,9 @@ def HandleCommandModeChar(char):
         SetCursorPos(x, max(0, repeat_count - 1))
 
     elif c == "gt":
-        for i in range(repeat_count):
+        if has_repeat_count:
+            N10X.Editor.SetFocusedTab(repeat_count)
+        else:
             N10X.Editor.ExecuteCommand("NextPanelTab")
 
     elif c == "gT":
