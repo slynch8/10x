@@ -1,7 +1,7 @@
 '''
 RemedyBG debugger integration for 10x (10xeditor.com) 
 RemedyBG: https://remedybg.handmade.network/ (should be above 0.3.8)
-Version: 0.10.2
+Version: 0.10.3
 Original Script author: septag@discord
 
 To get started go to Settings.10x_settings, and enable the hook, by adding this line:
@@ -47,6 +47,9 @@ Extras:
     - RDBG_StepOut: Steps out of the current line when debugging, also updates the cursor position in 10x according to position in remedybg
 
 History:
+  0.10.3:
+    - Gracefully quitting RemedyBG 
+
   0.10.2:
     - moved the initialise onto the main thread
 
@@ -190,6 +193,15 @@ class RDBG_TargetState(IntEnum):
     SUSPENDED = 2
     EXECUTING = 3
 
+class RDBG_TargetBehavior(IntEnum):
+    TARGET_STOP_DEBUGGING = 1
+    TARGET_ABORT_COMMAND = 2
+
+class RDBG_ModifiedSessionBehavior(IntEnum):
+    IF_SESSION_IS_MODIFIED_SAVE_AND_CONTINUE = 1
+    IF_SESSION_IS_MODIFIED_CONTINUE_WITHOUT_SAVING = 2
+    IF_SESSION_IS_MODIFIED_ABORT_COMMAND = 3
+
 class RDBG_Command(IntEnum):
     BRING_DEBUGGER_TO_FOREGROUND = 50
     SET_WINDOW_POS = 51
@@ -297,7 +309,7 @@ class RDBG_Session:
             out_data = win32pipe.TransactNamedPipe(self.cmd_pipe, cmd_buffer.getvalue(), 8192, None)
         except pywintypes.error as pipe_error:
             print('RDBG', pipe_error)
-            self.close(stop=False)
+            self.close()
             return ('', 0)
 
         out_buffer = io.BytesIO(out_data[1])
@@ -394,6 +406,9 @@ class RDBG_Session:
             cmd_buffer.write(ctypes.c_int32(cmd_args['h'])) 
         elif cmd == RDBG_Command.GET_WINDOW_POS:
             pass
+        elif cmd == RDBG_Command.COMMAND_EXIT_DEBUGGER:
+            cmd_buffer.write(ctypes.c_uint8(RDBG_TargetBehavior.TARGET_STOP_DEBUGGING))
+            cmd_buffer.write(ctypes.c_uint8(RDBG_ModifiedSessionBehavior.IF_SESSION_IS_MODIFIED_CONTINUE_WITHOUT_SAVING))
         else:
             assert 0
             return 0		# not implemented
@@ -402,7 +417,7 @@ class RDBG_Session:
             out_data = win32pipe.TransactNamedPipe(self.cmd_pipe, cmd_buffer.getvalue(), 8192, None)
         except pywintypes.error as pipe_error:
             print('RDBG', pipe_error)
-            self.close(stop=False)
+            self.close()
             return 0
 
         out_buffer = io.BytesIO(out_data[1])		
@@ -523,9 +538,9 @@ class RDBG_Session:
         
         return True
 
-    def close(self, stop=True):
-        if stop:
-            self.stop()
+    def close(self):
+        if self.process is not None:
+            self.send_command(RDBG_Command.COMMAND_EXIT_DEBUGGER)
 
         if self.cmd_pipe:
             win32file.CloseHandle(self.cmd_pipe)
@@ -536,7 +551,8 @@ class RDBG_Session:
             self.event_pipe = None
 
         if self.process is not None:
-            self.process.kill()
+            self.process.wait()
+            print('RDBG: RemedyBG quit with code: %i' % (self.process.returncode))
             self.process = None
 
         print("RDBG: Connection closed")
@@ -580,25 +596,27 @@ class RDBG_Session:
 
         tm:float = time.time()
 
-        # do regular checks every one second
-        if tm - self.last_poll_time >= 1.0:
+        # do regular checks
+        if tm - self.last_poll_time >= 3.0:
             self.last_poll_time = tm
 
             if self.process is None:
                 return False
-
+            
+            # Check if the user closed the RemedyBG manually
             if self.process is not None and self.process.poll() is not None:
                 print('RDBG: RemedyBG quit with code: %i' % (self.process.poll()))
                 self.process = None
-                self.close(stop=False)
+                self.close()
                 return False
-
+            
+            # Check if the active config/project has changed
             if self.update_active_project():
                 if _rdbg_options.keep_session:
                     self.process = None
                 else:
                     print('RDBG: Active project changed. Closing session...')
-                self.close(stop=False)
+                self.close()
                 return False
 
         if self.process is not None and self.event_pipe is not None:
@@ -692,7 +710,7 @@ class RDBG_Session:
 
             except win32api.error as pipe_error:
                 print('RDBG:', pipe_error)
-                self.close(stop=False)
+                self.close()
                 return False
             
         return True
@@ -708,7 +726,7 @@ def RDBG_StartDebugging():
             else:
                 print('RDBG: Project config/platform changed. Restarting RemedyBG ...')
                 
-            _rdbg_session.close(stop=False)
+            _rdbg_session.close()
             _rdbg_session = None
             RDBG_StartDebugging()
 
