@@ -6,6 +6,9 @@ Original Script author: septag@discord
 
 To get started go to Settings.10x_settings, and enable the hook, by adding this line:
     RemedyBG.Hook: true
+	
+If RemedyBG.exe is not in your PATH env var you must also set RemedyBG.Path (see below)
+	
 You can add other options listed below in 'RDBG_Options' as individual lines in the settings file.
 You can also hook commands to key bindings by going to Settings->Key Bindings... and adding the lines in the file. for example:
     F10:	    RDBG_StepOver
