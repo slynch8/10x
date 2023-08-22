@@ -1320,6 +1320,19 @@ def HandleCommandModeChar(char):
         N10X.Editor.PopUndoGroup()
         should_save = True
 
+    elif c == "de":
+        N10X.Editor.PushUndoGroup()
+        start = N10X.Editor.GetCursorPos()
+        for i in range(repeat_count):
+            MoveToWordEnd()
+        end = N10X.Editor.GetCursorPos()
+        if start != end:
+            end = (max(0, end[0]), end[1])
+            SetSelection(start, end)
+            N10X.Editor.ExecuteCommand("Cut")
+        N10X.Editor.PopUndoGroup()
+        should_save = True
+
     elif c == "dw":
         N10X.Editor.PushUndoGroup()
         start = N10X.Editor.GetCursorPos()
