@@ -42,7 +42,8 @@ g_HandleKeyIntercepts = True
 g_HandleCharKeyIntercepts = True
 
 # the last line search performed
-g_LastSearch = None
+g_LastCharSearch = None
+g_ReverseCharSearch = False
 g_ReverseSearch = False
 
 # regex for getting the repeat count for a command
@@ -223,16 +224,24 @@ def FindNextOccurrenceForward2(c):
         x = 0
         y += 1
     return None, None
-
+    
 #------------------------------------------------------------------------
 def MoveToLineText(action, search):
-    global g_LastSearch
-    if g_LastSearch:
+    global g_LastCharSearch
+    global g_ReverseCharSearch
+
+    if g_LastCharSearch:
         if action == ';':
-            MoveToLineText(g_LastSearch[0].lower(), g_LastSearch[1:])
+            if g_ReverseCharSearch:
+                MoveToLineText(g_LastCharSearch[0].upper(), g_LastCharSearch[1:])
+            else:
+                MoveToLineText(g_LastCharSearch[0].lower(), g_LastCharSearch[1:])
             return True
         elif action == ',':
-            MoveToLineText(g_LastSearch[0].upper(), g_LastSearch[1:])
+            if g_ReverseCharSearch:
+                MoveToLineText(g_LastCharSearch[0].lower(), g_LastCharSearch[1:])
+            else:
+                MoveToLineText(g_LastCharSearch[0].upper(), g_LastCharSearch[1:])
             return True
     
     if not search:
@@ -243,22 +252,26 @@ def MoveToLineText(action, search):
             x = FindNextOccurrenceForward(search)
             if x:
                 SetCursorPos(x=x)
+            g_ReverseCharSearch = False
         elif action == 'F':
             x = FindNextOccurrenceBackward(search)
             if x:
                 SetCursorPos(x=x)
+            g_ReverseCharSearch = True
         elif action == 't':
             x = FindNextOccurrenceForward(search)
             if x:
                 SetCursorPos(x=x-1)
+            g_ReverseCharSearch = False
         elif action == 'T':
             x = FindNextOccurrenceBackward(search)
             if x:
                 SetCursorPos(x=x+1)
+            g_ReverseCharSearch = True
         else:
            return False
     
-        g_LastSearch = action + search
+        g_LastCharSearch = action + search
         return True
     elif len(search) == 2 and g_SneakEnabled:
         if action == 's':
@@ -272,7 +285,7 @@ def MoveToLineText(action, search):
         else:
             return False
  
-        g_LastSearch = action + search
+        g_LastCharSearch = action + search
         return True
     else:
        return False 
