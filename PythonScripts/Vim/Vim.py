@@ -20,7 +20,7 @@ class Mode:
     COMMAND     = 1
     VISUAL      = 2
     VISUAL_LINE = 3
-    SUSPENDED     = 4 # Vim is enabled but all vim bindings are disabled except for vim command panel commands
+    SUSPENDED   = 4 # Vim is enabled but all vim bindings are disabled except for vim command panel commands
 
 #------------------------------------------------------------------------
 g_Mode = Mode.INSERT
@@ -129,9 +129,9 @@ def SetCursorPos(x=None, y=None, max_offset=1, override_horizontal_target=True):
         override_horizontal_target=True
         
     if x is None:
-      x, _ = N10X.Editor.GetCursorPos()
+      x = CurrentX
     if y is None:
-      _, y = N10X.Editor.GetCursorPos()
+      y = CurrentY
 
     y = Clamp(0, GetMaxY(), y)
     
@@ -2527,25 +2527,37 @@ def HandleVisualModeChar(char):
         N10X.Editor.ExecuteCommand("MoveToMatchingBracket")
 
     elif c == ">":
+        old_Mode = g_Mode
         start, end = SubmitVisualModeSelection()
         N10X.Editor.PushUndoGroup()
         for _ in range(repeat_count):
             N10X.Editor.ExecuteCommand("IndentLine")
         Unhilight()
         N10X.Editor.PopUndoGroup()
-        g_Mode = Mode.VISUAL
-        SetVisualModeSelection(start, end)
+        g_Mode = old_Mode
+        if g_Mode == Mode.VISUAL_LINE:
+          y = end[1]-1
+          x = GetLineLength(end[1]-1)
+          SetVisualModeSelection(start, (x,y))
+        else:
+          SetVisualModeSelection(start, end)
         should_save = True
 
     elif c == "<":
+        old_Mode = g_Mode
         start, end = SubmitVisualModeSelection()
         N10X.Editor.PushUndoGroup()
         for _ in range(repeat_count):
             N10X.Editor.ExecuteCommand("UnindentLine")
         Unhilight()
         N10X.Editor.PopUndoGroup()
-        g_Mode = Mode.VISUAL
-        SetVisualModeSelection(start, end)
+        g_Mode = old_Mode
+        if g_Mode == Mode.VISUAL_LINE:
+          y = end[1]-1
+          x = GetLineLength(end[1]-1)
+          SetVisualModeSelection(start, (x,y))
+        else:
+          SetVisualModeSelection(start, end)
         should_save = True
     
     elif c == "i" or c == "a":
