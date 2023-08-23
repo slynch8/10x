@@ -2537,7 +2537,7 @@ def HandleVisualModeChar(char):
         g_Mode = old_Mode
         if g_Mode == Mode.VISUAL_LINE:
           y = end[1]-1
-          x = GetLineLength(end[1]-1)
+          x = GetLineLength(y)
           SetVisualModeSelection(start, (x,y))
         else:
           SetVisualModeSelection(start, end)
@@ -2554,7 +2554,7 @@ def HandleVisualModeChar(char):
         g_Mode = old_Mode
         if g_Mode == Mode.VISUAL_LINE:
           y = end[1]-1
-          x = GetLineLength(end[1]-1)
+          x = GetLineLength(y)
           SetVisualModeSelection(start, (x,y))
         else:
           SetVisualModeSelection(start, end)
