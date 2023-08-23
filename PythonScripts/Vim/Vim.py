@@ -20,7 +20,7 @@ class Mode:
     COMMAND     = 1
     VISUAL      = 2
     VISUAL_LINE = 3
-    SUSPENDED     = 4 # Vim is enabled but all vim bindings are disabled except for vim command panel commands
+    SUSPENDED   = 4 # Vim is enabled but all vim bindings are disabled except for vim command panel commands
 
 #------------------------------------------------------------------------
 g_Mode = Mode.INSERT
@@ -42,7 +42,8 @@ g_HandleKeyIntercepts = True
 g_HandleCharKeyIntercepts = True
 
 # the last line search performed
-g_LastSearch = None
+g_LastCharSearch = None
+g_ReverseCharSearch = False
 g_ReverseSearch = False
 
 # regex for getting the repeat count for a command
@@ -128,9 +129,9 @@ def SetCursorPos(x=None, y=None, max_offset=1, override_horizontal_target=True):
         override_horizontal_target=True
         
     if x is None:
-      x, _ = N10X.Editor.GetCursorPos()
+      x = CurrentX
     if y is None:
-      _, y = N10X.Editor.GetCursorPos()
+      y = CurrentY
 
     y = Clamp(0, GetMaxY(), y)
     
@@ -223,16 +224,24 @@ def FindNextOccurrenceForward2(c):
         x = 0
         y += 1
     return None, None
-
+    
 #------------------------------------------------------------------------
 def MoveToLineText(action, search):
-    global g_LastSearch
-    if g_LastSearch:
+    global g_LastCharSearch
+    global g_ReverseCharSearch
+
+    if g_LastCharSearch:
         if action == ';':
-            MoveToLineText(g_LastSearch[0].lower(), g_LastSearch[1:])
+            if g_ReverseCharSearch:
+                MoveToLineText(g_LastCharSearch[0].upper(), g_LastCharSearch[1:])
+            else:
+                MoveToLineText(g_LastCharSearch[0].lower(), g_LastCharSearch[1:])
             return True
         elif action == ',':
-            MoveToLineText(g_LastSearch[0].upper(), g_LastSearch[1:])
+            if g_ReverseCharSearch:
+                MoveToLineText(g_LastCharSearch[0].lower(), g_LastCharSearch[1:])
+            else:
+                MoveToLineText(g_LastCharSearch[0].upper(), g_LastCharSearch[1:])
             return True
     
     if not search:
@@ -243,22 +252,26 @@ def MoveToLineText(action, search):
             x = FindNextOccurrenceForward(search)
             if x:
                 SetCursorPos(x=x)
+            g_ReverseCharSearch = False
         elif action == 'F':
             x = FindNextOccurrenceBackward(search)
             if x:
                 SetCursorPos(x=x)
+            g_ReverseCharSearch = True
         elif action == 't':
             x = FindNextOccurrenceForward(search)
             if x:
                 SetCursorPos(x=x-1)
+            g_ReverseCharSearch = False
         elif action == 'T':
             x = FindNextOccurrenceBackward(search)
             if x:
                 SetCursorPos(x=x+1)
+            g_ReverseCharSearch = True
         else:
            return False
     
-        g_LastSearch = action + search
+        g_LastCharSearch = action + search
         return True
     elif len(search) == 2 and g_SneakEnabled:
         if action == 's':
@@ -272,7 +285,7 @@ def MoveToLineText(action, search):
         else:
             return False
  
-        g_LastSearch = action + search
+        g_LastCharSearch = action + search
         return True
     else:
        return False 
@@ -2514,25 +2527,37 @@ def HandleVisualModeChar(char):
         N10X.Editor.ExecuteCommand("MoveToMatchingBracket")
 
     elif c == ">":
+        old_Mode = g_Mode
         start, end = SubmitVisualModeSelection()
         N10X.Editor.PushUndoGroup()
         for _ in range(repeat_count):
             N10X.Editor.ExecuteCommand("IndentLine")
         Unhilight()
         N10X.Editor.PopUndoGroup()
-        g_Mode = Mode.VISUAL
-        SetVisualModeSelection(start, end)
+        g_Mode = old_Mode
+        if g_Mode == Mode.VISUAL_LINE:
+          y = end[1]-1
+          x = GetLineLength(y)
+          SetVisualModeSelection(start, (x,y))
+        else:
+          SetVisualModeSelection(start, end)
         should_save = True
 
     elif c == "<":
+        old_Mode = g_Mode
         start, end = SubmitVisualModeSelection()
         N10X.Editor.PushUndoGroup()
         for _ in range(repeat_count):
             N10X.Editor.ExecuteCommand("UnindentLine")
         Unhilight()
         N10X.Editor.PopUndoGroup()
-        g_Mode = Mode.VISUAL
-        SetVisualModeSelection(start, end)
+        g_Mode = old_Mode
+        if g_Mode == Mode.VISUAL_LINE:
+          y = end[1]-1
+          x = GetLineLength(y)
+          SetVisualModeSelection(start, (x,y))
+        else:
+          SetVisualModeSelection(start, end)
         should_save = True
     
     elif c == "i" or c == "a":
