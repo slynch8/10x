@@ -25,8 +25,6 @@ class Mode:
 #------------------------------------------------------------------------
 g_Mode = Mode.INSERT
 
-# Vim bindings are temporarily disabled using :dv (DisableVim), they can be re-enabled using :ev (EnableVim)
-g_VimSuspended = False
 
 # position of the cursor when visual mode was entered
 g_VisualModeStartPos = None
@@ -2251,6 +2249,12 @@ def HandleCommandModeKey(key, shift, control, alt):
     elif g_PaneSwap:
         pass
 
+    # Turn Vim bindings off
+    elif key == "F12" and control and shift:
+        print("[vim] vim bindings disabled")
+        N10X.Editor.RemoveSettingOverride("ReverseFindSelection")
+        EnterSuspendedMode()
+
     elif key == "/" and control:
         x, y = N10X.Editor.GetCursorPos()
         if InVisualMode():
@@ -2618,11 +2622,12 @@ def HandleVisualModeChar(char):
     UpdateVisualModeSelection()
 
 #------------------------------------------------------------------------
-def HandleSuspendedModeChar(char):
+def HandleSuspendedModeKey(key, shift, control, alt):
 
-    if char == ":":
-        N10X.Editor.ExecuteCommand("ShowCommandPanel")
-        N10X.Editor.SetCommandPanelText(":")
+    if key == "F12" and control and shift:
+        print("[vim] vim bindings enabled")
+        N10X.Editor.OverrideSetting("ReverseFindSelection","true")
+        EnterCommandMode()
         return True
 
     return False
@@ -2710,6 +2715,8 @@ def OnInterceptKey(key, shift, control, alt):
                 supress = HandleCommandModeKey(key, shift, control, alt)
             case Mode.VISUAL_LINE:
                 supress = HandleCommandModeKey(key, shift, control, alt)
+            case Mode.SUSPENDED:
+                supress = HandleSuspendedModeKey(key, shift, control, alt)
         UpdateCursorMode()
         
     return supress
@@ -2743,13 +2750,13 @@ def OnInterceptCharKey(c):
             case Mode.VISUAL_LINE:
                 HandleVisualModeChar(c)
             case Mode.SUSPENDED:
-                supress = HandleSuspendedModeChar(c)
+                supress = False
+
         UpdateCursorMode()
     return supress
 
 #------------------------------------------------------------------------
 def HandleCommandPanelCommand(command):
-    global g_VimSuspended
 
     if command == ":sp":
         print("[vim] "+command+" (split) unimplemented")
@@ -2781,20 +2788,6 @@ def HandleCommandPanelCommand(command):
         N10X.Editor.ExecuteCommand("CloseFile")
         return True
     
-    # Disable Vim bindings
-    if command == ":dv":
-        print("[vim] vim bindings disabled")
-        N10X.Editor.RemoveSettingOverride("ReverseFindSelection")
-        EnterSuspendedMode()
-        return True
-     
-    # Enable Vim bindings
-    if command == ":ev":
-        print("[vim] vim bindings enabled")
-        N10X.Editor.OverrideSetting("ReverseFindSelection","true")
-        EnterCommandMode()
-        return True
-    
     split = command.split(":")
     if len(split) == 2 and split[1].isdecimal(): 
         SetCursorPos(y=int(split[1]) - 1)
@@ -2803,11 +2796,10 @@ def HandleCommandPanelCommand(command):
 #------------------------------------------------------------------------
 def EnableVim():
     global g_VimEnabled
-    global g_VimSuspended
     global g_VimOverrideKeybindings
     global g_SneakEnabled
 
-    enable_vim = N10X.Editor.GetSetting("Vim") == "true" and not g_VimSuspended
+    enable_vim = N10X.Editor.GetSetting("Vim") == "true"
     if N10X.Editor.GetSetting("VimOverrideKeybindings") == "false":
         g_VimOverrideKeybindings = False;
 
