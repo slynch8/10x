@@ -1,6 +1,5 @@
 import N10X
 import os
-from pprint import pprint
 
 SAVE_ON_FOCUS_LOST_SETTING = "SaveOnFocusLost"
 FORMAT_ON_SAVE_SETTING = "FormatOnSave"
