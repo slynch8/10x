@@ -3,11 +3,11 @@ This plugin will add three options for handling formating and saving files when 
 
 You can add them to ur Settings.json
 
-// Saves the file when it looses focus
+// Saves the file when it looses focus  
 SaveOnFocusLost:                     true
 
-// Formats the file when it looses focus
+// Formats the file when it looses focus  
 FormatOnFocusLost:                   true
 
-// Formats the file when it's saved
+// Formats the file when it's saved  
 FormatOnSave:                        true
