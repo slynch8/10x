@@ -10,7 +10,9 @@ To install the script copy it to %appdata%\10x\PythonScripts\
 # RemedyBG Debugger Updater 
 Version: 0.1.0
 
-**Requires the following python modules to be installed:**
+**Note that you don't need the updater to use the debugger, the steps below are optional**
+
+Requires the following python modules to be installed:
 - requests
 - BeautifulSoup4
         
