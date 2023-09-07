@@ -680,7 +680,7 @@ class RDBG_Session:
                         pass
                     elif event_type == RDBG_EventType.EXIT_PROCESS:
                         exit_code:int = int.from_bytes(event_buffer.read(4), 'little')
-                        print('RDBG: Debugging terminted with exit code:', exit_code)
+                        print('RDBG: Debugging terminated with exit code:', exit_code)
                         self.target_state = RDBG_TargetState.NONE
 
                         if not _rdbg_options.stop_debug_on_build:
