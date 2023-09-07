@@ -1119,6 +1119,28 @@ def SelectOrMoveInsideQuote(c, insert_after_move=False, whitespace=False):
             return False
 
 #------------------------------------------------------------------------
+def MergeLines():
+    SetCursorPos(x=GetLineLength(), max_offset=0)
+    N10X.Editor.InsertText(" ")
+    N10X.Editor.ExecuteCommand("Delete")
+
+#------------------------------------------------------------------------
+def MergeLinesTrimIndentation():
+    SetCursorPos(x=GetLineLength(), max_offset=0)
+    N10X.Editor.InsertText(" ")
+    N10X.Editor.ExecuteCommand("Delete")
+    start = N10X.Editor.GetCursorPos()
+    x, y = start
+    line = GetLine(y)
+    while x < len(line) and IsWhitespaceChar(line[x]):
+        x += 1
+    x -= 1
+    end = x, y
+    if start != end:
+        SetSelection(start, end)
+        N10X.Editor.ExecuteCommand("Delete")
+
+#------------------------------------------------------------------------
 # Key Intercepting
 
 #------------------------------------------------------------------------
@@ -1920,27 +1942,15 @@ def HandleCommandModeChar(char):
 
     elif c == "gJ":
         N10X.Editor.PushUndoGroup()
-        SetCursorPos(x=GetLineLength(), max_offset=0)
-        N10X.Editor.InsertText(" ")
-        N10X.Editor.ExecuteCommand("Delete")
+        for i in range(repeat_count):
+            MergeLines()
         N10X.Editor.PopUndoGroup()
         should_save = True
 
     elif c == "J":
         N10X.Editor.PushUndoGroup()
-        SetCursorPos(x=GetLineLength(), max_offset=0)
-        N10X.Editor.InsertText(" ")
-        N10X.Editor.ExecuteCommand("Delete")
-        start = N10X.Editor.GetCursorPos()
-        x, y = start
-        line = GetLine(y)
-        while x < len(line) and IsWhitespaceChar(line[x]):
-            x += 1
-        x -= 1
-        end = x, y
-        if start != end:
-            SetSelection(start, end)
-            N10X.Editor.ExecuteCommand("Delete")
+        for i in range(repeat_count):
+            MergeLinesTrimIndentation()
         N10X.Editor.PopUndoGroup()
         should_save = True
 
@@ -2547,6 +2557,26 @@ def HandleVisualModeChar(char):
 
     elif c == "%":
         N10X.Editor.ExecuteCommand("MoveToMatchingBracket")
+
+    elif c == "gJ":
+        N10X.Editor.PushUndoGroup()
+        start, end = SubmitVisualModeSelection()
+        SetCursorPos(start[0], start[1])
+        line_count = max(1, end[1] - start[1] - 1)
+        for i in range(line_count):
+            MergeLines()
+        N10X.Editor.PopUndoGroup()
+        should_save = True
+
+    elif c == "J":
+        N10X.Editor.PushUndoGroup()
+        start, end = SubmitVisualModeSelection()
+        SetCursorPos(start[0], start[1])
+        line_count = max(1, end[1] - start[1] - 1)
+        for i in range(line_count):
+            MergeLinesTrimIndentation()
+        N10X.Editor.PopUndoGroup()
+        should_save = True
 
     elif c == ">":
         old_Mode = g_Mode
