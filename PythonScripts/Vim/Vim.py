@@ -754,10 +754,39 @@ def MoveToEndOfLine():
     SetCursorPos(x=GetLineLength() - 1)
     
 #------------------------------------------------------------------------
+def FindPreviousParagraphBegin():
+    x, y = N10X.Editor.GetCursorPos()
+
+    while y > 0 and N10X.Editor.GetLine(y).isspace():
+      y -= 1
+
+    while y > 0 :
+      y -= 1
+      text = N10X.Editor.GetLine(y)
+      if text.isspace():
+        return y
+    return 0
+
+#------------------------------------------------------------------------
+def FindNextParagraphEnd():
+    line_count = N10X.Editor.GetLineCount()
+    x, y = N10X.Editor.GetCursorPos()
+
+    while y < line_count - 1 and N10X.Editor.GetLine(y + 1).isspace():
+      y += 1
+
+    while y < line_count - 1:
+      text = N10X.Editor.GetLine(y + 1)
+      if not text or text.isspace():
+        return y
+      y += 1
+    return y
+
+#------------------------------------------------------------------------
 def FindPreviousEmptyLine():
     x, y = N10X.Editor.GetCursorPos()
     while y > 0 :
-      y = y - 1
+      y -= 1
       text = N10X.Editor.GetLine(y)
       if text.isspace():
         return y
@@ -767,26 +796,28 @@ def FindPreviousEmptyLine():
 def FindNextEmptyLine():
     line_count = N10X.Editor.GetLineCount()
     x, y = N10X.Editor.GetCursorPos()
+
     while y < line_count - 1:
       text = N10X.Editor.GetLine(y + 1)
       if not text or text.isspace():
         return y
-      y = y + 1
+      y += 1
     return y
 
 #------------------------------------------------------------------------
-def MoveToPreviousEmptyLine():
-    SetCursorPos(0, FindPreviousEmptyLine())
+def MoveToPreviousParagraphBegin():
+    SetCursorPos(0, FindPreviousParagraphBegin())
 
 #------------------------------------------------------------------------
-def MoveToNextEmptyLine():
+def MoveToNextParagraphEnd():
     line_count = N10X.Editor.GetLineCount()
-    y = FindNextEmptyLine()
+    y = FindNextParagraphEnd()
     if y != line_count:
         SetCursorPos(0, y + 1)
     else:
         SetCursorPos(GetLineLength(line_count - 1) - 1, line_count)
 
+   
 #------------------------------------------------------------------------
 def GetAroundParagraphSelection():
     line_count = N10X.Editor.GetLineCount()
@@ -1272,15 +1303,15 @@ def HandleCommandModeChar(char):
         MoveToEndOfLine()
 
     elif c == "{":
-       MoveToPreviousEmptyLine()
+        MoveToPreviousParagraphBegin()
 
     elif c == "}":
-        MoveToNextEmptyLine()
+        MoveToNextParagraphEnd()
 
     elif c == "''":
         if g_LastJumpPoint:
             SetCursorPos(g_LastJumpPoint[0], g_LastJumpPoint[1])
-    
+     
     elif c == "'":
         return
 
@@ -1520,7 +1551,7 @@ def HandleCommandModeChar(char):
         for i in range(repeat_count):
             x, y = N10X.Editor.GetCursorPos()
             for i in range(count):
-                MoveToPreviousEmptyLine()
+                MoveToPreviousParagraphBegin()
                 x, end_y = N10X.Editor.GetCursorPos()
             SetLineSelection(y, end_y)
             N10X.Editor.ExecuteCommand("Cut")
@@ -1534,7 +1565,7 @@ def HandleCommandModeChar(char):
         for i in range(repeat_count):
             x, y = N10X.Editor.GetCursorPos()
             for i in range(count):
-                MoveToNextEmptyLine()
+                MoveToNextParagraphEnd()
                 x, end_y = N10X.Editor.GetCursorPos()
             SetLineSelection(y, end_y)
             N10X.Editor.ExecuteCommand("Cut")
@@ -2519,10 +2550,10 @@ def HandleVisualModeChar(char):
         MoveToEndOfFile()
 
     elif c == "{":
-        MoveToPreviousEmptyLine()
+        MoveToPreviousParagraphBegin()
 
     elif c == "}":
-        MoveToNextEmptyLine()
+        MoveToNextParagraphEnd()
 
     elif c == "g":
         return
