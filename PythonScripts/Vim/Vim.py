@@ -1134,7 +1134,6 @@ def MergeLinesTrimIndentation():
     line = GetLine(y)
     while x < len(line) and IsWhitespaceChar(line[x]):
         x += 1
-    x -= 1
     end = x, y
     if start != end:
         SetSelection(start, end)
