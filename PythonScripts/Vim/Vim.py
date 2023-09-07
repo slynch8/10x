@@ -1332,6 +1332,17 @@ def HandleCommandModeChar(char):
 
     # misc
 
+    elif c == "~":
+        x, y = N10X.Editor.GetCursorPos()
+        line = GetLine()
+        length = GetLineLength()
+        if length > 0:
+            N10X.Editor.PushUndoGroup()
+            line = line[:x] + line[x].swapcase() + line[x + 1:]
+            N10X.Editor.SetLine(y, line)
+            N10X.Editor.PopUndoGroup()
+        should_save = True
+
     elif c == "z":
         return
 
@@ -2661,6 +2672,24 @@ def HandleVisualModeChar(char):
         if sel := GetAroundQuoteSelection(m.group(1), N10X.Editor.GetCursorPos()):
             start, end = sel
             SetVisualModeSelection(start, end)
+
+    elif c == "~":
+        N10X.Editor.PushUndoGroup()
+        start, end = N10X.Editor.GetCursorSelection(cursor_index=1)
+        current_line_y = start[1]
+        while current_line_y <= end[1]:
+            line = GetLine(current_line_y)
+            length = GetLineLength(current_line_y)
+            if length > 0:
+                begin_x = start[0] if current_line_y == start[1] else 0
+                end_x = end[0] if current_line_y == end[1] else length - 1
+                line = line[:begin_x] + line[begin_x:end_x].swapcase() + line[end_x:]
+                N10X.Editor.SetLine(current_line_y, line)
+            current_line_y += 1
+        N10X.Editor.PopUndoGroup()
+        SetCursorPos(start[0], start[1])
+        EnterCommandMode()
+        should_save = True
 
     else:
         print("[vim] Unknown command!")
