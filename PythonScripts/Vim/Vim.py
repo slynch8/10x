@@ -1918,6 +1918,14 @@ def HandleCommandModeChar(char):
     elif (m := re.match("c" + g_RepeatMatch, c)):
         return
 
+    elif c == "gJ":
+        N10X.Editor.PushUndoGroup()
+        SetCursorPos(x=GetLineLength(), max_offset=0)
+        N10X.Editor.InsertText(" ")
+        N10X.Editor.ExecuteCommand("Delete")
+        N10X.Editor.PopUndoGroup()
+        should_save = True
+
     elif c == "J":
         N10X.Editor.PushUndoGroup()
         SetCursorPos(x=GetLineLength(), max_offset=0)
