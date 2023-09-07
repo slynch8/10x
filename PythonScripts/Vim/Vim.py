@@ -1923,6 +1923,16 @@ def HandleCommandModeChar(char):
         SetCursorPos(x=GetLineLength(), max_offset=0)
         N10X.Editor.InsertText(" ")
         N10X.Editor.ExecuteCommand("Delete")
+        start = N10X.Editor.GetCursorPos()
+        x, y = start
+        line = GetLine(y)
+        while x < len(line) and IsWhitespaceChar(line[x]):
+            x += 1
+        x -= 1
+        end = x, y
+        if start != end:
+            SetSelection(start, end)
+            N10X.Editor.ExecuteCommand("Delete")
         N10X.Editor.PopUndoGroup()
         should_save = True
 
