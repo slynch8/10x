@@ -2866,12 +2866,16 @@ def OnInterceptCharKey(c):
 def HandleCommandPanelCommand(command):
 
     if command == ":sp":
+        x, y = N10X.Editor.GetCursorPos()
         N10X.Editor.ExecuteCommand("DuplicatePanel")
         N10X.Editor.ExecuteCommand("MovePanelDown")
+        SetCursorPos(x,y)
         return True
     
     if command == ":vsp":
+        x, y = N10X.Editor.GetCursorPos()
         N10X.Editor.ExecuteCommand("DuplicatePanelRight")
+        SetCursorPos(x,y)
         return True
 
     if command == ":w":
