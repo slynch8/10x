@@ -2870,7 +2870,7 @@ def HandleCommandPanelCommand(command):
         return True
     
     if command == ":vsp":
-        print("[vim] "+command+" (vertical split) unimplemented")
+        N10X.Editor.ExecuteCommand("DuplicatePanelRight")
         return True
 
     if command == ":w":
