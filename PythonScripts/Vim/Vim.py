@@ -2866,7 +2866,8 @@ def OnInterceptCharKey(c):
 def HandleCommandPanelCommand(command):
 
     if command == ":sp":
-        print("[vim] "+command+" (split) unimplemented")
+        N10X.Editor.ExecuteCommand("DuplicatePanel")
+        N10X.Editor.ExecuteCommand("MovePanelDown")
         return True
     
     if command == ":vsp":
