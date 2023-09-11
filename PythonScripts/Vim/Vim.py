@@ -1157,18 +1157,29 @@ def MergeLines():
 
 #------------------------------------------------------------------------
 def MergeLinesTrimIndentation():
-    SetCursorPos(x=GetLineLength(), max_offset=0)
-    N10X.Editor.InsertText(" ")
-    N10X.Editor.ExecuteCommand("Delete")
-    start = N10X.Editor.GetCursorPos()
-    x, y = start
+    x, y = N10X.Editor.GetCursorPos()
+    startx = x
+    startlinelen = GetLineLength(y)
     line = GetLine(y)
-    while x < len(line) and IsWhitespaceChar(line[x]):
+    SetCursorPos(x=startlinelen, max_offset=0)
+    N10X.Editor.ExecuteCommand("Delete")
+    x = startlinelen
+    while x > 0 and IsWhitespaceChar(line[x]):
+        x -= 1
+    if not IsWhitespaceChar(line[x]):
         x += 1
-    end = x, y
-    if start != end:
-        SetSelection(start, end)
+    clearx = x
+    line = GetLine(y)
+    newlinelen = GetLineLength(y)
+    x = startlinelen
+    while x < newlinelen and IsWhitespaceChar(line[x]):
+        x += 1
+    if clearx != x:
+        x -= 1
+        SetSelection((clearx,y), (x,y))
         N10X.Editor.ExecuteCommand("Delete")
+    N10X.Editor.InsertText(" ")
+    SetCursorPos(startx,y)
 
 #------------------------------------------------------------------------
 # Key Intercepting
@@ -2391,13 +2402,17 @@ def HandleCommandModeKey(key, shift, control, alt):
     elif key == "I" and control:
         N10X.Editor.ExecuteCommand("NextLocation")
 
+    elif key == "Delete" and not control:
+        N10X.Editor.ExecuteCommand("Delete")
+        pos = N10X.Editor.GetCursorPos()
+        SetCursorPos(pos[0],pos[1])
+
     else:
         handled = False
 
         pass_through = \
             control or \
             alt or \
-            key == "Delete" or \
             key == "Backspace" or \
             key == "Up" or \
             key == "Down" or \
@@ -2866,11 +2881,16 @@ def OnInterceptCharKey(c):
 def HandleCommandPanelCommand(command):
 
     if command == ":sp":
-        print("[vim] "+command+" (split) unimplemented")
+        x, y = N10X.Editor.GetCursorPos()
+        N10X.Editor.ExecuteCommand("DuplicatePanel")
+        N10X.Editor.ExecuteCommand("MovePanelDown")
+        SetCursorPos(x,y)
         return True
     
     if command == ":vsp":
-        print("[vim] "+command+" (vertical split) unimplemented")
+        x, y = N10X.Editor.GetCursorPos()
+        N10X.Editor.ExecuteCommand("DuplicatePanelRight")
+        SetCursorPos(x,y)
         return True
 
     if command == ":w":
