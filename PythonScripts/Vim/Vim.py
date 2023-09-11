@@ -2402,7 +2402,7 @@ def HandleCommandModeKey(key, shift, control, alt):
     elif key == "I" and control:
         N10X.Editor.ExecuteCommand("NextLocation")
 
-    elif key == "Delete":
+    elif key == "Delete" and not control:
         N10X.Editor.ExecuteCommand("Delete")
         pos = N10X.Editor.GetCursorPos()
         SetCursorPos(pos[0],pos[1])
