@@ -1,7 +1,7 @@
 '''
 RemedyBG debugger integration for 10x (10xeditor.com) 
 RemedyBG: https://remedybg.handmade.network/ (should be above 0.3.8)
-Version: 0.10.3
+Version: 0.10.4
 Original Script author: septag@discord
 
 To get started go to Settings.10x_settings, and enable the hook, by adding this line:
@@ -46,6 +46,9 @@ Extras:
     - RDBG_StepOut: Steps out of the current line when debugging, also updates the cursor position in 10x according to position in remedybg
 
 History:
+  0.10.4
+    - Fix a recursive error bug, when trying to close the connection on errors in send_command
+
   0.10.3:
     - Gracefully quitting RemedyBG 
 
@@ -416,7 +419,7 @@ class RDBG_Session:
             out_data = win32pipe.TransactNamedPipe(self.cmd_pipe, cmd_buffer.getvalue(), 8192, None)
         except pywintypes.error as pipe_error:
             print('RDBG', pipe_error)
-            self.close()
+            self.close(ignore_send_command=True)
             return 0
 
         out_buffer = io.BytesIO(out_data[1])		
@@ -537,8 +540,8 @@ class RDBG_Session:
         
         return True
 
-    def close(self):
-        if self.process is not None:
+    def close(self, ignore_send_command:bool = False):
+        if not ignore_send_command and self.process is not None:
             self.send_command(RDBG_Command.COMMAND_EXIT_DEBUGGER)
 
         if self.cmd_pipe:
@@ -554,6 +557,7 @@ class RDBG_Session:
             print('RDBG: RemedyBG quit with code: %i' % (self.process.returncode))
             self.process = None
 
+        self.target_state:RDBG_TargetState = RDBG_TargetState.NONE
         print("RDBG: Connection closed")
 
     def run(self):
