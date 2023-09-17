@@ -225,7 +225,7 @@ class RDBG_Command(IntEnum):
     RESTART_DEBUGGING = 303
     STEP_INTO_BY_LINE = 307
     STEP_OVER_BY_LINE = 309
-    STEP_OUT = 311,
+    STEP_OUT = 311
     CONTINUE_EXECUTION = 312
     RUN_TO_FILE_AT_LINE = 313
     ADD_BREAKPOINT_AT_FILENAME_LINE = 604
@@ -375,7 +375,7 @@ class RDBG_Session:
             pass
         elif cmd == RDBG_Command.STEP_OVER_BY_LINE:
             pass
-        elif cmd == RDBG_Command.STEP_OVER_BY_LINE:
+        elif cmd == RDBG_Command.STEP_OUT:
             pass
         elif cmd == RDBG_Command.STOP_DEBUGGING:
             pass
