@@ -1626,7 +1626,7 @@ def HandleCommandModeChar(char):
         if y:
             sel_start = (GetLineLength(y - 1), y - 1)
         else:
-            sel_start = GetLineLength(0)
+            sel_start = (0,0)
         sel_end = (GetLineLength(GetMaxY()), GetMaxY())
         SetSelection(sel_start, sel_end)
         N10X.Editor.ExecuteCommand("Cut")
@@ -2068,13 +2068,12 @@ def HandleCommandModeChar(char):
     elif c == "yw":
         start = N10X.Editor.GetCursorPos()
         for i in range(repeat_count):
-            if not MoveToNextWordStart(wrap=False):
-                return
-        MoveCursorPos(x_delta=-1)
+            if MoveToNextWordStart(wrap=False):
+                MoveCursorPos(x_delta=-1)
         end = N10X.Editor.GetCursorPos()
         SetSelection(start, end)
         N10X.Editor.ExecuteCommand("Copy")
-        SetCursorPos(x=min(start[0], end[0]))
+        SetCursorPos(start[0], start[1])
 
     elif c == "yiw":
         start, end = GetInsideWordSelection(N10X.Editor.GetCursorPos())
@@ -2893,7 +2892,7 @@ def HandleCommandPanelCommand(command):
         SetCursorPos(x,y)
         return True
 
-    if command == ":w":
+    if command == ":w" or command == ":W":
         N10X.Editor.ExecuteCommand("SaveFile")
         return True
 
@@ -2906,7 +2905,7 @@ def HandleCommandPanelCommand(command):
         N10X.Editor.ExecuteCommand("CloseFile")
         return True
 
-    if command == ":q" or command == ":x":
+    if command == ":q" or command == ":Q" or command == ":x" or command == ":X":
         N10X.Editor.ExecuteCommand("CloseFile")
         return True
 
