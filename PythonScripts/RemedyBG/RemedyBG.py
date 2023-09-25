@@ -1,23 +1,23 @@
 '''
 RemedyBG debugger integration for 10x (10xeditor.com) 
 RemedyBG: https://remedybg.handmade.network/ (should be above 0.3.8)
-Version: 0.10.4
-Original Script author: septag@discord
+Version: 0.10.6
+Original Script author: septag@discord / septag@pm.me
 
 To get started go to Settings.10x_settings, and enable the hook, by adding this line:
     RemedyBG.Hook: true
+This will make RemedyBG hook into the editor and act as the default debugger
 	
 If RemedyBG.exe is not in your PATH env var you must also set RemedyBG.Path (see below)
-	
 You can add other options listed below in 'RDBG_Options' as individual lines in the settings file.
 You can also hook commands to key bindings by going to Settings->Key Bindings... and adding the lines in the file. for example:
     F10:	    RDBG_StepOver
     F11:		RDBG_StepInto
     Shift F11:	RDBG_StepOut
-Other commands are listed below in 'Commands'
+Other commands are listed below in 'Commands' and `Extras` 
 
 RDBG_Options: 
-    - RemedyBG.Hook: (default=False) Hook RemedyBg into default Start/Stop/Restart debugging commands instead of the default msvc debugger integration
+    - RemedyBG.Hook: (default=False) Hook RemedyBg into default Start/Stop/Restart debugging commands instead of the msvc debugger integration
     - RemedyBG.Path: Path to remedybg.exe. If not set, the script will assume remedybg.exe is in PATH or current dir
     - RemedyBG.OutputDebugText: (default=True) receives and output debug text to 10x output
     - RemedyBG.WorkDir: Path that remedy will use as a working directory
@@ -46,6 +46,12 @@ Extras:
     - RDBG_StepOut: Steps out of the current line when debugging, also updates the cursor position in 10x according to position in remedybg
 
 History:
+  0.10.6
+    - RemedyBG.Path can now be both the executable or directory. In case of directory, we will attempt to append 'remedybg.exe' to the end of it
+
+  0.10.5 
+    - Fixed STEP_OUT command
+    
   0.10.4
     - Fix a recursive error bug, when trying to close the connection on errors in send_command
 
@@ -147,6 +153,8 @@ class RDBG_Options():
         self.executable = Editor.GetSetting("RemedyBG.Path").strip()
         if not self.executable:
             self.executable = 'remedybg.exe'
+        if os.path.isdir(self.executable):
+            self.executable = os.path.join(self.executable, 'remedybg.exe')
 
         self.output_debug_text = True
         output_debug_text = Editor.GetSetting("RemedyBG.OutputDebugText") 
