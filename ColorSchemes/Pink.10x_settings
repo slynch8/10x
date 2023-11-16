@@ -1,0 +1,157 @@
+########################################################
+# Original Creator: ustance
+########################################################
+
+# "Variables" (Please add)
+# Dark:       1b1c20 & 24252a (Backgrounds)
+# Pink:       af5770
+# Light Pink: 49323d (Used for transparency stuff)
+# Light:      ddbb99
+# Brown:      665544
+
+# UI Colours
+########################################################
+UI.UI:                                 1b1c20
+UI.UI Text:                            ddbb99
+UI.Menu:                               1b1c20
+UI.Menu (highlighted):                 af5770
+UI.Menu (selected):                    af5770
+UI.App Border (active):                ddbb99
+UI.App Border (inactive):              ddbb99
+UI.Panels.Active Tab:                  49323d
+UI.Panels.Active Tab Text:             ddbb99
+UI.Panels.Inactive Tab Text:           ddbb99
+UI.Panels.Inactive Tab:                16171a
+UI.Panels.Scrollbar Background:        1b1c20
+UI.Panels.Scrollbar Bar:               665544
+UI.Panels.Scrollbar Bar (hover):       ddbb99
+UI.Panels.Scrollbar Bar (drag):        ddbb99
+UI.Panels.MapScrollbar Bar:            1b1c20
+UI.UI Selected Item:                   af5770
+UI.UI Selected Text:                   49323d
+UI.LogoBack:                           af5770
+UI.LogoFore:                           ddbb99
+UI.WorkspaceTreeNode:                  default
+UI.WorkspaceTreeNodeBorder:            0, 0, 0
+UI.ActiveWorkspaceTreeNodeBorder:      255, 255, 255
+UI.ActiveWorkspaceTreeNode:            100, 100, 120
+UI.SourceFileTreeNode:                 120, 170, 240
+UI.HeaderFileTreeNode:                 80, 120, 170
+UI.MiscFileTreeNode:                   255, 255, 255
+UI.FolderTreeNode:                     255, 219, 79
+UI.SearchHighlight:                    default
+UI.10xOutputError:                     255, 120, 120
+UI.10xOutputWarning:                   220, 220, 0
+UI.UI Highlight:                       0, 100, 200
+UI.ScrollBarFindMatchHighlight:        af5770
+UI.ScrollBarWordMatchHighlight:        af5770
+UI.SelectedSearchResultLine:           default
+
+# Editor Colours
+########################################################
+Editor.Text:                           ddbb99
+Editor.Background:                     1b1c20
+Editor.Cursor:                         af5770
+Editor.Current Line:                   1b1c20
+Editor.Selection Back:                 49323d
+Editor.Selection Fore:                 default
+Editor.Find.Text Highlight:            49323d
+Editor.Rename Symbol Back:             49323d
+Editor.Rename Symbol Fore:             ddbb99
+Editor.Find.Brace/Bracket Highlight:   49323d
+Editor.Find.Bracket Highlight:         49323d
+Editor.Breakpoint:                     af5770
+Editor.Whitespace:                     default
+Editor.IndentLine:                     default
+Editor.AutocompleteBackColour:         1b1c20
+Editor.AutocompleteForeColour:         ddbb99
+Editor.AutocompleteBorderColour:       af5770
+Editor.HoverBoxBackColour:             1b1c20
+Editor.HoverBoxForeColour:             af5770
+Editor.HoverBoxBorderColour:           af5770
+Editor.BraceDepth1:                    default
+Editor.BraceDepth2:                    default
+Editor.BraceDepth3:                    default
+Editor.BraceDepth4:                    default
+Editor.BraceDepth5:                    default
+Editor.BraceDepth6:                    default
+Editor.LineEndings:                    default
+Editor.CollapseExpandButton:           default
+Editor.Line Numbers:                   ddbb99
+Editor.Margin:                         default
+Editor.VerticalRulers:                 default
+Editor.SymbolHighlight:                49323d
+Editor.Bookmark:                       ddbb99
+
+# Language Colours
+########################################################
+Language.Text:                         ddbb99
+Language.Background:                   1b1c20
+Language.Number:                       ddbb99
+Language.Keyword:                      af5770
+Language.Preprocessor:                 af5770
+Language.Comment:                      665544
+Language.Brace:                        af5770
+Language.Bracket:                      af5770
+Language.SquareBracket:                af5770
+Language.SemiColon:                    af5770
+Language.Operator:                     af5770
+Language.String:                       b49942
+Language.Comma:                        ddbb99
+Language.Class:                        ddbb99
+Language.Function:                     ddbb99
+Language.Enum:                         ddbb99
+Language.Enum Value:                   ddbb99
+Language.Variable:                     ddbb99
+Language.MemberVariable:               ddbb99
+Language.Namespace:                    ddbb99
+Language.Typedef:                      af5770
+Language.Type:                         ddbb99
+Language.MemberFunction:               ddbb99
+Language.Heading:                      255, 128, 0
+Language.Bold:                         120, 180, 255
+Language.Italic:                       255, 255, 0
+Language.Blockquote:                   255, 200, 170
+Language.ListItem:                     255, 255, 160
+Language.Link:                         100, 100, 255
+Language.CodeBlock:                    255, 255, 255
+Language.Custom1:                      114, 216, 220
+Language.Custom2:                      255, 140, 0
+Language.Custom3:                      255, 211, 112
+Language.Custom4:                      111, 216, 91
+Language.Custom5:                      94, 115, 255
+Language.Custom6:                      214, 97, 216
+Language.Custom7:                      96, 153, 214
+Language.Custom8:                      172, 211, 95
+Language.Custom9:                      154, 197, 209
+Language.Custom10:                     214, 113, 113
+Language.DefinedOut:                   140, 140, 140
+
+# TreeNode Colours
+########################################################
+TreeNodeText:                          ddbb99
+TreeNodeTextActive:                    255, 255, 255
+
+# Build Colours (They don't work?)
+########################################################
+Build.BuildError:                      255, 100, 100
+Build.BuildWarning:                    220, 220, 0
+
+# Search Colours
+########################################################
+Search.TextMatch:                      default
+Search.HighlightLineColour:            49323d
+
+# HTML Colours (Unmodified)
+########################################################
+Html.ElementName:                      247, 191, 120
+Html.AttributeName:                    193, 145, 255
+Html.String:                           102, 195, 204
+Html.Operator:                         200, 200, 200
+
+# 10x Colours
+########################################################
+10x.Setting.Keyword:                   ddbb99
+10x.Setting.Name:                      af5770
+10x.Setting.True:                      af5770
+10x.Setting.False:                     af5770

@@ -1,0 +1,378 @@
+# Format: <SettingName>: <Settingvalue>
+# Setting name must appear at start of line and there must be whitespace after the colon.
+
+# The main UI color
+UI.UI:                                            44, 42, 40
+
+# Text color for the main UI
+UI.UI Text:                                       255, 255, 255
+
+# Color of the main drop down menu
+UI.Menu:                                          default
+
+# Color of menu items as the mouse moves over
+UI.Menu (highlighted):                            default
+
+# Color of menu items that are selected (showing sub menus)
+UI.Menu (selected):                               default
+
+# App border when app is active
+UI.App Border (active):                           default
+
+# App border when app is inactive
+UI.App Border (inactive):                         default
+
+# Color of the tab for the currently active panel
+UI.Panels.Active Tab:                             36, 97, 133
+
+# Text color for active tabs
+UI.Panels.Active Tab Text:                        255, 255, 255
+
+# Text color for inactive tabs
+UI.Panels.Inactive Tab Text:                      255, 255, 255
+
+# Color of tabs for inactive panels
+UI.Panels.Inactive Tab:                           73, 73, 80
+
+# Color of the scrollbar background
+UI.Panels.Scrollbar Background:                   default
+
+# Color of the scrollbar bar
+UI.Panels.Scrollbar Bar:                          default
+
+# Color of the map-scrollbar bar
+UI.Panels.MapScrollbar Bar:                       default
+
+# Color of the scrollbar bar when the mouse is hovering over
+UI.Panels.Scrollbar Bar (hover):                  default
+
+# Color of the scrollbar bar when being dragged
+UI.Panels.Scrollbar Bar (drag):                   default
+
+# Default text color for all text editor windows
+Editor.Text:                                      255, 255, 255
+
+# Default background color for all text editor windows
+Editor.Background:                                18, 18, 18
+
+# Text Editor cursor (caret) color
+Editor.Cursor:                                    default
+
+# Background color for the current line
+Editor.Current Line:                              default
+
+# Background color of selected text
+Editor.Selection Back:                            50, 50, 60
+
+# Foreground color of selected text. Use 'default' for no foreground color.
+Editor.Selection Fore:                            default
+
+# Text background color for text highlighted by the Find tool
+Editor.Find.Text Highlight:                       95, 45, 0
+
+# Text background color for text highlighted when renaming a symbol
+Editor.Rename Symbol Back:                        255, 153, 0
+
+# Text foreground color for text highlighted when renaming a symbol
+Editor.Rename Symbol Fore:                        0, 0, 0
+
+# Text editor text color
+Language.Text:                                    default
+
+# Text editor background color
+Language.Background:                              0, 0, 0
+
+# Number
+Language.Number:                                  200, 200, 200
+
+# C++ Keyword
+Language.Keyword:                                 255, 255, 255
+
+# Preprocessor
+Language.Preprocessor:                            216, 205, 165
+
+# Comment
+Language.Comment:                                 130, 130, 130
+
+# {}
+Language.Brace:                                   default
+
+# ()
+Language.Bracket:                                 default
+
+# []
+Language.SquareBracket:                           default
+
+# ;
+Language.SemiColon:                               default
+
+# C++ Operator
+Language.Operator:                                default
+
+# String
+Language.String:                                  200, 200, 200
+
+# ,
+Language.Comma:                                   default
+
+# Class
+Language.Class:                                   200, 200, 200
+
+# Function
+Language.Function:                                170, 170, 170
+
+# Enum
+Language.Enum:                                    255, 255, 255
+
+# Enum Value
+Language.Enum Value:                              184, 215, 163
+
+# Variable
+Language.Variable:                                default
+
+# Member Variable
+Language.MemberVariable:                          170, 170, 170
+
+# Namespace
+Language.Namespace:                               default
+
+# Typedef
+Language.Typedef:                                 255, 255, 255
+
+# Member Function
+Language.MemberFunction:                          default
+
+# C++ Type
+Language.Type:                                    0, 255, 255
+
+# Line number colors
+Editor.Line Numbers:                              default
+
+# Margin color
+Editor.Margin:                                    default
+
+# Build error
+Build.BuildError:                                 255, 100, 100
+
+# Workspace tree node text
+TreeNodeText:                                     200, 200, 200
+
+# Workspace active tree node text
+TreeNodeTextActive:                               255, 255, 255
+
+# Build warning
+Build.BuildWarning:                               220, 220, 0
+
+# Edit box text selections, button toggle colors
+UI.UI Highlight:                                  0, 100, 200
+
+# Current symbol highlight color
+Editor.SymbolHighlight:                           default
+
+# Bookmark
+Editor.Bookmark:                                  default
+
+# 10x output error
+UI.10xOutputError:                                255, 120, 120
+
+# 10x output warning
+UI.10xOutputWarning:                              220, 220, 0
+
+# Color of the matched text
+Search.TextMatch:                                 default
+
+# color of the highlighted line in the Search panel
+Search.HighlightLineColour:                       default
+
+# Highlight the matching brace/bracket color
+Editor.Find.Brace/Bracket Highlight:              default
+
+# Highlight the matching start/end bracket color
+Editor.Find.Bracket Highlight:                    default
+
+# Breakpoint
+Editor.Breakpoint:                                255, 0, 0
+
+# Whitespace
+Editor.Whitespace:                                default
+
+# Indent line
+Editor.IndentLine:                                default
+
+# Highlight for search results list
+UI.SearchHighlight:                               93, 93, 93
+
+# Autocomplete hover box background color
+Editor.AutocompleteBackColour:                    default
+
+# Autocomplete hover box foreground color
+Editor.AutocompleteForeColour:                    default
+
+# Autocomplete hover box border color
+Editor.AutocompleteBorderColour:                  default
+
+# Hover box background color
+Editor.HoverBoxBackColour:                        default
+
+# Hover box foreground color
+Editor.HoverBoxForeColour:                        default
+
+# Hover box border color
+Editor.HoverBoxBorderColour:                      default
+
+# Defined out code
+Language.DefinedOut:                              140, 140, 140
+
+# Vertical rulers
+Editor.VerticalRulers:                            default
+
+# Selected items (in list boxes etc)
+UI.UI Selected Item:                              42, 115, 193
+
+# Edit box text selections
+UI.UI Selected Text:                              65, 96, 130
+
+# 10x logo background
+UI.LogoBack:                                      default
+
+# 10x logo foreground
+UI.LogoFore:                                      default
+
+# Workspace tree node
+UI.WorkspaceTreeNode:                             default
+
+# Workspace tree node border
+UI.WorkspaceTreeNodeBorder:                       0, 0, 0
+
+# Active workspace tree node border
+UI.ActiveWorkspaceTreeNodeBorder:                 255, 255, 255
+
+# Active workspace tree node
+UI.ActiveWorkspaceTreeNode:                       100, 100, 120
+
+# Source file tree node
+UI.SourceFileTreeNode:                            120, 170, 240
+
+# Header file tree node
+UI.HeaderFileTreeNode:                            80, 120, 170
+
+# Misc file tree node
+UI.MiscFileTreeNode:                              255, 255, 255
+
+# Misc file tree node
+UI.FolderTreeNode:                                255, 219, 79
+
+# Name of a setting in a 10x settings file
+10x.Setting.Name:                                 128, 162, 236
+
+# true setting valuea in a 10x settings file
+10x.Setting.True:                                 0, 255, 0
+
+# false setting valuea in a 10x settings file
+10x.Setting.False:                                255, 0, 0
+
+# name of an html element
+Html.ElementName:                                 247, 191, 120
+
+# name of an html attribute
+Html.AttributeName:                               193, 145, 255
+
+# html string
+Html.String:                                      102, 195, 204
+
+# html operator
+Html.Operator:                                    200, 200, 200
+
+# Document Heading
+Language.Heading:                                 255, 128, 0
+
+# Bold text
+Language.Bold:                                    120, 180, 255
+
+# Italic text
+Language.Italic:                                  255, 255, 0
+
+# Document block quote
+Language.Blockquote:                              255, 200, 170
+
+# Document list item
+Language.ListItem:                                255, 255, 160
+
+# Url Link
+Language.Link:                                    100, 100, 255
+
+# Document code block
+Language.CodeBlock:                               150, 255, 255
+
+# Custom color defined in all color schemes that can be used in the syntax highlighting rules
+Language.Custom1:                                 114, 216, 220
+
+# Custom color defined in all color schemes that can be used in the syntax highlighting rules
+Language.Custom2:                                 255, 140, 0
+
+# Custom color defined in all color schemes that can be used in the syntax highlighting rules
+Language.Custom3:                                 255, 211, 112
+
+# Custom color defined in all color schemes that can be used in the syntax highlighting rules
+Language.Custom4:                                 111, 216, 91
+
+# Custom color defined in all color schemes that can be used in the syntax highlighting rules
+Language.Custom5:                                 94, 115, 255
+
+# Custom color defined in all color schemes that can be used in the syntax highlighting rules
+Language.Custom6:                                 214, 97, 216
+
+# Custom color defined in all color schemes that can be used in the syntax highlighting rules
+Language.Custom7:                                 96, 153, 214
+
+# Custom color defined in all color schemes that can be used in the syntax highlighting rules
+Language.Custom8:                                 172, 211, 95
+
+# Custom color defined in all color schemes that can be used in the syntax highlighting rules
+Language.Custom9:                                 154, 197, 209
+
+# Custom color defined in all color schemes that can be used in the syntax highlighting rules
+Language.Custom10:                                214, 113, 113
+
+# 10x settings file keywords
+10x.Setting.Keyword:                              173, 235, 150
+
+# Line endings
+Editor.LineEndings:                               default
+
+# Color of the selected line in search results
+UI.SelectedSearchResultLine:                      default
+
+# Collapse/expand buttons
+Editor.CollapseExpandButton:                      default
+
+# Color of the find match results in the scroll bar
+UI.ScrollBarFindMatchHighlight:                   default
+
+# Color of the current word match results in the scroll bar
+UI.ScrollBarWordMatchHighlight:                   default
+
+# Brace/bracket colour at depth 1
+Editor.BraceDepth1:                               default
+
+
+# Brace/bracket colour at depth 2
+Editor.BraceDepth2:                               default
+
+
+# Brace/bracket colour at depth 3
+Editor.BraceDepth3:                               default
+
+
+# Brace/bracket colour at depth 4
+Editor.BraceDepth4:                               default
+
+
+# Brace/bracket colour at depth 5
+Editor.BraceDepth5:                               default
+
+
+# Brace/bracket colour at depth 6
+Editor.BraceDepth6:                               default
+
+
