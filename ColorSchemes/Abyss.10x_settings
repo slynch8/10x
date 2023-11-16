@@ -1,0 +1,384 @@
+# Format: <SettingName>: <Settingvalue>
+# Setting name must appear at start of line and there must be whitespace after the colon.
+
+# 
+UI.UI:                                 12, 12, 12
+
+# 
+UI.UI Text:                            250, 220, 220
+
+# 
+UI.Menu:                               default
+
+# 
+UI.Menu (highlighted):                 default
+
+# 
+UI.Menu (selected):                    default
+
+# 
+UI.App Border (active):                0, 121, 203
+
+# 
+UI.App Border (inactive):              66, 66, 69
+
+# 
+UI.Panels.Active Tab:                  42, 77, 50
+
+# 
+UI.Panels.Active Tab Text:             255, 255, 255
+
+# 
+UI.Panels.Inactive Tab Text:           255, 255, 255
+
+# 
+UI.Panels.Inactive Tab:                73, 73, 80
+
+# 
+UI.Panels.Scrollbar Background:        default
+
+# 
+UI.Panels.Scrollbar Bar:               80, 80, 80
+
+# 
+UI.Panels.Scrollbar Bar (hover):       100, 100, 100
+
+# 
+UI.Panels.Scrollbar Bar (drag):        120, 120, 120
+
+# 
+UI.Panels.MapScrollbar Bar:            default
+
+# 
+Editor.Text:                           190, 150, 115
+
+# 
+Editor.Background:                     12, 12, 12
+
+# 
+Editor.Cursor:                         50, 255, 50
+
+# 
+Editor.Current Line:                   0,0,0
+
+# 
+Editor.Selection Back:                 20, 59, 40
+
+# 
+Editor.Selection Fore:                 default
+
+# 
+Editor.Find.Text Highlight:            95, 45, 0
+
+# 
+Editor.Rename Symbol Back:             255, 153, 0
+
+# 
+Editor.Rename Symbol Fore:             0, 0, 0
+
+# 
+Language.Text:                         180, 150, 115
+
+# 
+Language.Background:                   12, 12, 12
+
+# 
+Language.Number:                       150, 200, 80
+
+# 
+Language.Keyword:                      180, 130, 200
+
+# 
+Language.Preprocessor:                 87, 166, 150
+
+# 
+Language.Comment:                      87, 166, 74
+
+# 
+Language.Brace:                        255, 230, 200
+
+# 
+Language.Bracket:                      255, 230, 200
+
+# 
+Language.SquareBracket:                255, 230, 200
+
+# 
+Language.SemiColon:                    255, 230, 200
+
+# 
+Language.Operator:                     255, 230, 200
+
+# 
+Language.String:                       214, 157, 133
+
+# 
+Language.Comma:                        255, 230, 200
+
+# 
+Language.Class:                        220, 170, 34
+
+# 
+Language.Function:                     255, 119, 61
+
+# 
+Language.Enum:                         220, 170, 34
+
+# 
+Language.Enum Value:                   185, 119, 30
+
+# 
+Language.Variable:                     180, 165, 115
+
+# 
+Language.MemberVariable:               170, 140, 120
+
+# 
+Language.Namespace:                    181, 206, 168
+
+# 
+Language.Typedef:                      220, 170, 34
+
+# 
+Language.Type:                         220, 170, 34
+
+# 
+Language.MemberFunction:               255, 119, 61
+
+# 
+Editor.Line Numbers:                   43,145,175
+
+# 
+Editor.Margin:                         default
+
+# 
+Build.BuildError:                      255, 100, 100
+
+# 
+TreeNodeText:                          200, 200, 200
+
+# 
+TreeNodeTextActive:                    255, 255, 255
+
+# 
+Build.BuildWarning:                    220, 220, 0
+
+# 
+UI.UI Highlight:                       0, 100, 200
+
+# 
+Editor.SymbolHighlight:                10, 40, 15
+
+# 
+Editor.Bookmark:                       200, 140, 60
+
+# 
+UI.10xOutputError:                     255, 120, 120
+
+# 
+UI.10xOutputWarning:                   220, 220, 0
+
+# 
+Search.TextMatch:                      default
+
+# 
+Search.HighlightLineColour:            default
+
+# 
+Editor.Find.Brace/Bracket Highlight:   default
+
+# 
+Editor.Find.Bracket Highlight:         default
+
+# 
+Editor.Breakpoint:                     255, 0, 0
+
+# 
+Editor.Whitespace:                     default
+
+# 
+Editor.IndentLine:                     default
+
+# 
+UI.SearchHighlight:                    default
+
+# 
+Editor.AutocompleteBackColour:         default
+
+# 
+Editor.AutocompleteForeColour:         default
+
+# 
+Editor.AutocompleteBorderColour:       default
+
+# 
+Editor.HoverBoxBackColour:             default
+
+# 
+Editor.HoverBoxForeColour:             default
+
+# 
+Editor.HoverBoxBorderColour:           default
+
+# 
+Language.DefinedOut:                   140, 140, 140
+
+# 
+Editor.VerticalRulers:                 default
+
+# 
+UI.UI Selected Item:                   42, 115, 193
+
+# 
+UI.UI Selected Text:                   65, 96, 130
+
+# 
+UI.LogoBack:                           default
+
+# 
+UI.LogoFore:                           default
+
+# 
+UI.WorkspaceTreeNode:                  default
+
+# 
+UI.WorkspaceTreeNodeBorder:            0, 0, 0
+
+# 
+UI.ActiveWorkspaceTreeNodeBorder:      255, 255, 255
+
+# 
+UI.ActiveWorkspaceTreeNode:            100, 100, 120
+
+# 
+UI.SourceFileTreeNode:                 120, 170, 240
+
+# 
+UI.HeaderFileTreeNode:                 80, 120, 170
+
+# 
+UI.MiscFileTreeNode:                   255, 255, 255
+
+# 
+UI.FolderTreeNode:                     255, 219, 79
+
+# 
+10x.Setting.Name:                      128, 162, 236
+
+# 
+10x.Setting.True:                      255, 255, 255
+
+# 
+10x.Setting.False:                     255, 0, 0
+
+# 
+Html.ElementName:                      247, 191, 120
+
+# 
+Html.AttributeName:                    193, 145, 255
+
+# 
+Html.String:                           102, 195, 204
+
+# 
+Html.Operator:                         200, 200, 200
+
+# 
+Language.Heading:                      255, 128, 0
+
+# 
+Language.Bold:                         120, 180, 255
+
+# 
+Language.Italic:                       255, 255, 0
+
+# 
+Language.Blockquote:                   255, 200, 170
+
+# 
+Language.ListItem:                     255, 255, 160
+
+# 
+Language.Link:                         100, 100, 255
+
+# 
+Language.CodeBlock:                    150, 255, 255
+
+# 
+Language.Custom1:                      114, 216, 220
+
+# 
+Language.Custom2:                      255, 140, 0
+
+# 
+Language.Custom3:                      255, 211, 112
+
+# 
+Language.Custom4:                      111, 216, 91
+
+# 
+Language.Custom5:                      94, 115, 255
+
+# 
+Language.Custom6:                      214, 97, 216
+
+# 
+Language.Custom7:                      96, 153, 214
+
+# 
+Language.Custom8:                      172, 211, 95
+
+# 
+Language.Custom9:                      154, 197, 209
+
+# 
+Language.Custom10:                     214, 113, 113
+
+# 
+10x.Setting.Keyword:                   173, 235, 150
+
+# 
+Editor.LineEndings:                    default
+
+# 
+Editor.LineEndings:                    default
+
+# 
+Editor.LineEndings:                    default
+
+# 
+Editor.CollapseExpandButton:           default
+
+# 
+UI.SelectedSearchResultLine:           default
+
+# 
+UI.ScrollBarFindMatchHighlight:        default
+
+# Colour of the current word match results in the scroll bar
+UI.ScrollBarWordMatchHighlight:        default
+
+# Brace/bracket colour at depth 1
+Editor.BraceDepth1:                    default
+
+
+# Brace/bracket colour at depth 2
+Editor.BraceDepth2:                    default
+
+
+# Brace/bracket colour at depth 3
+Editor.BraceDepth3:                    default
+
+
+# Brace/bracket colour at depth 4
+Editor.BraceDepth4:                    default
+
+
+# Brace/bracket colour at depth 5
+Editor.BraceDepth5:                    default
+
+
+# Brace/bracket colour at depth 6
+Editor.BraceDepth6:                    default
+
+
