@@ -5,6 +5,7 @@ These scripts are contributions from the 10x community and not directly maintain
 
 |Script name     |Description|
 |---             |:---:      |
+AddInclude.py    |Adds include path for current symbol
 ClangFormat.py   |clang-format plugin for 10x
 CompileDbCmd.py  |Single file compile command for projects with compile commands database
 FormatOnSave.py  |Format On Save
