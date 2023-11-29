@@ -2,14 +2,30 @@ import N10X
 import os
 import re
 
-cppExtensions = ["inl"
-                ,"h","hh","hpp","h++","hp","hxx"
-                ,"c","cc","cpp","c++","cp","cxx"]
+cppExtensions = [
+    "inl"
+    ,"h","hh","hpp","h++","hp","hxx"
+    ,"c","cc","cpp","c++","cp","cxx"
+]
+
+allowedSymbolTypes = [
+    "Class"
+    , "Struct"
+    , "InlineMemberFunctionDefinition"
+    , "MemberFunctionDeclaration"
+    , "FunctionDeclaration"
+]
 
 def AddInclude():
     symbol = N10X.Editor.GetCurrentSymbolType()
 
-    if symbol != "Class" and symbol != "Struct":
+    symbolTypeFound = False
+    for symType in allowedSymbolTypes:
+        if symbol == symType:
+            symbolTypeFound = True
+            break
+
+    if symbolTypeFound == False:
         return
 
     currentPath = N10X.Editor.GetCurrentFilename()
@@ -18,13 +34,13 @@ def AddInclude():
     
     # ensure that this code will only run on
     # c/c++ files
-    found = False
+    extensionFound = False
     for ext in cppExtensions:
         if extension == ext:
-            found = True
+            extensionFound = True
             break
 
-    if found == False:
+    if extensionFound == False:
         return
 
     # grab the filepath for the current symbol
@@ -64,13 +80,13 @@ def AddInclude():
         if result:
             # -2 to also trim the newline char
             N10X.Editor.SetCursorPos((len(line)-2,i))
-            N10X.Editor.PopUndoGroup()
+            N10X.Editor.PushUndoGroup()
             N10X.Editor.InsertText(f"\n{output}")
             N10X.Editor.PopUndoGroup()
             return
     
     # in the odd case that there arn't already includes in the file
     N10X.Editor.SetCursorPos((0,0))
-    N10X.Editor.PopUndoGroup()
+    N10X.Editor.PushUndoGroup()
     N10X.Editor.InsertText(f"\n{output}")
     N10X.Editor.PopUndoGroup()
