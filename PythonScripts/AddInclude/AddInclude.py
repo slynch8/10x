@@ -80,13 +80,13 @@ def AddInclude():
         if result:
             # -2 to also trim the newline char
             N10X.Editor.SetCursorPos((len(line)-2,i))
-            N10X.Editor.PopUndoGroup()
+            N10X.Editor.PushUndoGroup()
             N10X.Editor.InsertText(f"\n{output}")
             N10X.Editor.PopUndoGroup()
             return
     
     # in the odd case that there arn't already includes in the file
     N10X.Editor.SetCursorPos((0,0))
-    N10X.Editor.PopUndoGroup()
+    N10X.Editor.PushUndoGroup()
     N10X.Editor.InsertText(f"\n{output}")
     N10X.Editor.PopUndoGroup()
