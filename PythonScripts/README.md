@@ -17,4 +17,4 @@ SmoothScroll.py                     |With this script, you can add the ability t
 SortLines.py                        |Sort the current selection of lines alphabetically
 TortoiseSVN.py                      |TortoiseSVN integration
 Vim.py                              |Vim style editing. To enable Vim editing set Vim to true in the 10x settings file
-
+SignatureCreator.py                 |Creates a signature or an implementation of a function defined in the header on the CPP file
