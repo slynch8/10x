@@ -36,6 +36,7 @@ Commands:
                            If debugger is in suspend/pause state, it continues the debugger
     - RDBG_StopDebugging: Stops if debugger is running
     - RDBG_RestartDebugging: Restart debugging 
+    - RDBG_OpenDebugger: Only opens debugger but doesn't run the session
 
 Extras:
     - RDBG_RunToCursor: Run up to selected cursor. User should already started a debugging session before calling this
@@ -46,6 +47,9 @@ Extras:
     - RDBG_StepOut: Steps out of the current line when debugging, also updates the cursor position in 10x according to position in remedybg
 
 History:
+  0.11.0
+    - Added RDBG_OpenDebugger command. 
+
   0.10.6
     - RemedyBG.Path can now be both the executable or directory. In case of directory, we will attempt to append 'remedybg.exe' to the end of it
 
@@ -148,7 +152,7 @@ RDBG_PROCESS_POLL_INTERVAL:float = 1.0
 
 class RDBG_Options():
     def __init__(self):
-        global _rdbg_options_override
+        global gOptionsOverride
 
         self.executable = Editor.GetSetting("RemedyBG.Path").strip()
         if not self.executable:
@@ -169,12 +173,12 @@ class RDBG_Options():
         else:
             self.hook_calls = False
 
-        _rdbg_options_override = True
+        gOptionsOverride = True
         if self.hook_calls:
             Editor.OverrideSetting('VisualStudioSync', 'false')
         else:
             Editor.RemoveSettingOverride('VisualStudioSync')
-        _rdbg_options_override = False
+        gOptionsOverride = False
 
         keep_session = Editor.GetSetting("RemedyBG.KeepSessionOnActiveChange")
         if keep_session and keep_session == 'true':
@@ -460,19 +464,19 @@ class RDBG_Session:
         return 1
 
     def snap_remedybg_window(self):
-        snap_mode = _rdbg_options.snap_window
-        if _rdbg_session is not None and snap_mode and snap_mode != '':
-            rect = win32gui.GetWindowRect(_rdbg_options.hwnd)
-            rx, ry, rw, rh = _rdbg_session.send_command(RDBG_Command.GET_WINDOW_POS)
+        snap_mode = gOptions.snap_window
+        if gSession is not None and snap_mode and snap_mode != '':
+            rect = win32gui.GetWindowRect(gOptions.hwnd)
+            rx, ry, rw, rh = gSession.send_command(RDBG_Command.GET_WINDOW_POS)
 
             if snap_mode == 'top-right':
-                _rdbg_session.send_command(RDBG_Command.SET_WINDOW_POS, x=rect[2], y=rect[1], w=rw, h=rh)
+                gSession.send_command(RDBG_Command.SET_WINDOW_POS, x=rect[2], y=rect[1], w=rw, h=rh)
             elif snap_mode == 'bottom-right':
-                _rdbg_session.send_command(RDBG_Command.SET_WINDOW_POS, x=rect[2], y=rect[3]-rh, w=rw, h=rh)
+                gSession.send_command(RDBG_Command.SET_WINDOW_POS, x=rect[2], y=rect[3]-rh, w=rw, h=rh)
             elif snap_mode == 'top-left':
-                _rdbg_session.send_command(RDBG_Command.SET_WINDOW_POS, x=rect[0]-rw, y=rect[1], w=rw, h=rh)
+                gSession.send_command(RDBG_Command.SET_WINDOW_POS, x=rect[0]-rw, y=rect[1], w=rw, h=rh)
             elif snap_mode == 'bottom-left':
-                _rdbg_session.send_command(RDBG_Command.SET_WINDOW_POS, x=rect[0]-rw, y=rect[3]-rh, w=rw, h=rh)
+                gSession.send_command(RDBG_Command.SET_WINDOW_POS, x=rect[0]-rw, y=rect[3]-rh, w=rw, h=rh)
                 
 
     def open(self)->bool:
@@ -494,7 +498,7 @@ class RDBG_Session:
             if work_dir != '' and not os.path.isdir(work_dir):
                 Editor.ShowMessageBox(RDBG_TITLE, 'Debugger working directory is invalid: ' + work_dir)
 
-            args = _rdbg_options.executable + ' --servername ' + self.name + ' "' + Editor.GetWorkspaceExePath() + '"' + (' ' if debug_args!='' else '') + debug_args
+            args = gOptions.executable + ' --servername ' + self.name + ' "' + Editor.GetWorkspaceExePath() + '"' + (' ' if debug_args!='' else '') + debug_args
             self.process = subprocess.Popen(args, cwd=work_dir)
             time.sleep(0.1)
 
@@ -537,7 +541,7 @@ class RDBG_Session:
                 self.send_command(RDBG_Command.ADD_BREAKPOINT_AT_FILENAME_LINE, id=bp[0], filename=bp[1], line=bp[2])
 
         except FileNotFoundError as not_found:
-            Editor.ShowMessageBox(RDBG_TITLE, str(not_found) + ': ' + _rdbg_options.executable)
+            Editor.ShowMessageBox(RDBG_TITLE, str(not_found) + ': ' + gOptions.executable)
             return False
         except pywintypes.error as connection_error:
             Editor.ShowMessageBox(RDBG_TITLE, str(connection_error))
@@ -569,7 +573,7 @@ class RDBG_Session:
         print("RDBG: Connection closed")
 
     def run(self):
-        global _rdbg_options
+        global gOptions
         
         if self.cmd_pipe is not None:
             state:RDBG_TargetState = self.send_command(RDBG_Command.GET_TARGET_STATE)
@@ -579,14 +583,14 @@ class RDBG_Session:
                 self.send_command(RDBG_Command.CONTINUE_EXECUTION)
             elif state == RDBG_TargetState.EXECUTING:
                 pass
-            if _rdbg_options.output_debug_text:
+            if gOptions.output_debug_text:
                 Editor.ShowOutput()
 
     def stop(self):
         if self.cmd_pipe is not None:
-            state:RDBG_TargetState = _rdbg_session.send_command(RDBG_Command.GET_TARGET_STATE)
+            state:RDBG_TargetState = gSession.send_command(RDBG_Command.GET_TARGET_STATE)
             if state == RDBG_TargetState.SUSPENDED or state == RDBG_TargetState.EXECUTING:
-                _rdbg_session.send_command(RDBG_Command.STOP_DEBUGGING)
+                gSession.send_command(RDBG_Command.STOP_DEBUGGING)
 
     def next_breakpoint_ignored(self):
         if self.ignore_next_remove_breakpoint:
@@ -602,8 +606,8 @@ class RDBG_Session:
         return False
 
     def update(self)->bool:
-        global _rdbg_options
-        global _rdbg_options_override
+        global gOptions
+        global gOptionsOverride
 
         tm:float = time.time()
 
@@ -623,7 +627,7 @@ class RDBG_Session:
             
             # Check if the active config/project has changed
             if self.update_active_project():
-                if _rdbg_options.keep_session:
+                if gOptions.keep_session:
                     self.process = None
                 else:
                     print('RDBG: Active project changed. Closing session...')
@@ -637,7 +641,7 @@ class RDBG_Session:
                     hr, data = win32file.ReadFile(self.event_pipe, nbytes, None)
                     event_buffer = io.BytesIO(data)
                     event_type = int.from_bytes(event_buffer.read(2), 'little')
-                    if event_type == RDBG_EventType.OUTPUT_DEBUG_STRING and _rdbg_options.output_debug_text:
+                    if event_type == RDBG_EventType.OUTPUT_DEBUG_STRING and gOptions.output_debug_text:
                         text = event_buffer.read(int.from_bytes(event_buffer.read(2), 'little')).decode('utf-8')
                         print('RDBG:', text.strip())
                     elif event_type == RDBG_EventType.KIND_BREAKPOINT_RESOLVED:
@@ -695,26 +699,26 @@ class RDBG_Session:
                         print('RDBG: Debugging terminated with exit code:', exit_code)
                         self.target_state = RDBG_TargetState.NONE
 
-                        if not _rdbg_options.stop_debug_on_build:
-                            _rdbg_options_override = True
+                        if not gOptions.stop_debug_on_build:
+                            gOptionsOverride = True
                             Editor.RemoveSettingOverride('BuildBeforeStartDebugging')
-                            _rdbg_options_override = False
+                            gOptionsOverride = False
 
-                        if _rdbg_options.stop_debug_command and _rdbg_options.stop_debug_command != '':
-                            print('RDBG: Execute:', _rdbg_options.stop_debug_command)
-                            Editor.ExecuteCommand(_rdbg_options.stop_debug_command)
+                        if gOptions.stop_debug_command and gOptions.stop_debug_command != '':
+                            print('RDBG: Execute:', gOptions.stop_debug_command)
+                            Editor.ExecuteCommand(gOptions.stop_debug_command)
                     elif event_type == RDBG_EventType.TARGET_STARTED:
                         print('RDBG: Debugging started')
                         self.target_state = RDBG_TargetState.EXECUTING
 
-                        if not _rdbg_options.stop_debug_on_build:
-                            _rdbg_options_override = True
+                        if not gOptions.stop_debug_on_build:
+                            gOptionsOverride = True
                             Editor.OverrideSetting('BuildBeforeStartDebugging', 'false')
-                            _rdbg_options_override = False
+                            gOptionsOverride = False
 
-                        if _rdbg_options.start_debug_command and _rdbg_options.start_debug_command != '':
-                            print('RDBG: Execute:', _rdbg_options.start_debug_command)
-                            Editor.ExecuteCommand(_rdbg_options.start_debug_command)
+                        if gOptions.start_debug_command and gOptions.start_debug_command != '':
+                            print('RDBG: Execute:', gOptions.start_debug_command)
+                            Editor.ExecuteCommand(gOptions.start_debug_command)
                         self.snap_remedybg_window()
                     elif event_type == RDBG_EventType.TARGET_CONTINUED:
                         self.target_state = RDBG_TargetState.EXECUTING
@@ -727,29 +731,29 @@ class RDBG_Session:
         return True
 
 def RDBG_StartDebugging():
-    global _rdbg_session
-    global _rdbg_options
+    global gSession
+    global gOptions
 
-    if _rdbg_session is not None:
-        if _rdbg_session.update_active_project():
-            if _rdbg_options.keep_session:
-                _rdbg_session.process = None
+    if gSession is not None:
+        if gSession.update_active_project():
+            if gOptions.keep_session:
+                gSession.process = None
             else:
                 print('RDBG: Project config/platform changed. Restarting RemedyBG ...')
                 
-            _rdbg_session.close()
-            _rdbg_session = None
+            gSession.close()
+            gSession = None
             RDBG_StartDebugging()
 
         # poll for debugger state. if we are in the middle of debugging, then continue, otherwise run/build-run
-        state:RDBG_TargetState = _rdbg_session.send_command(RDBG_Command.GET_TARGET_STATE)
+        state:RDBG_TargetState = gSession.send_command(RDBG_Command.GET_TARGET_STATE)
         if state == RDBG_TargetState.NONE:
-            if _rdbg_options.build_before_debug:
-                _rdbg_session.run_after_build = True    # Checking this in BuildFinished callback
+            if gOptions.build_before_debug:
+                gSession.run_after_build = True    # Checking this in BuildFinished callback
             else:
-                _rdbg_session.run()
+                gSession.run()
         elif state == RDBG_TargetState.SUSPENDED:
-            _rdbg_session.run()
+            gSession.run()
     else:
         if Editor.GetWorkspaceFilename() == '':
             Editor.ShowMessageBox(RDBG_TITLE, 'No Workspace is opened for debugging')
@@ -757,132 +761,154 @@ def RDBG_StartDebugging():
 
         print('RDBG: Workspace: ' + Editor.GetWorkspaceFilename())
 
-        _rdbg_session = RDBG_Session()
-        if _rdbg_session.open():
-            if _rdbg_options.build_before_debug:
-                _rdbg_session.run_after_build = True    # Checking this in BuildFinished callback
+        gSession = RDBG_Session()
+        if gSession.open():
+            if gOptions.build_before_debug:
+                gSession.run_after_build = True    # Checking this in BuildFinished callback
             else:
-                _rdbg_session.run()			
+                gSession.run()			
         else:
-            _rdbg_session = None
+            gSession = None
     
 def RDBG_StopDebugging():
-    global _rdbg_session
-    if _rdbg_session is not None:
-        _rdbg_session.stop()        
+    global gSession
+    if gSession is not None:
+        gSession.stop()        
+
+def RDBG_Reset():
+    global gSession
+    RDBG_StopDebugging()
+    gSession = None
 
 def RDBG_RestartDebugging():
-    global _rdbg_session
-    if _rdbg_session is not None:
-        _rdbg_session.send_command(RDBG_Command.RESTART_DEBUGGING)		
+    global gSession
+    if gSession is not None:
+        gSession.send_command(RDBG_Command.RESTART_DEBUGGING)		
 
 def RDBG_RunToCursor():
-    global _rdbg_session
-    if _rdbg_session is not None:
+    global gSession
+    if gSession is not None:
         filename:str = Editor.GetCurrentFilename()
         if filename != '':
-            _rdbg_session.send_command(RDBG_Command.RUN_TO_FILE_AT_LINE, filename=filename, line=Editor.GetCursorPos()[1])
+            gSession.send_command(RDBG_Command.RUN_TO_FILE_AT_LINE, filename=filename, line=Editor.GetCursorPos()[1])
 
 def RDBG_GoToCursor():
-    global _rdbg_session
-    if _rdbg_session is not None:
+    global gSession
+    if gSession is not None:
         filename:str = Editor.GetCurrentFilename()
         if filename != '':
-            _rdbg_session.send_command(RDBG_Command.GOTO_FILE_AT_LINE, filename=filename, line=Editor.GetCursorPos()[1])
+            gSession.send_command(RDBG_Command.GOTO_FILE_AT_LINE, filename=filename, line=Editor.GetCursorPos()[1])
 
 def RDBG_StepInto():
-    global _rdbg_session
-    if _rdbg_session is not None:
-        _rdbg_session.send_command(RDBG_Command.STEP_INTO_BY_LINE)
+    global gSession
+    if gSession is not None:
+        gSession.send_command(RDBG_Command.STEP_INTO_BY_LINE)
 
 def RDBG_StepOver():
-    global _rdbg_session
-    if _rdbg_session is not None:
-        _rdbg_session.send_command(RDBG_Command.STEP_OVER_BY_LINE)
+    global gSession
+    if gSession is not None:
+        gSession.send_command(RDBG_Command.STEP_OVER_BY_LINE)
 
 def RDBG_StepOut():
-    global _rdbg_session
-    if _rdbg_session is not None:
-        _rdbg_session.send_command(RDBG_Command.STEP_OUT)
+    global gSession
+    if gSession is not None:
+        gSession.send_command(RDBG_Command.STEP_OUT)
 
 def RDBG_AddSelectionToWatch():
-    global _rdbg_session
-    if _rdbg_session is not None:
+    global gSession
+    if gSession is not None:
         selection:str = Editor.GetSelection()
         if selection != '':
-            _rdbg_session.send_command(RDBG_Command.ADD_WATCH, expr=selection)
+            gSession.send_command(RDBG_Command.ADD_WATCH, expr=selection)
+
+def RDBG_OpenDebugger():
+    global gSession
+    if Editor.GetWorkspaceFilename() == '':
+        Editor.ShowMessageBox(RDBG_TITLE, 'No Workspace is opened for debugging')
+        return
+
+    print('RDBG: Workspace: ' + Editor.GetWorkspaceFilename())
+
+    gSession = RDBG_Session()
+    if gSession.open():
+        if gOptions.build_before_debug:
+            gSession.run_after_build = True    # Checking this in BuildFinished callback
+        else:
+            gSession.run()			
+    else:
+        gSession = None
         
 def _RDBG_WorkspaceOpened():
-    global _rdbg_session
-    if _rdbg_session is not None:
-        print('RDBG: Closing previous debug session "%s".' % (_rdbg_session.name))
-        _rdbg_session.close()
-        _rdbg_session = None
+    global gSession
+    if gSession is not None:
+        print('RDBG: Closing previous debug session "%s".' % (gSession.name))
+        gSession.close()
+        gSession = None
 
 def _RDBG_AddBreakpoint(id, filename, line):
-    global _rdbg_session
-    if _rdbg_session is not None:
-        _rdbg_session.send_command(RDBG_Command.ADD_BREAKPOINT_AT_FILENAME_LINE, id=id, filename=filename, line=line)
-        _rdbg_session.send_command(RDBG_Command.GOTO_FILE_AT_LINE, filename=filename, line=line)
+    global gSession
+    if gSession is not None:
+        gSession.send_command(RDBG_Command.ADD_BREAKPOINT_AT_FILENAME_LINE, id=id, filename=filename, line=line)
+        gSession.send_command(RDBG_Command.GOTO_FILE_AT_LINE, filename=filename, line=line)
 
 def _RDBG_RemoveBreakpoint(id, filename, line):
-    global _rdbg_session
-    if _rdbg_session is not None and not _rdbg_session.next_breakpoint_ignored():
-        _rdbg_session.send_command(RDBG_Command.DELETE_BREAKPOINT, id=id, filename=filename, line=line)
+    global gSession
+    if gSession is not None and not gSession.next_breakpoint_ignored():
+        gSession.send_command(RDBG_Command.DELETE_BREAKPOINT, id=id, filename=filename, line=line)
 
 def _RDBG_UpdateBreakpoint(id, filename, line):
-    global _rdbg_session
-    if _rdbg_session is not None:
-        _rdbg_session.send_command(RDBG_Command.UPDATE_BREAKPOINT_LINE, id=id, line=line)
+    global gSession
+    if gSession is not None:
+        gSession.send_command(RDBG_Command.UPDATE_BREAKPOINT_LINE, id=id, line=line)
 
 def _RDBG_BuildFinished(result):
-    global _rdbg_session
+    global gSession
     
-    if _rdbg_session is not None:
-        if _rdbg_session.run_after_build and result:
-            _rdbg_session.run()	
-        _rdbg_session.run_after_build = False
+    if gSession is not None:
+        if gSession.run_after_build and result:
+            gSession.run()	
+        gSession.run_after_build = False
 
 def _RDBG_Update():
-    global _rdbg_session
+    global gSession
 
-    if _rdbg_session is not None:
-        if not _rdbg_session.update():
-            _rdbg_session = None
+    if gSession is not None:
+        if not gSession.update():
+            gSession = None
 
 def _RDBG_SettingsChanged():
-    global _rdbg_options
-    if not _rdbg_options_override:
-        _rdbg_options = RDBG_Options()
+    global gOptions
+    if not gOptionsOverride:
+        gOptions = RDBG_Options()
 
 def _RDBG_StartDebugging()->bool:
-    if _rdbg_options.hook_calls:
+    if gOptions.hook_calls:
         RDBG_StartDebugging()
         return True
     else:
         return False
 
 def _RDBG_StopDebugging()->bool:
-    if _rdbg_options.hook_calls:
+    if gOptions.hook_calls:
         RDBG_StopDebugging()
         return True
     else:
         return False
 
 def _RDBG_RestartDebugging()->bool:
-    if _rdbg_options.hook_calls:
+    if gOptions.hook_calls:
         RDBG_RestartDebugging()
         return True
     else:
         return False
 
 def _RDBG_ProjectBuild(filename:str)->bool:
-    if _rdbg_options.stop_debug_on_build and _rdbg_session is not None:
-        _rdbg_session.stop()        
+    if gOptions.stop_debug_on_build and gSession is not None:
+        gSession.stop()        
     return False
 
 def InitialiseRemedy():
-    _rdbg_options:RDBG_Options = RDBG_Options()
+    gOptions:RDBG_Options = RDBG_Options()
 
     Editor.AddBreakpointAddedFunction(_RDBG_AddBreakpoint)
     Editor.AddBreakpointRemovedFunction(_RDBG_RemoveBreakpoint)
@@ -901,9 +927,9 @@ def InitialiseRemedy():
 	
     _RDBG_SettingsChanged()
 
-_rdbg_session:RDBG_Session = None
-_rdbg_options:RDBG_Options = None
-_rdbg_options_override:bool = False
+gSession:RDBG_Session = None
+gOptions:RDBG_Options = None
+gOptionsOverride:bool = False
 
 Editor.CallOnMainThread(InitialiseRemedy)
 
