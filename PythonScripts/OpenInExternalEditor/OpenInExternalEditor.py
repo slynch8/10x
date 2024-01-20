@@ -11,7 +11,10 @@ def _OED_SettingsChanged():
     SETTING_EditorPath = Editor.GetSetting("ExternalEditor")
 
 def OpenInExternalEditor():
-    os.system(SETTING_EditorPath + ' ' + Editor.GetCurrentFilename())
+    if SETTING_EditorPath:
+        os.system(SETTING_EditorPath + ' ' + Editor.GetCurrentFilename())
+    else:
+        os.system(Editor.GetCurrentFilename())
 
 Editor.AddOnSettingsChangedFunction(_OED_SettingsChanged)
-_OED_SettingsChanged()
+Editor.CallOnMainThread(_OED_SettingsChanged)
