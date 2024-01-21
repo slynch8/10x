@@ -1,7 +1,7 @@
 '''
 RemedyBG debugger integration for 10x (10xeditor.com) 
 RemedyBG: https://remedybg.handmade.network/ (should be above 0.3.8)
-Version: 0.10.6
+Version: 0.11.1
 Original Script author: septag@discord / septag@pm.me
 
 To get started go to Settings.10x_settings, and enable the hook, by adding this line:
@@ -49,9 +49,13 @@ RemedyBG sessions:
     As of version 0.11.0, RemedyBG session support has been added to the plugin.
     If you save RemedyBG session while connected to the project. It will store the reference to the session file 
     and it will load that next time instead of starting a new session
-    TODO: In a case where a RemedyBG session is loaded. We need to call GET_BREAKPOINTS command and sync all the breakpoints from RemedyBG into 10x
 
 History:
+  0.11.1
+    - Syncing breakpoints from RemedyBG when pre-existing session is used
+    - Fixes and improvements for 'BringToForegroundOnSuspended'. Now both 10x and RemedyBG windows will come into foreground on suspend when the setting is enabled
+    - Fixed OpenDebugger command
+
   0.11.0
     - Added RDBG_OpenDebugger command 
     - Remove SnapWindow setting
@@ -148,12 +152,13 @@ History:
 
 from enum import Enum, IntEnum
 from optparse import Option
-import win32file, win32pipe, pywintypes, win32api, win32gui
+import win32file, win32pipe, pywintypes, win32api, win32gui, ctypes.wintypes
 import io, os, ctypes, time, typing, subprocess
 import json
 
 from N10X import Editor
 
+WNDENUMPROC = ctypes.WINFUNCTYPE(ctypes.wintypes.BOOL, ctypes.wintypes.HWND, ctypes.wintypes.LPARAM)
 RDBG_HANDLE = typing.Any
 RDBG_PREFIX:str = '\\\\.\\pipe\\'
 RDBG_TITLE:str = 'RemedyBG'
@@ -370,6 +375,23 @@ class RDBG_Session:
                     access_kind:int = int.from_bytes(out_buffer.read(1), 'little')
 
         return ('', 0)
+    
+    def sync_breakpoints(self, two_way:bool):
+        # send all breakpoints from 10x to RemedyBG
+        for bp in Editor.GetBreakpoints():
+            self.send_command(RDBG_Command.ADD_BREAKPOINT_AT_FILENAME_LINE, id=bp[0], filename=bp[1], line=bp[2])
+
+        if two_way:
+            rdbg_bps = self.send_command(RDBG_Command.GET_BREAKPOINTS)
+            if not rdbg_bps or rdbg_bps == 0:
+                return
+            
+            for bp in rdbg_bps:
+                bp_id = bp['id']
+                if bp_id not in self.breakpoints_rdbg:
+                    id_10x:int = Editor.AddBreakpoint(bp['filename'], bp['line'])
+                    self.breakpoints_rdbg[bp_id] = (id_10x, bp['filename'], bp['line'])
+                    self.breakpoints[id_10x] = bp_id
 
     def send_command(self, cmd:RDBG_Command, **cmd_args)->int:
         if self.cmd_pipe is None:
@@ -448,6 +470,8 @@ class RDBG_Session:
             pass
         elif cmd == RDBG_Command.SAVE_SESSION:
             pass
+        elif cmd == RDBG_Command.GET_BREAKPOINTS:
+            pass
         else:
             assert 0
             return 0		# not implemented
@@ -488,6 +512,33 @@ class RDBG_Session:
             elif cmd == RDBG_Command.GET_SESSION_FILENAME:
                 strlen = int.from_bytes(out_buffer.read(2), 'little')
                 return out_buffer.read(strlen).decode('utf-8')
+            elif cmd == RDBG_Command.GET_BREAKPOINTS:
+                num_bps = int.from_bytes(out_buffer.read(2), 'little')
+                bps = []
+                for i in range(num_bps):
+                    uid:int = int.from_bytes(out_buffer.read(4), 'little')
+                    enabled:bool = int.from_bytes(out_buffer.read(1), 'little')
+                    module_name:str = out_buffer.read(int.from_bytes(out_buffer.read(2), 'little')).decode('utf-8')
+                    condition_expr:str = out_buffer.read(int.from_bytes(out_buffer.read(2), 'little')).decode('utf-8')
+                    kind:int = int.from_bytes(out_buffer.read(1), 'little')
+                    match kind:
+                        case RDBG_BreakpointKind.FUNCTION_NAME:
+                            function_name:str = out_buffer.read(int.from_bytes(out_buffer.read(2), 'little')).decode('utf-8')
+                            overload_id:int = int.from_bytes(out_buffer.read(4), 'little')
+
+                        case RDBG_BreakpointKind.FILENAME_LINE:
+                            filename:str = out_buffer.read(int.from_bytes(out_buffer.read(2), 'little')).decode('utf-8')
+                            line_num:int = int.from_bytes(out_buffer.read(4), 'little')
+                            bps.append({'id': uid, 'filename': filename, 'line': line_num})
+
+                        case RDBG_BreakpointKind.ADDRESS:
+                            address:int = int.from_bytes(out_buffer.read(8), 'little')
+
+                        case RDBG_BreakpointKind.PROCESSOR:
+                            address_expression:str = out_buffer.read(int.from_bytes(out_buffer.read(2), 'little')).decode('utf-8')
+                            num_bytes:int = int.from_bytes(out_buffer.read(1), 'little')
+                            access_kind:int = int.from_bytes(out_buffer.read(1), 'little')                    
+                return bps                   
 
         else:
             print('RDBG: ' + str(cmd) + ' failed')
@@ -628,16 +679,10 @@ class RDBG_Session:
             if session_filepath:
                 print("RDBG: Connection established. Session:", session_filepath)
                 self.rdbg_current_session_filepath = session_filepath
+                self.sync_breakpoints(two_way=True)
             else:
                 print("RDBG: Connection established")
-
-            # send all breakpoints in 10x to RemedyBG
-            # TODO: This can also cause disabled breakpoints in RemedyBG get re-enabled. Have to come up with something to solve this little problem
-            for bp in Editor.GetBreakpoints():
-                self.send_command(RDBG_Command.ADD_BREAKPOINT_AT_FILENAME_LINE, id=bp[0], filename=bp[1], line=bp[2])
-
-            self.send_command(RDBG_Command.SET_BRING_TO_FOREGROUND_ON_SUSPENDED, enabled=gOptions.bring_to_foreground_on_suspend)
-
+                self.sync_breakpoints(two_way=False)
         except FileNotFoundError as not_found:
             Editor.ShowMessageBox(RDBG_TITLE, str(not_found) + ': ' + gOptions.executable)
             return False
@@ -796,6 +841,11 @@ class RDBG_Session:
                                reason == RDBG_SourceLocChangedReason.NON_USER_BREAKPOINT or \
                                reason == RDBG_SourceLocChangedReason.DEBUG_BREAK:
                                self.target_state = RDBG_TargetState.SUSPENDED
+                               if gOptions.bring_to_foreground_on_suspend and gMainWindowHandle:
+                                    try:
+                                        win32gui.SetForegroundWindow(gMainWindowHandle)
+                                    except:
+                                        pass                                   
                     elif event_type == RDBG_EventType.BREAKPOINT_MODIFIED:
                         # used for enabling/disabling breakpoints, we don't have that now
                         pass
@@ -849,6 +899,8 @@ def RDBG_StartDebugging():
             gSession = None
             RDBG_StartDebugging()
 
+        gSession.send_command(RDBG_Command.SET_BRING_TO_FOREGROUND_ON_SUSPENDED, enabled=gOptions.bring_to_foreground_on_suspend)
+
         # poll for debugger state. if we are in the middle of debugging, then continue, otherwise run/build-run
         state:RDBG_TargetState = gSession.send_command(RDBG_Command.GET_TARGET_STATE)
         if state == RDBG_TargetState.NONE:
@@ -867,6 +919,7 @@ def RDBG_StartDebugging():
 
         gSession = RDBG_Session()
         if gSession.open():
+            gSession.send_command(RDBG_Command.SET_BRING_TO_FOREGROUND_ON_SUSPENDED, enabled=gOptions.bring_to_foreground_on_suspend)
             if gOptions.build_before_debug:
                 gSession.run_after_build = True    # Checking this in BuildFinished callback
             else:
@@ -931,16 +984,14 @@ def RDBG_OpenDebugger():
         Editor.ShowMessageBox(RDBG_TITLE, 'No Workspace is opened for debugging')
         return
 
-    print('RDBG: Workspace: ' + Editor.GetWorkspaceFilename())
+    if not gSession:
+        print('RDBG: Workspace: ' + Editor.GetWorkspaceFilename())
 
-    gSession = RDBG_Session()
-    if gSession.open():
-        if gOptions.build_before_debug:
-            gSession.run_after_build = True    # Checking this in BuildFinished callback
+        gSession = RDBG_Session()
+        if gSession.open():
+            gSession.send_command(RDBG_Command.SET_BRING_TO_FOREGROUND_ON_SUSPENDED, enabled=gOptions.bring_to_foreground_on_suspend)
         else:
-            gSession.run()			
-    else:
-        gSession = None
+            gSession = None
         
 def _RDBG_WorkspaceOpened():
     global gSession
@@ -1011,6 +1062,17 @@ def _RDBG_ProjectBuild(filename:str)->bool:
         gSession.stop()        
     return False
 
+def _RDBG_EnumWindowsCallback(hwnd, lParam):
+    global gMainWindowHandle
+
+    window_pid = ctypes.wintypes.DWORD()
+    ctypes.windll.user32.GetWindowThreadProcessId(hwnd, ctypes.byref(window_pid))
+    
+    if lParam == window_pid.value:
+        gMainWindowHandle = hwnd
+        return False
+    return True
+
 def InitialiseRemedy():
     gOptions:RDBG_Options = RDBG_Options()
 
@@ -1028,12 +1090,16 @@ def InitialiseRemedy():
     Editor.AddRestartDebuggingFunction(_RDBG_RestartDebugging)
 
     Editor.AddProjectBuildFunction(_RDBG_ProjectBuild)
+
+    proc_id:ctypes.wintypes.LPARAM = ctypes.windll.kernel32.GetCurrentProcessId()
+    ctypes.windll.user32.EnumWindows(WNDENUMPROC(_RDBG_EnumWindowsCallback), proc_id)
 	
     _RDBG_SettingsChanged()
 
 gSession:RDBG_Session = None
 gOptions:RDBG_Options = None
 gOptionsOverride:bool = False
+gMainWindowHandle = None
 
 Editor.CallOnMainThread(InitialiseRemedy)
 
