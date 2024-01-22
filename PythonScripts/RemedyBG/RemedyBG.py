@@ -1,7 +1,7 @@
 '''
 RemedyBG debugger integration for 10x (10xeditor.com) 
 RemedyBG: https://remedybg.handmade.network/ (should be above 0.3.8)
-Version: 0.11.1
+Version: 0.11.2
 Original Script author: septag@discord / septag@pm.me
 
 To get started go to Settings.10x_settings, and enable the hook, by adding this line:
@@ -44,6 +44,9 @@ Extras:
     - RDBG_StepInto: Steps into line when debugging, also updates the cursor position in 10x according to position in remedybg
     - RDBG_StepOver: Steps over the line when debugging, also updates the cursor position in 10x according to position in remedybg
     - RDBG_StepOut: Steps out of the current line when debugging, also updates the cursor position in 10x according to position in remedybg
+    - RDBG_UnbindSession: Unbinds any session files for the current Config/Platform build configuration. 
+                          This is useful when you have already binded a session file to configuration before but want to clear it
+    - RDBG_Reset: Saves any opened sessions in RemedyBG, quits the debugger and closes the connection.
 
 RemedyBG sessions:
     As of version 0.11.0, RemedyBG session support has been added to the plugin.
@@ -51,6 +54,10 @@ RemedyBG sessions:
     and it will load that next time instead of starting a new session
 
 History:
+  0.11.2
+    - Fixed RDBG_Reset command
+    - new 'RDBG_UnbindSession' command to unbind the session file from current configuration
+
   0.11.1
     - Syncing breakpoints from RemedyBG when pre-existing session is used
     - Fixes and improvements for 'BringToForegroundOnSuspended'. Now both 10x and RemedyBG windows will come into foreground on suspend when the setting is enabled
@@ -204,7 +211,6 @@ class RDBG_Options():
             self.build_before_debug = True
         else:
             self.build_before_debug = False
-        print('BuildBeforeStartDebugging =', self.build_before_debug)
 
         if  Editor.GetSetting("StopDebuggingOnBuild") and Editor.GetSetting("StopDebuggingOnBuild") == 'true':
             self.stop_debug_on_build = True
@@ -590,14 +596,12 @@ class RDBG_Session:
             return None
         
         projname:str = self.active_project
-
         session_exists:bool = False
         for session_ref in self.session_refs:
             if session_ref['name'] == projname:
                 session_exists = True
                 if session_ref['session_filepath'] != session_filepath:
                     session_ref['session_filepath'] = session_filepath
-                    print('SAVE')
                     self.save_session_ref()
                 return session_ref['session_filepath']
         
@@ -673,8 +677,6 @@ class RDBG_Session:
             self.event_pipe = win32file.CreateFile(name, win32file.GENERIC_READ|256, 0, None, win32file.OPEN_EXISTING, 0, None)
             win32pipe.SetNamedPipeHandleState(self.event_pipe, win32pipe.PIPE_READMODE_MESSAGE, None, None)
 
-            print("RDBG: Connection established")
-
             self.save_session_ref()
             if session_filepath:
                 print("RDBG: Connection established. Session:", session_filepath)
@@ -718,6 +720,17 @@ class RDBG_Session:
 
         self.target_state:RDBG_TargetState = RDBG_TargetState.NONE
         print("RDBG: Connection closed")
+
+    def unbind_session_file(self):
+        projname:str = self.active_project
+        session_exists:bool = False
+        for session_ref in self.session_refs:
+            if session_ref['name'] == projname:
+                print('RDBG: Unbinding session file from the current config:', session_ref['session_filepath'])
+                session_ref['session_filepath'] = ''
+                self.save_session_ref()
+                return True
+        return False
 
     def run(self):
         global gOptions
@@ -934,8 +947,10 @@ def RDBG_StopDebugging():
 
 def RDBG_Reset():
     global gSession
-    RDBG_StopDebugging()
-    gSession = None
+    if gSession is not None:
+        gSession.stop()
+        gSession.close()
+        gSession = None
 
 def RDBG_RestartDebugging():
     global gSession
@@ -991,6 +1006,13 @@ def RDBG_OpenDebugger():
         if gSession.open():
             gSession.send_command(RDBG_Command.SET_BRING_TO_FOREGROUND_ON_SUSPENDED, enabled=gOptions.bring_to_foreground_on_suspend)
         else:
+            gSession = None
+
+def RDBG_UnbindSession():
+    global gSession
+    if gSession is not None:
+        if gSession.unbind_session_file():
+            gSession.close()
             gSession = None
         
 def _RDBG_WorkspaceOpened():
