@@ -1,7 +1,7 @@
 '''
 RemedyBG debugger integration for 10x (10xeditor.com) 
 RemedyBG: https://remedybg.handmade.network/ (should be above 0.3.8)
-Version: 0.11.3
+Version: 0.11.4
 Original Script author: septag@discord / septag@pm.me
 
 To get started go to Settings.10x_settings, and enable the hook, by adding this line:
@@ -54,6 +54,9 @@ RemedyBG sessions:
     and it will load that next time instead of starting a new session
 
 History:
+  0.11.4
+    - Added StepIn/StepOut/StepOver callbacks to hook them with new 10x commands
+
   0.11.3
     - Adding step line arrow in debug mode with the new 10x API
     - Using new SetForegroundWindow() API instead of enumerating windows and calling win32 api
@@ -1098,8 +1101,21 @@ def _RDBG_ProjectBuild(filename:str)->bool:
         gSession.stop()        
     return False
 
+def _RDBG_StepOverHit():
+    if gOptions.hook_calls:
+        RDBG_StepOver()
+
+def _RDBG_StepIntoHit():
+    if gOptions.hook_calls:
+        RDBG_StepInto()
+
+def _RDBG_StepOutHit():
+    if gOptions.hook_calls:
+        RDBG_StepOut()
+
 def InitialiseRemedy():
-    gOptions:RDBG_Options = RDBG_Options()
+    global gOptions
+    gOptions = RDBG_Options()
 
     Editor.AddBreakpointAddedFunction(_RDBG_AddBreakpoint)
     Editor.AddBreakpointRemovedFunction(_RDBG_RemoveBreakpoint)
@@ -1116,7 +1132,9 @@ def InitialiseRemedy():
 
     Editor.AddProjectBuildFunction(_RDBG_ProjectBuild)
 
-    _RDBG_SettingsChanged()
+    Editor.AddDebugStepOverFunction(_RDBG_StepOverHit)
+    Editor.AddDebugStepIntoFunction(_RDBG_StepIntoHit)
+    Editor.AddDebugStepOutFunction(_RDBG_StepOutHit)
 
 gSession:RDBG_Session = None
 gOptions:RDBG_Options = None
