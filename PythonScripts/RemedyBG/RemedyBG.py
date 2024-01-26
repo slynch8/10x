@@ -1,7 +1,7 @@
 '''
 RemedyBG debugger integration for 10x (10xeditor.com) 
 RemedyBG: https://remedybg.handmade.network/ (should be above 0.3.8)
-Version: 0.11.2
+Version: 0.11.3
 Original Script author: septag@discord / septag@pm.me
 
 To get started go to Settings.10x_settings, and enable the hook, by adding this line:
@@ -54,6 +54,11 @@ RemedyBG sessions:
     and it will load that next time instead of starting a new session
 
 History:
+  0.11.3
+    - Adding step line arrow in debug mode with the new 10x API
+    - Using new SetForegroundWindow() API instead of enumerating windows and calling win32 api
+    - Change 10x status bar color based on debugging state
+
   0.11.2
     - Fixed RDBG_Reset command
     - new 'RDBG_UnbindSession' command to unbind the session file from current configuration
@@ -336,6 +341,7 @@ class RDBG_Session:
         self.active_project:str = ""    # Format: project_path;config;platform
         self.session_refs = []  # contains remedybg session filepath for each project config (see active_project formatting)
         self.rdbg_current_session_filepath = None
+        self.current_file = None    
 
         workspace_name:str = os.path.basename(Editor.GetWorkspaceFilename())
         self.update_active_project()
@@ -718,6 +724,11 @@ class RDBG_Session:
             print('RDBG: RemedyBG quit with code: %i' % (self.process.returncode))
             self.process = None
 
+        Editor.ClearStatusBarColour()
+        if self.current_file:
+            Editor.SetDebuggerStepLine(self.current_file, -1)
+            self.current_file = None
+
         self.target_state:RDBG_TargetState = RDBG_TargetState.NONE
         print("RDBG: Connection closed")
 
@@ -845,20 +856,22 @@ class RDBG_Session:
                         reason:RDBG_SourceLocChangedReason = int.from_bytes(event_buffer.read(4), 'little')
                         if reason != RDBG_SourceLocChangedReason.DRIVER:
                             filename = filename.replace('\\', '/')
-                            Editor.OpenFile(filename)
-                            Editor.SetCursorPos((0, line-1)) # convert to index-based
+                            Editor.SetDebuggerStepLine(filename, line-1) # convert to index-based
+                            self.current_file = filename
                             if reason == RDBG_SourceLocChangedReason.BREAKPOINT_HIT or \
                                reason == RDBG_SourceLocChangedReason.EXCEPTION_HIT or \
                                reason == RDBG_SourceLocChangedReason.STEP_OVER or \
                                reason == RDBG_SourceLocChangedReason.STEP_IN or  \
                                reason == RDBG_SourceLocChangedReason.NON_USER_BREAKPOINT or \
                                reason == RDBG_SourceLocChangedReason.DEBUG_BREAK:
-                               self.target_state = RDBG_TargetState.SUSPENDED
-                               if gOptions.bring_to_foreground_on_suspend and gMainWindowHandle:
-                                    try:
-                                        win32gui.SetForegroundWindow(gMainWindowHandle)
-                                    except:
-                                        pass                                   
+                                if reason != RDBG_SourceLocChangedReason.EXCEPTION_HIT:
+                                    Editor.SetStatusBarColour((202, 131, 0))
+                                else:
+                                    Editor.SetStatusBarColour((145, 18, 18))
+                                
+                                self.target_state = RDBG_TargetState.SUSPENDED
+                                if gOptions.bring_to_foreground_on_suspend:
+                                    Editor.SetForegroundWindow()
                     elif event_type == RDBG_EventType.BREAKPOINT_MODIFIED:
                         # used for enabling/disabling breakpoints, we don't have that now
                         pass
@@ -866,6 +879,11 @@ class RDBG_Session:
                         exit_code:int = int.from_bytes(event_buffer.read(4), 'little')
                         print('RDBG: Debugging terminated with exit code:', exit_code)
                         self.target_state = RDBG_TargetState.NONE
+                        Editor.ClearStatusBarColour()
+
+                        if self.current_file:
+                            Editor.SetDebuggerStepLine(self.current_file, -1)
+                            self.current_file = None
 
                         if not gOptions.stop_debug_on_build:
                             gOptionsOverride = True
@@ -878,6 +896,7 @@ class RDBG_Session:
                     elif event_type == RDBG_EventType.TARGET_STARTED:
                         print('RDBG: Debugging started')
                         self.target_state = RDBG_TargetState.EXECUTING
+                        Editor.SetStatusBarColour((202, 81, 0))
 
                         if not gOptions.stop_debug_on_build:
                             gOptionsOverride = True
@@ -888,6 +907,7 @@ class RDBG_Session:
                             print('RDBG: Execute:', gOptions.start_debug_command)
                             Editor.ExecuteCommand(gOptions.start_debug_command)
                     elif event_type == RDBG_EventType.TARGET_CONTINUED:
+                        Editor.SetStatusBarColour((202, 81, 0))
                         self.target_state = RDBG_TargetState.EXECUTING
 
             except win32api.error as pipe_error:
@@ -1084,17 +1104,6 @@ def _RDBG_ProjectBuild(filename:str)->bool:
         gSession.stop()        
     return False
 
-def _RDBG_EnumWindowsCallback(hwnd, lParam):
-    global gMainWindowHandle
-
-    window_pid = ctypes.wintypes.DWORD()
-    ctypes.windll.user32.GetWindowThreadProcessId(hwnd, ctypes.byref(window_pid))
-    
-    if lParam == window_pid.value:
-        gMainWindowHandle = hwnd
-        return False
-    return True
-
 def InitialiseRemedy():
     gOptions:RDBG_Options = RDBG_Options()
 
@@ -1113,9 +1122,6 @@ def InitialiseRemedy():
 
     Editor.AddProjectBuildFunction(_RDBG_ProjectBuild)
 
-    proc_id:ctypes.wintypes.LPARAM = ctypes.windll.kernel32.GetCurrentProcessId()
-    ctypes.windll.user32.EnumWindows(WNDENUMPROC(_RDBG_EnumWindowsCallback), proc_id)
-	
     _RDBG_SettingsChanged()
 
 gSession:RDBG_Session = None
