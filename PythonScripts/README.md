@@ -10,6 +10,7 @@ To use these scripts copy them to the %appdata%\10x\PythonScripts folder.
 AddInclude.py                       |Adds include path for current symbol
 ClangFormat.py                      |clang-format plugin for 10x
 CloseBuildPanelIifBuildSucceeded.py |Closes build panel if build succeeds
+CMakeIntegration.py                 |Builds cmake projects using cmake commandline
 CompileDbCmd.py                     |Single file compile command for projects with compile commands database
 FormatOnSave.py                     |Format On Save
 InstallHeaders.py                   |Installs a lightweight version of commonly used system headers
