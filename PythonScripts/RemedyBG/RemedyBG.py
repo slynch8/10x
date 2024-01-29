@@ -181,16 +181,6 @@ RDBG_PREFIX:str = '\\\\.\\pipe\\'
 RDBG_TITLE:str = 'RemedyBG'
 RDBG_PROCESS_POLL_INTERVAL:float = 1.0
 
-# Define necessary constants and types
-HWND = ctypes.c_int
-DWORD = ctypes.c_ulong
-BOOL = ctypes.c_int
-
-user32 = ctypes.windll.user32
-AllowSetForegroundWindow = user32.AllowSetForegroundWindow
-AllowSetForegroundWindow.argtypes = [DWORD]
-AllowSetForegroundWindow.restype = BOOL
-
 class RDBG_Options():
     def __init__(self):
         global gOptionsOverride
@@ -670,9 +660,6 @@ class RDBG_Session:
             self.process = subprocess.Popen(args, cwd=work_dir)
             time.sleep(0.1)
 
-            if gOptions.bring_to_foreground_on_suspend:
-                AllowSetForegroundWindow(self.process.pid)
-
             assert self.cmd_pipe == None
             name = RDBG_PREFIX + self.name
             
@@ -916,6 +903,7 @@ class RDBG_Session:
                         if gOptions.stop_debug_command and gOptions.stop_debug_command != '':
                             print('RDBG: Execute:', gOptions.stop_debug_command)
                             Editor.ExecuteCommand(gOptions.stop_debug_command)
+
                     elif event_type == RDBG_EventType.TARGET_STARTED:
                         print('RDBG: Debugging started')
                         self.target_state = RDBG_TargetState.EXECUTING
@@ -988,6 +976,12 @@ def RDBG_StopDebugging():
 
 def RDBG_Reset():
     global gSession
+    global gOptionsOverride
+    
+    Editor.ClearStatusBarColour()
+    Editor.ClearDebuggerStepLine()
+    gOptionsOverride = False
+
     if gSession is not None:
         gSession.stop()
         gSession.close()
@@ -1161,7 +1155,6 @@ def InitialiseRemedy():
 gSession:RDBG_Session = None
 gOptions:RDBG_Options = None
 gOptionsOverride:bool = False
-gMainWindowHandle = None
 
 Editor.CallOnMainThread(InitialiseRemedy)
 
