@@ -14,6 +14,8 @@ CMakeIntegration.py                 |Builds cmake projects using cmake commandli
 CompileDbCmd.py                     |Single file compile command for projects with compile commands database
 FormatOnSave.py                     |Format On Save
 InstallHeaders.py                   |Installs a lightweight version of commonly used system headers
+PythonBlack.py                      |Formats python scripts using black after saving
+PythonAutopep.py                    |Formats python scripts using autopep after saving 
 QuickPane.py                        |This script tries to simulate vim's "vsplit" and "only" commands
 RemedyBG.py                         |RemedyBG debugger integration
 SmoothScroll.py                     |With this script, you can add the ability to scroll faster with keyboard shortcuts. It also mimics smooth scrolling, more like mousewheel scrolling.
