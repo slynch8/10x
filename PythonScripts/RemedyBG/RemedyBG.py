@@ -1,7 +1,7 @@
 '''
 RemedyBG debugger integration for 10x (10xeditor.com) 
 RemedyBG: https://remedybg.handmade.network/ (should be above 0.3.8)
-Version: 0.11.6
+Version: 0.11.7
 Original Script author: septag@discord / septag@pm.me
 
 To get started go to Settings.10x_settings, and enable the hook, by adding this line:
@@ -24,8 +24,7 @@ RDBG_Options:
     - RemedyBG.BringToForegroundOnSuspended: (default=True) Bring debugger to front when debugging session is paused
 
 Commands:
-    - RDBG_StartDebugging: Same behavior as default StartDebugging. Launches remedybg if not opened before and runs the 
-                           executable in the debugger. 
+    - RDBG_StartDebugging: Same behavior as default StartDebugging. Launches remedybg if not opened before and runs the executable in the debugger. 
                            If "BuildBeforeStartDebugging" option is set, it builds it before running the session
                            If debugger is already running, it does nothing
                            If debugger is in suspend/pause state, it continues the debugger
@@ -50,6 +49,9 @@ RemedyBG sessions:
     and it will load that next time instead of starting a new session
 
 History:
+  0.11.7
+    - Minor cleanups
+
   0.11.6
     - Removed start_after_build workaround. Since 10x is now getting debugger state and starting the debugger correctly after build itself
     - Getting better in sync with 10x by calling OnDebuggerStarted/OnDebuggerStopped/OnDebuggerPaused/OnDebuggerResumed functions
@@ -220,11 +222,6 @@ class RDBG_Options():
             self.keep_session = True
         else:
             self.keep_session = False
-
-        if  Editor.GetSetting("BuildBeforeStartDebugging") and Editor.GetSetting("BuildBeforeStartDebugging").lower() == 'true':
-            self.build_before_debug = True
-        else:
-            self.build_before_debug = False
 
         if  Editor.GetSetting("StopDebuggingOnBuild") and Editor.GetSetting("StopDebuggingOnBuild").lower() == 'true':
             self.stop_debug_on_build = True
@@ -908,11 +905,6 @@ class RDBG_Session:
                         Editor.ClearStatusBarColour()
                         Editor.ClearDebuggerStepLine()
 
-                        if not gOptions.stop_debug_on_build:
-                            gOptionsOverride = True
-                            Editor.RemoveSettingOverride('BuildBeforeStartDebugging')
-                            gOptionsOverride = False
-
                         if gOptions.stop_debug_command and gOptions.stop_debug_command != '':
                             print('RDBG: Execute:', gOptions.stop_debug_command)
                             Editor.ExecuteCommand(gOptions.stop_debug_command)
@@ -922,11 +914,6 @@ class RDBG_Session:
                         self.target_state = RDBG_TargetState.EXECUTING
                         Editor.OnDebuggerStarted()
                         Editor.SetStatusBarColour((202, 81, 0))
-
-                        if not gOptions.stop_debug_on_build:
-                            gOptionsOverride = True
-                            Editor.OverrideSetting('BuildBeforeStartDebugging', 'false')
-                            gOptionsOverride = False
 
                         if gOptions.start_debug_command and gOptions.start_debug_command != '':
                             print('RDBG: Execute:', gOptions.start_debug_command)
