@@ -1803,119 +1803,31 @@ def cmake_condition(preset_configs: list) -> list:
     return non_hidden_configs
 
 
-def OnCMakeWorkspaceOpened():
-    cmake_hook_workspace_opened_setting = N10X.Editor.GetSetting(
-        "CMake.HookWorkspaceOpened"
-    )
-    if (
-        cmake_hook_workspace_opened_setting
-        and cmake_hook_workspace_opened_setting.lower() == "true"
-    ):
-        pass
-    else:
-        print(
-            "CMake: ignoring workspace opened (set CMake.HookWorkspaceOpened == 'true')"
-        )
-        return False
+def ScanCMakeWorkspaces(args: dict):
+    project_files = args["project_files"]
+    cmake_preset_build = args["cmake_preset_build"]
+    cmake_preset_rebuild = args["cmake_preset_rebuild"]
+    cmake_preset_run = args["cmake_preset_run"]
+    cmake_preset_debug = args["cmake_preset_debug"]
 
-    verbose_setting = N10X.Editor.GetSetting("CMake.Verbose")
-    verbose = verbose_setting and verbose_setting.lower()
+    cmake_settings_build = args["cmake_settings_build"]
+    cmake_settings_rebuild = args["cmake_settings_rebuild"]
+    cmake_settings_run = args["cmake_settings_run"]
+    cmake_settings_debug = args["cmake_settings_debug"]
 
-    cmakelists_exists = False
-    cmakepresets_exists = False
-    cmakeuserpresets_exists = False
-    cmakesettings_exists = False
-    cmakeprojects = {}
+    cmake_empty_build = args["cmake_empty_build"]
+    cmake_empty_rebuild = args["cmake_empty_rebuild"]
+    cmake_empty_run = args["cmake_empty_run"]
+    cmake_empty_debug = args["cmake_empty_debug"]
+    version = args["version"]
+    verbose = args["verbose"]
 
-    # working from current project
-    txworkspace = N10X.Editor.GetWorkspaceFilename()
-    directory, filename = split(txworkspace)  # os.path.split
-
-    paths = cmake_paths(directory)
-    paths_exist = cmake_verify_paths(paths)
-
-    print("Working Directory uses CMake?: {0}".format(cmakelists_exists))
-    print("CMakeLists.txt: {0}".format(paths_exist["lists"]))
-
-    build_cmd = N10X.Editor.GetWorkspaceSetting("BuildCommand")
-    rebuild_cmd = N10X.Editor.GetWorkspaceSetting("RebuildCommand")
-    build_file_cmd = N10X.Editor.GetWorkspaceSetting("BuildFileCommand")
-    clean_cmd = N10X.Editor.GetWorkspaceSetting("CleanCommand")
-    build_working_dir_cmd = N10X.Editor.GetWorkspaceSetting("BuildWorkingDirectory")
-    cancel_build_cmd = N10X.Editor.GetWorkspaceSetting("CancelBuild")
-    run_command_cmd = N10X.Editor.GetWorkspaceSetting("RunCommand")
-    run_working_directory_cmd = N10X.Editor.GetWorkspaceSetting("RunWorkingDirectory")
-    debug_cmd = N10X.Editor.GetWorkspaceSetting("DebugCommand")
-    exe_path_path = N10X.Editor.GetWorkspaceSetting("ExePath")
-    debug_sln_path = N10X.Editor.GetWorkspaceSetting("DebugSln")
-
-    cmake_preset_build = 'cmake --preset "$(Platform)-$(Configuration)" && cmake --build --preset "$(Platform)-$(Configuration)"'
-    cmake_preset_rebuild = 'cmake --preset "$(Platform)-$(Configuration)" --fresh && cmake --build --preset "$(Platform)-$(Configuration)"'
-    cmake_preset_run = "$(RootWorkspaceDirectory)/out/build/$(Platform)-$(Configuration)/project_name.exe"
-    cmake_preset_debug = "$(RootWorkspaceDirectory)/out/build/$(Platform)-$(Configuration)/project_name.exe"
-
-    cmake_settings_build = 'cmake -S "$(RootWorkspaceDirectory)" -B "$(RootWorkspaceDirectory)/out/build/$(Platform)-$(Configuration)" && cmake --build --config "$(Configuration)"'
-    cmake_settings_rebuild = 'cmake -S "$(RootWorkspaceDirectory)" -B "$(RootWorkspaceDirectory)/out/build/$(Platform)-$(Configuration)" --fresh && cmake --build --config "$(Configuration)"'
-    cmake_settings_run = "$(RootWorkspaceDirectory)/out/build/#(Platform)-$(Configuration)/project_name.exe"
-    cmake_settings_debug = "$(RootWorkspaceDirectory)/out/build/#(Platform)-$(Configuration)/project_name.exe"
-
-    cmake_empty_build = 'cmake -S "$(RootWorkspaceDirectory)" -B "$(RootWorkspaceDirectory)/out/build/$(Configuration)" && cmake --build -S "$(RootWorkspaceDirectory)" -B "$(RootWorkspaceDirectory)/out/build/$(Configuration)"'
-    cmake_empty_rebuild = 'cmake -S "$(RootWorkspaceDirectory)" -B "$(RootWorkspaceDirectory)/out/build/$(Configuration)" --fresh && cmake --build -S "$(RootWorkspaceDirectory)" -B "$(RootWorkspaceDirectory)/out/build/$(Configuration)"'
-    cmake_empty_run = (
-        "$(RootWorkspaceDirectory)/out/build/$(Configuration)/project_name.exe"
-    )
-    cmake_empty_debug = (
-        "$(RootWorkspaceDirectory)/out/build/$(Configuration)/project_name.exe"
-    )
-
-    version = cmake_version()
-
-    if IsOldWorkspace():
-        pass
-    else:
-        if paths["lists"]:
-            # print("Configuring CMake Workspace...")
-            if (paths["preset"] or paths["userpreset"]) and version["preset_support"]:
-                N10X.Editor.SetWorkspaceSetting("BuildCommand", cmake_preset_build)
-                N10X.Editor.SetWorkspaceSetting("RebuildCommand", cmake_preset_rebuild)
-                N10X.Editor.SetWorkspaceSetting("RunCommand", cmake_preset_run)
-                N10X.Editor.SetWorkspaceSetting("DebugCommand", cmake_preset_debug)
-                N10X.Editor.SetWorkspaceSetting("ExePath", cmake_preset_run)
-            elif paths["settings"]:
-                N10X.Editor.SetWorkspaceSetting("BuildCommand", cmake_settings_build)
-                N10X.Editor.SetWorkspaceSetting("RebuildCommand", cmake_settings_build)
-                N10X.Editor.SetWorkspaceSetting("RunCommand", cmake_settings_run)
-                N10X.Editor.SetWorkspaceSetting("DebugCommand", cmake_settings_debug)
-                N10X.Editor.SetWorkspaceSetting("ExePath", cmake_settings_run)
-            else:
-                N10X.Editor.SetWorkspaceSetting("BuildCommand", cmake_empty_build)
-                N10X.Editor.SetWorkspaceSetting("RebuildCommand", cmake_empty_rebuild)
-                N10X.Editor.SetWorkspaceSetting("RunCommand", cmake_empty_run)
-                N10X.Editor.SetWorkspaceSetting("DebugCommand", cmake_empty_debug)
-                N10X.Editor.SetWorkspaceSetting("ExePath", cmake_empty_run)
-
-    # scan through workspace files for other directories
-    project_files = N10X.Editor.GetWorkspaceFiles()
     for project_file in project_files:
         if project_file.endswith("CMakeLists.txt"):
             cmakelists_exists = True
             cmakefolder = project_file[: -len("CMakeLists.txt")]
             project_paths = cmake_paths(cmakefolder)
             project_paths_exist = cmake_verify_paths(project_paths)
-
-            cmakepresets_exists = (
-                cmakepresets_exists
-                or project_paths_exist["preset"]
-                or project_paths_exist["userpreset"]
-            )
-            cmakesettings_exists = (
-                cmakesettings_exists or project_paths_exist["settings"]
-            )
-
-            cmakeprojects[project_file] = {
-                project_paths_exist["preset"] or project_paths_exist["userpreset"],
-                project_paths_exist["settings"],
-            }
 
             if (
                 project_paths_exist["preset"] or project_paths_exist["userpreset"]
@@ -2026,12 +1938,169 @@ def OnCMakeWorkspaceOpened():
                 )
 
 
+def OnCMakeWorkspaceOpened():
+    do_workspace = get_10x_bool_setting("CMake.HookWorkspaceOpened")
+    if not do_workspace:
+        print(
+            "CMake: ignoring workspace opened (set CMake.HookWorkspaceOpened == 'true')"
+        )
+        return False
+
+    verbose = get_10x_bool_setting("CMake.Verbose")
+
+    cmakelists_exists = False
+    cmakepresets_exists = False
+    cmakeuserpresets_exists = False
+    cmakesettings_exists = False
+    cmakeprojects = {}
+
+    # working from current project
+    txworkspace = N10X.Editor.GetWorkspaceFilename()
+    directory, filename = split(txworkspace)  # os.path.split
+
+    paths = cmake_paths(directory)
+    paths_exist = cmake_verify_paths(paths)
+
+    print("Working Directory uses CMake?: {0}".format(cmakelists_exists))
+    print("CMakeLists.txt: {0}".format(paths_exist["lists"]))
+
+    build_cmd = N10X.Editor.GetWorkspaceSetting("BuildCommand")
+    rebuild_cmd = N10X.Editor.GetWorkspaceSetting("RebuildCommand")
+    build_file_cmd = N10X.Editor.GetWorkspaceSetting("BuildFileCommand")
+    clean_cmd = N10X.Editor.GetWorkspaceSetting("CleanCommand")
+    build_working_dir_cmd = N10X.Editor.GetWorkspaceSetting("BuildWorkingDirectory")
+    cancel_build_cmd = N10X.Editor.GetWorkspaceSetting("CancelBuild")
+    run_command_cmd = N10X.Editor.GetWorkspaceSetting("RunCommand")
+    run_working_directory_cmd = N10X.Editor.GetWorkspaceSetting("RunWorkingDirectory")
+    debug_cmd = N10X.Editor.GetWorkspaceSetting("DebugCommand")
+    exe_path_path = N10X.Editor.GetWorkspaceSetting("ExePath")
+    debug_sln_path = N10X.Editor.GetWorkspaceSetting("DebugSln")
+    platforms = N10X.Editor.GetWorkspaceSetting("Platforms")
+    configurations = N10X.Editor.GetWorkspaceSetting("Configurations")
+
+    cmake_preset_build = 'cmake --preset "$(Platform)-$(Configuration)" && cmake --build --preset "$(Platform)-$(Configuration)"'
+    cmake_preset_rebuild = 'cmake --preset "$(Platform)-$(Configuration)" --fresh && cmake --build --preset "$(Platform)-$(Configuration)"'
+    cmake_preset_run = "$(RootWorkspaceDirectory)/out/build/$(Platform)-$(Configuration)/project_name.exe"
+    cmake_preset_debug = "$(RootWorkspaceDirectory)/out/build/$(Platform)-$(Configuration)/project_name.exe"
+
+    cmake_settings_build = 'cmake -S "$(RootWorkspaceDirectory)" -B "$(RootWorkspaceDirectory)/out/build/$(Platform)-$(Configuration)" && cmake --build --config "$(Configuration)"'
+    cmake_settings_rebuild = 'cmake -S "$(RootWorkspaceDirectory)" -B "$(RootWorkspaceDirectory)/out/build/$(Platform)-$(Configuration)" --fresh && cmake --build --config "$(Configuration)"'
+    cmake_settings_run = "$(RootWorkspaceDirectory)/out/build/#(Platform)-$(Configuration)/project_name.exe"
+    cmake_settings_debug = "$(RootWorkspaceDirectory)/out/build/#(Platform)-$(Configuration)/project_name.exe"
+
+    cmake_empty_build = 'cmake -S "$(RootWorkspaceDirectory)" -B "$(RootWorkspaceDirectory)/out/build/$(Configuration)" && cmake --build -S "$(RootWorkspaceDirectory)" -B "$(RootWorkspaceDirectory)/out/build/$(Configuration)"'
+    cmake_empty_rebuild = 'cmake -S "$(RootWorkspaceDirectory)" -B "$(RootWorkspaceDirectory)/out/build/$(Configuration)" --fresh && cmake --build -S "$(RootWorkspaceDirectory)" -B "$(RootWorkspaceDirectory)/out/build/$(Configuration)"'
+    cmake_empty_run = (
+        "$(RootWorkspaceDirectory)/out/build/$(Configuration)/project_name.exe"
+    )
+    cmake_empty_debug = (
+        "$(RootWorkspaceDirectory)/out/build/$(Configuration)/project_name.exe"
+    )
+
+    version = cmake_version()
+    old_workspace = IsOldWorkspace()
+
+    if paths["lists"]:
+        # print("Configuring CMake Workspace...")
+        if (paths["preset"] or paths["userpreset"]) and version["preset_support"]:
+            if not old_workspace:
+                N10X.Editor.SetWorkspaceSetting("BuildCommand", cmake_preset_build)
+                N10X.Editor.SetWorkspaceSetting("RebuildCommand", cmake_preset_rebuild)
+                N10X.Editor.SetWorkspaceSetting("RunCommand", cmake_preset_run)
+                N10X.Editor.SetWorkspaceSetting("DebugCommand", cmake_preset_debug)
+                N10X.Editor.SetWorkspaceSetting("ExePath", cmake_preset_run)
+
+            data = cmake_prep(
+                directory,
+                "$(RootWorkspaceDirectory)/out/build/$(Platform)-$(Configuration)",
+                [],
+                True,
+                False,
+            )
+
+            preset_configs = data["configurePresets"]
+            build_configs = data["buildPresets"]
+
+            non_hidden_configs = cmake_condition(preset_configs)
+            non_hidden_build_configs = cmake_condition(build_configs)
+
+            build_list_results = configurations.split(",")
+            for build_preset in non_hidden_configs:
+                if not build_preset["name"] in build_list_results:
+                    build_list_results.append(build_preset["name"])
+            for build_preset in non_hidden_build_configs:
+                if not build_preset["name"] in build_list_results:
+                    build_list_results.append(build_preset["name"])
+
+            N10X.Editor.SetWorkspaceSetting(
+                "Configurations", ",".join(build_list_results)
+            )
+
+        elif paths["settings"]:
+            if not old_workspace:
+                N10X.Editor.SetWorkspaceSetting("BuildCommand", cmake_settings_build)
+                N10X.Editor.SetWorkspaceSetting("RebuildCommand", cmake_settings_build)
+                N10X.Editor.SetWorkspaceSetting("RunCommand", cmake_settings_run)
+                N10X.Editor.SetWorkspaceSetting("DebugCommand", cmake_settings_debug)
+                N10X.Editor.SetWorkspaceSetting("ExePath", cmake_settings_run)
+
+            data = cmake_prep(
+                directory,
+                "$(RootWorkspaceDirectory)/out/build/$(Platform)-$(Configuration)",
+                [],
+                False,
+                True,
+            )
+
+            configuration_list = data["configurations"]
+            build_list_results = configurations.split(",")
+            for build_setting in configuration_list:
+                if not build_setting["name"] in build_list_results:
+                    build_list_results.append(build_setting["name"])
+
+            N10X.Editor.SetWorkspaceSetting(
+                "Configurations", ",".join(build_list_results)
+            )
+        else:
+            if not old_workspace:
+                N10X.Editor.SetWorkspaceSetting("BuildCommand", cmake_empty_build)
+                N10X.Editor.SetWorkspaceSetting("RebuildCommand", cmake_empty_rebuild)
+                N10X.Editor.SetWorkspaceSetting("RunCommand", cmake_empty_run)
+                N10X.Editor.SetWorkspaceSetting("DebugCommand", cmake_empty_debug)
+                N10X.Editor.SetWorkspaceSetting("ExePath", cmake_empty_run)
+
+    # scan through workspace files for other directories
+    project_files = N10X.Editor.GetWorkspaceFiles()
+    scan_project = Thread(
+        target=ScanCMakeWorkspaces,
+        args=[
+            {
+                "project_files": project_files,
+                "cmake_preset_build": cmake_preset_build,
+                "cmake_preset_rebuild": cmake_preset_rebuild,
+                "cmake_preset_run": cmake_preset_run,
+                "cmake_preset_debug": cmake_preset_debug,
+                "cmake_settings_build": cmake_settings_build,
+                "cmake_settings_rebuild": cmake_settings_rebuild,
+                "cmake_settings_run": cmake_settings_run,
+                "cmake_settings_debug": cmake_settings_debug,
+                "cmake_empty_build": cmake_empty_build,
+                "cmake_empty_rebuild": cmake_empty_rebuild,
+                "cmake_empty_run": cmake_empty_run,
+                "cmake_empty_debug": cmake_empty_debug,
+                "version": version,
+                "verbose": verbose,
+            }
+        ],
+    )
+    scan_project.start()
+
+
 def InitializeCMake():
-    check1 = N10X.Editor.AddOnWorkspaceOpenedFunction(OnCMakeWorkspaceOpened)
-    check2 = N10X.Editor.AddProjectBuildFunction(OnCMakeBuildStarted)
-    check3 = N10X.Editor.AddProjectRebuildFunction(OnCMakeRebuildStarted)
-    check4 = N10X.Editor.AddBuildFinishedFunction(OnCMakeBuildFinished)
-    print("verifying {0} {1} {2} {3}".format(check1, check2, check3, check4))
+    N10X.Editor.AddOnWorkspaceOpenedFunction(OnCMakeWorkspaceOpened)
+    N10X.Editor.AddProjectBuildFunction(OnCMakeBuildStarted)
+    N10X.Editor.AddProjectRebuildFunction(OnCMakeRebuildStarted)
+    N10X.Editor.AddBuildFinishedFunction(OnCMakeBuildFinished)
 
 
 N10X.Editor.CallOnMainThread(InitializeCMake)
