@@ -10,6 +10,7 @@ import hashlib
 import copy
 import platform
 import shutil
+import shlex
 from os.path import exists
 from os.path import split
 from threading import Thread
@@ -18,7 +19,7 @@ import base64
 
 """
 CMake build integration for 10x (10xeditor.com)
-Version: 0.1.4
+Version: 0.1.5
 Original Script author: https://github.com/andersama
 
 To get started go to Settings.10x_settings, and enable the hooks, by adding these lines:
@@ -35,6 +36,8 @@ CMake_Options:
     - CMake.Verbose: (default=False)             Turns on debugging print statements
 
 History:
+  0.1.5
+      - Use workspace build and rebuild commands to pass cmake variables
   0.1.4
       - Use threads and use better guess for finding .sln file
   0.1.3
@@ -64,9 +67,12 @@ def read_json_file(json_path, verbose=False):
     return data
 
 
-def write_json_file(json_path, json_obj):
+def write_json_file(json_path, json_obj, pretty=True):
     with open(json_path, "w") as f:
-        json.dump(json_obj, f)
+        if pretty:
+            json.dump(json_obj, f, indent=True)
+        else:
+            json.dump(json_obj, f)
 
 
 def cmd(cmd_args, working_dir) -> dict:
@@ -166,6 +172,32 @@ def macro_expansion(target_string: str, macros) -> str:
     return out_string
 
 
+def macro_expansion_n10x(target_string: str, macros) -> str:
+    i = int(0)
+    # TODO: unescape strings
+    out_string = ""
+    while i < len(target_string):
+        em = i
+        if target_string[i] == "$":  # potential macro expansion
+            while em < len(target_string) and target_string[em] != ")":
+                em += 1
+            macro_key = target_string[i : em + 1]
+            macro_value = macro_key
+            if macro_key in macros and macros[macro_key] != None:
+                macro_value = macros[macro_key]
+            out_string += macro_value
+            # jump past macro expansion
+            i = em + 1
+        else:
+            while em < len(target_string) and target_string[em] != "$":
+                em += 1
+            out_string += target_string[i:em]
+            # jump past substring
+            i = em
+
+    return out_string
+
+
 def macro_expand_any(item, macros):
     if type(item) is str:
         return macro_expansion(item, macros)
@@ -176,6 +208,21 @@ def macro_expand_any(item, macros):
     elif type(item) is list:
         for i in range(0, len(item)):
             item[i] = macro_expand_any(item[i], macros)
+        return item
+    # otherwise just return the item as is
+    return item
+
+
+def macro_expand_n10x(item, macros):
+    if type(item) is str:
+        return macro_expansion_n10x(item, macros)
+    elif type(item) is dict:
+        for key in item:
+            item[key] = macro_expand_n10x(item[key], macros)
+        return item
+    elif type(item) is list:
+        for i in range(0, len(item)):
+            item[i] = macro_expand_n10x(item[i], macros)
         return item
     # otherwise just return the item as is
     return item
@@ -475,10 +522,14 @@ def cmake_parse_args(cmd_args: list) -> dict:
         if skip_arg:
             skip_arg = False
             continue
-        if arg == "cmake":
+        if (
+            arg == "&&" or arg == "|" or arg == ">"
+        ):  # only parse one cmake command at a time
+            break
+        if arg == "cmake" or arg.endswith("cmake.exe"):
             continue  # presumably the start of the command line if someone forgot to strip the exe
         if arg.startswith("-D"):
-            m = re.match("^-D([^:=]*)(:[^=]*)?=(.*)$")
+            m = re.match("^-D([^:=]*)(:[^=]*)?=(.*)$", arg)
             cmake_cache["entries"].append(
                 {"name": m.group(1), "type": m.group(2), "value": m.group(3)}
             )
@@ -524,7 +575,7 @@ def cmake_parse_args(cmd_args: list) -> dict:
                 )
                 skip_arg = True
             else:
-                m = re.match("^--preset=(.*)$")
+                m = re.match("^--preset=(.*)$", arg)
                 cmake_cache["entries"].append(
                     {
                         "name": "CMAKE_PRESET_NAME",
@@ -612,11 +663,10 @@ def cmake_prep(
     lists_exists = paths_exist["lists"]
 
     args = cmake_parse_args(cmd_args)
-
     projectFile = paths["lists"]
 
     if settings_exists:
-        thisFile = settingspath
+        thisFile = paths["settings"]
         thisFileDir, thisFileName = split(thisFile)
     else:
         thisFile = None
@@ -847,8 +897,8 @@ def cmake_prep(
                 data["entries"] = args["entries"]
             return data
 
-        if use_settings_if_available and len(settingspath) > 0:
-            data = read_json_file(settingspath)
+        if use_settings_if_available and paths_exist["settings"]:
+            data = read_json_file(paths["settings"])
             data["macros"] = macros
             # settings don't do inheritance? but they definitely expand macros
             unexpanded_configs = data["configurations"]
@@ -971,7 +1021,11 @@ def cmake_configure(cmd_args, working_dir) -> dict:
         N10X.Editor.LogToBuildOutput(cmdline["stdout"])
         print(cmdline["stdout"])
 
-    if ("error_code" and cmdline["error_code"] != 0) and "stderr" in cmdline:
+    if (
+        ("error_code" and cmdline["error_code"] != 0)
+        and "stderr" in cmdline
+        and cmdline["stderr"] != None
+    ):
         N10X.Editor.LogToBuildOutput(cmdline["stderr"])
         print(cmdline["stderr"])
 
@@ -1287,9 +1341,23 @@ def CMakeBuildThreaded(args: dict):
     n10x_platform = args["platform"]
     verbose = args["verbose"]
     CMake_EXE = args["cmake"]
+    build_args = args["build_args"]
+    rebuild_args = args["rebuild_args"]
     rebuild = args["rebuild"]
 
     print("CMake Build Detected: Using Python")
+
+    n10x_macros = {"$(Configuration)": n10x_config, "$(Platform)": n10x_platform}
+
+    extra_cmd_args = []
+    if rebuild:
+        extra_cmd_args = rebuild_args
+    else:
+        extra_cmd_args = build_args
+
+    print("10x macro expansion:")
+    extra_cmd_args = macro_expand_n10x(extra_cmd_args, n10x_macros)
+    print(json.dumps(extra_cmd_args, indent="\t"))
 
     arg_json_path = os.path.join(directory, "cmake_build.json")
     with open(arg_json_path, "w") as arg_json:
@@ -1304,7 +1372,7 @@ def CMakeBuildThreaded(args: dict):
         print("CMake Macro Expansion: ...")
 
         # TODO detect and parse command line to pass into this function
-        data = cmake_prep(directory, None, [], True, False)
+        data = cmake_prep(directory, None, extra_cmd_args, True, False)
 
         if "error" in data and data["error"]:
             if "error_message" in data:
@@ -1470,7 +1538,7 @@ def CMakeBuildThreaded(args: dict):
 
             with open(initial_cache_script_path, "w") as cache_script:
                 for k in cmake_vars:
-                    if "type" in cmake_vars[k]:
+                    if "type" in cmake_vars[k] and cmake_vars[k]["type"] != None:
                         cache_script.write(
                             'set({0} "{1}" CACHE {2} "")\n'.format(
                                 k,
@@ -1511,7 +1579,7 @@ def CMakeBuildThreaded(args: dict):
     elif settings_exists:
         print("CMake Macro Expansion: ...")
         # TODO detect and parse command line to pass into this function
-        data = cmake_prep(directory, None, [], False, True)
+        data = cmake_prep(directory, None, extra_cmd_args, False, True)
 
         cmake_config_name = None
         cmake_config_obj = {}
@@ -1535,14 +1603,14 @@ def CMakeBuildThreaded(args: dict):
         if cmake_config_name == None:
             low_build_name = build_name.lower()
             for config in configs:
-                if config["name"] == low_build_name:
+                if config["name"].lower() == low_build_name:
                     cmake_config_name = config["name"]
                     cmake_config_obj = config
                     break
         if cmake_config_name == None:
             low_n10x_config = n10x_config.lower()
             for config in configs:
-                if config["name"] == low_n10x_config:
+                if config["name"].lower() == low_n10x_config:
                     cmake_config_name = config["name"]
                     cmake_config_obj = config
                     break
@@ -1591,14 +1659,14 @@ def CMakeBuildThreaded(args: dict):
 
             if "entries" in data and data["entries"] and len(data["entries"]) > 0:
                 for cache_var in data["entries"]:
-                    cmake_vars[cache_var["name"]] = cache_var["value"]
+                    cmake_vars[cache_var["name"]] = cache_var
             if "cacheVariables" in cmake_config_obj:
                 for k in cmake_config_obj["cacheVariables"]:
                     cmake_vars[k] = cmake_config_obj["cacheVariables"][k]
 
             with open(initial_cache_script_path, "w") as cache_script:
                 for k in cmake_vars:
-                    if "type" in cmake_vars[k]:
+                    if "type" in cmake_vars[k] and cmake_vars[k]["type"] != None:
                         cache_script.write(
                             'set({0} "{1}" CACHE {2} "")\n'.format(
                                 k,
@@ -1636,40 +1704,55 @@ def CMakeBuildThreaded(args: dict):
             exe_path = cmake_build(build_args, directory, build_dir)
     else:
         # TODO detect and parse command line to pass into this function
-        data = cmake_prep(directory, None, [], False, False)
+        data = cmake_prep(directory, None, extra_cmd_args, False, False)
         if verbose:
             print(json.dumps(data, indent="\t"))
+
+        build_directory_path = norm_path_fslash(
+            os.path.join(directory, "out\\build", n10x_config)
+        )
 
         config_args = [CMake_EXE, "-S", directory, "-B", build_directory_path]
 
         if "entries" in data and data["entries"] and len(data["entries"]) > 0:
-            initial_cache_path = norm_path_fslash(
-                os.path.join(directory, "10x_initial_cache.json")
-            )
-            write_json_file(initial_cache_path, data["entries"])
-
             initial_cache_script_path = norm_path_fslash(
                 os.path.join(directory, "10x_initial_cache.cmake")
             )
             cmake_vars = {}
-            for cache_var in data["entries"]:
-                cmake_vars[cache_var["name"]] = cache_var["value"]
+
+            if "entries" in data and data["entries"] and len(data["entries"]) > 0:
+                for cache_var in data["entries"]:
+                    cmake_vars[cache_var["name"]] = cache_var
 
             with open(initial_cache_script_path, "w") as cache_script:
                 for k in cmake_vars:
-                    cache_script.write("set({0} CACHE {1}".format(k, cmake_vars[k]))
+                    if "type" in cmake_vars[k] and cmake_vars[k]["type"] != None:
+                        cache_script.write(
+                            'set({0} "{1}" CACHE {2} "")\n'.format(
+                                k,
+                                escape_bslash(cmake_vars[k]["value"]),
+                                cmake_vars[k]["type"],
+                            )
+                        )
+                    else:
+                        cache_script.write(
+                            'set({0} "{1}" CACHE STRING "")\n'.format(
+                                k, escape_bslash(cmake_vars[k]["value"])
+                            )
+                        )
 
-            build_args.append("-C")  # see cmake ide integration guide
-            build_args.append(initial_cache_script_path)
+            config_args.append("-C")  # see cmake ide integration guide
+            config_args.append(initial_cache_script_path)
 
         if rebuild:
             config_args.append("--fresh")
 
         N10X.Editor.LogToBuildOutput(" ".join(config_args))
         N10X.Editor.LogToBuildOutput("\n")
-        build_dir = cmake_configure(config_args, directory)
-        if build_dir and len(build_dir):
-            build_args = [CMake_EXE, "--build", "."]
+        config_result = cmake_configure(config_args, directory)
+        build_dir = config_result["build_dir"]
+        if config_result["error_code"] == 0 and build_dir and len(build_dir):
+            build_args = [CMake_EXE, "--build", build_dir]
             N10X.Editor.LogToBuildOutput(" ".join(build_args))
             N10X.Editor.LogToBuildOutput("\n")
             exe_path = cmake_build(build_args, directory, build_dir)
@@ -1696,6 +1779,12 @@ def CMakeBuildStarted(filename: str, rebuild: bool = False):
     paths = cmake_paths(directory)
     paths_exist = cmake_verify_paths(paths)
 
+    n10x_build_cmd = N10X.Editor.GetWorkspaceSetting("BuildCommand")
+    n10x_rebuild_cmd = N10X.Editor.GetWorkspaceSetting("RebuildCommand")
+
+    build_args = shlex.split(n10x_build_cmd)  # parse_cmd(n10x_build_cmd)
+    rebuild_args = shlex.split(n10x_rebuild_cmd)  # parse_cmd(n10x_rebuild_cmd)
+
     build_dir = None
     print("Checking for CMake build...")
     if paths_exist["lists"]:
@@ -1715,6 +1804,8 @@ def CMakeBuildStarted(filename: str, rebuild: bool = False):
                         "platform": N10X.Editor.GetWorkspaceBuildPlatform(),
                         "verbose": verbose,
                         "cmake": CMake_EXE,
+                        "build_args": build_args,
+                        "rebuild_args": rebuild_args,
                         "rebuild": rebuild,
                     }
                 ],
@@ -2000,9 +2091,11 @@ def OnCMakeWorkspaceOpened():
     version = cmake_version()
     old_workspace = IsOldWorkspace()
 
-    if paths["lists"]:
+    if paths_exist["lists"]:
         # print("Configuring CMake Workspace...")
-        if (paths["preset"] or paths["userpreset"]) and version["preset_support"]:
+        if (paths_exist["preset"] or paths_exist["userpreset"]) and version[
+            "preset_support"
+        ]:
             if not old_workspace:
                 N10X.Editor.SetWorkspaceSetting("BuildCommand", cmake_preset_build)
                 N10X.Editor.SetWorkspaceSetting("RebuildCommand", cmake_preset_rebuild)
@@ -2036,7 +2129,7 @@ def OnCMakeWorkspaceOpened():
                 "Configurations", ",".join(build_list_results)
             )
 
-        elif paths["settings"]:
+        elif paths_exist["settings"]:
             if not old_workspace:
                 N10X.Editor.SetWorkspaceSetting("BuildCommand", cmake_settings_build)
                 N10X.Editor.SetWorkspaceSetting("RebuildCommand", cmake_settings_build)
