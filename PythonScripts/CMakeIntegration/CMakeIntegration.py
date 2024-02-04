@@ -662,14 +662,11 @@ def cmake_prep(
     settings_exists = paths_exist["settings"]
     lists_exists = paths_exist["lists"]
 
-    # print(json.dumps(cmd_args, indent="\t"))
     args = cmake_parse_args(cmd_args)
-    # print(json.dumps(build_dir, indent="\t"))
-    # print(json.dumps(args, indent="\t"))
     projectFile = paths["lists"]
 
     if settings_exists:
-        thisFile = settingspath
+        thisFile = paths["settings"]
         thisFileDir, thisFileName = split(thisFile)
     else:
         thisFile = None
@@ -900,8 +897,8 @@ def cmake_prep(
                 data["entries"] = args["entries"]
             return data
 
-        if use_settings_if_available and len(settingspath) > 0:
-            data = read_json_file(settingspath)
+        if use_settings_if_available and paths_exist["settings"]:
+            data = read_json_file(paths["settings"])
             data["macros"] = macros
             # settings don't do inheritance? but they definitely expand macros
             unexpanded_configs = data["configurations"]
@@ -1606,14 +1603,14 @@ def CMakeBuildThreaded(args: dict):
         if cmake_config_name == None:
             low_build_name = build_name.lower()
             for config in configs:
-                if config["name"] == low_build_name:
+                if config["name"].lower() == low_build_name:
                     cmake_config_name = config["name"]
                     cmake_config_obj = config
                     break
         if cmake_config_name == None:
             low_n10x_config = n10x_config.lower()
             for config in configs:
-                if config["name"] == low_n10x_config:
+                if config["name"].lower() == low_n10x_config:
                     cmake_config_name = config["name"]
                     cmake_config_obj = config
                     break
@@ -1718,11 +1715,6 @@ def CMakeBuildThreaded(args: dict):
         config_args = [CMake_EXE, "-S", directory, "-B", build_directory_path]
 
         if "entries" in data and data["entries"] and len(data["entries"]) > 0:
-            # initial_cache_path = norm_path_fslash(
-            #    os.path.join(directory, "10x_initial_cache.json")
-            # )
-            # write_json_file(initial_cache_path, data["entries"])
-
             initial_cache_script_path = norm_path_fslash(
                 os.path.join(directory, "10x_initial_cache.cmake")
             )
