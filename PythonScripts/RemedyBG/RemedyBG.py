@@ -1,7 +1,7 @@
 '''
 RemedyBG debugger integration for 10x (10xeditor.com) 
 RemedyBG: https://remedybg.handmade.network/ (should be above 0.3.8)
-Version: 0.11.8
+Version: 0.11.9
 Original Script author: septag@discord / septag@pm.me
 
 To get started go to Settings.10x_settings, and enable the hook, by adding this line:
@@ -49,6 +49,12 @@ RemedyBG sessions:
     and it will load that next time instead of starting a new session
 
 History:
+  0.11.9
+    - Now StepIn/StepOut starts debugging and steps into the program with the new RemedyBG update (0.3.9.8)
+    - Minor improvement to OpenDebugger command
+    - Debugger suspend event now works when we pause the program in RemedyBG (0.3.9.8)
+    - RestartDebugging starts the session if not it's started before
+
   0.11.8
     - Fixed bugs and improved `KeepSessionOnActiveChange` experience. Now when user switches from one workspace/config to another, RemedyBG sessions are properly retained and reloaded
     - Fixed a bug when we do not receive events right after RemedyBG session opens
@@ -978,7 +984,7 @@ class RDBG_Session:
             
         return True
 
-def RDBG_StartDebugging():
+def RDBG_StartDebugging(run_after_open = True):
     global gSession
     global gOptions
     global gProcessCache
@@ -994,8 +1000,9 @@ def RDBG_StartDebugging():
             gSession.close()
             gSession = None
             RDBG_StartDebugging()
-
-        gSession.run()
+        
+        if run_after_open:
+            gSession.run()
     else:
         if Editor.GetWorkspaceFilename() == '':
             Editor.ShowMessageBox(RDBG_TITLE, 'No Workspace is opened for debugging')
@@ -1005,7 +1012,8 @@ def RDBG_StartDebugging():
 
         gSession = RDBG_Session()
         if gSession.open_existing() or gSession.open():
-            gSession.run()			
+            if run_after_open:
+                gSession.run()			
         else:
             gSession = None
     
@@ -1030,7 +1038,9 @@ def RDBG_Reset():
 def RDBG_RestartDebugging():
     global gSession
     if gSession is not None:
-        gSession.send_command(RDBG_Command.RESTART_DEBUGGING)		
+        gSession.send_command(RDBG_Command.RESTART_DEBUGGING)	
+    else:
+        RDBG_StartDebugging()	
 
 def RDBG_RunToCursor():
     global gSession
@@ -1055,11 +1065,18 @@ def RDBG_StepOver():
     global gSession
     if gSession is not None:
         gSession.send_command(RDBG_Command.STEP_OVER_BY_LINE)
+    else:
+        RDBG_StartDebugging(run_after_open=False)
+        RDBG_StepOver()
 
 def RDBG_StepOut():
     global gSession
     if gSession is not None:
         gSession.send_command(RDBG_Command.STEP_OUT)
+    else:
+        RDBG_StartDebugging(run_after_open=False)
+        RDBG_StepOver()
+
 
 def RDBG_AddSelectionToWatch():
     global gSession
@@ -1069,17 +1086,7 @@ def RDBG_AddSelectionToWatch():
             gSession.send_command(RDBG_Command.ADD_WATCH, expr=selection)
 
 def RDBG_OpenDebugger():
-    global gSession
-    if Editor.GetWorkspaceFilename() == '':
-        Editor.ShowMessageBox(RDBG_TITLE, 'No Workspace is opened for debugging')
-        return
-
-    if not gSession:
-        print('RDBG: Workspace: ' + Editor.GetWorkspaceFilename())
-
-        gSession = RDBG_Session()
-        if not gSession.open_existing() and not gSession.open():
-            gSession = None
+    RDBG_StartDebugging(run_after_open=False)
 
 def RDBG_UnbindSession():
     global gSession
