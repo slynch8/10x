@@ -2,7 +2,7 @@
 # Unless you specify your preferred editor path with "ExternalEditor" Setting
 from N10X import Editor
 
-import os
+import subprocess
 
 SETTING_EditorPath:str = ""
 
@@ -12,9 +12,9 @@ def _OED_SettingsChanged():
 
 def OpenInExternalEditor():
     if SETTING_EditorPath:
-        os.system(SETTING_EditorPath + ' ' + Editor.GetCurrentFilename())
+        subprocess.Popen(SETTING_EditorPath + ' ' + Editor.GetCurrentFilename(), shell=True, stdin=None, stdout=None, stderr=None, close_fds=True)
     else:
-        os.system(Editor.GetCurrentFilename())
+        subprocess.Popen(Editor.GetCurrentFilename(), shell=True, stdin=None, stdout=None, stderr=None, close_fds=True)
 
 Editor.AddOnSettingsChangedFunction(_OED_SettingsChanged)
 Editor.CallOnMainThread(_OED_SettingsChanged)
