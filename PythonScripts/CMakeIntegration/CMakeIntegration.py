@@ -76,12 +76,14 @@ def write_json_file(json_path, json_obj, pretty=True):
 
 
 def cmd(cmd_args, working_dir) -> dict:
+    my_env = os.environ.copy()
     process = subprocess.Popen(
         cmd_args,
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,  # direct errors to stdout
         cwd=working_dir,
         encoding="utf8",
+        env=my_env,
     )
     returncode = process.wait()
     result = process.stdout.read()
@@ -501,6 +503,8 @@ def cmake_merge_item(
             for cmake_var in args["entries"]:  # macro expand the variables?
                 k = macro_expand_any(cmake_var["name"], macros)
                 v = macro_expand_any(cmake_var["value"], macros)
+                if not "cacheVariables" in configs[i]:
+                    configs[i]["cacheVariables"] = {}
                 configs[i]["cacheVariables"][k] = v
 
         data[key] = configs
@@ -968,7 +972,9 @@ def cmake_version():
     directory, filename = split(txworkspace)  # os.path.split
 
     cmd_result = cmd([CMake_EXE, "--version"], directory)
-    r = re.search("^cmake version (\\d+).(\\d+).(\\d+)[-](\\w+)?", cmd_result["stdout"])
+    r = re.search(
+        "^cmake\\s+version\\s+(\\d+).(\\d+).(\\d+)[-]?(\\w+)?", cmd_result["stdout"]
+    )
 
     if r != None:
         result = {
@@ -1370,7 +1376,7 @@ def CMakeBuildThreaded(args: dict):
 
     if (preset_exists or user_preset_exists) and version["preset_support"]:
         print("CMake Macro Expansion: ...")
-
+        print("Preset Mode:")
         # TODO detect and parse command line to pass into this function
         data = cmake_prep(directory, None, extra_cmd_args, True, False)
 
@@ -1576,8 +1582,17 @@ def CMakeBuildThreaded(args: dict):
             N10X.Editor.LogToBuildOutput(" ".join(build_args))
             N10X.Editor.LogToBuildOutput("\n")
             exe_path = cmake_build(build_args, directory, build_dir)
+            if exe_path["error_code"] != 0:
+                N10X.Editor.LogToBuildOutput("----- CMake Build Failed -----\n")
+                N10X.Editor.OnBuildFinished(False)
+                return True
+        else:
+            N10X.Editor.LogToBuildOutput("----- CMake Build Failed -----\n")
+            N10X.Editor.OnBuildFinished(False)
+            return True
     elif settings_exists:
         print("CMake Macro Expansion: ...")
+        print("Settings Mode:")
         # TODO detect and parse command line to pass into this function
         data = cmake_prep(directory, None, extra_cmd_args, False, True)
 
@@ -1702,7 +1717,16 @@ def CMakeBuildThreaded(args: dict):
             N10X.Editor.LogToBuildOutput(" ".join(build_args))
             N10X.Editor.LogToBuildOutput("\n")
             exe_path = cmake_build(build_args, directory, build_dir)
+            if exe_path["error_code"] != 0:
+                N10X.Editor.LogToBuildOutput("----- CMake Build Failed -----\n")
+                N10X.Editor.OnBuildFinished(False)
+                return True
+        else:
+            N10X.Editor.LogToBuildOutput("----- CMake Build Failed -----\n")
+            N10X.Editor.OnBuildFinished(False)
+            return True
     else:
+        print("No Preset/Settings Mode:")
         # TODO detect and parse command line to pass into this function
         data = cmake_prep(directory, None, extra_cmd_args, False, False)
         if verbose:
@@ -1756,6 +1780,14 @@ def CMakeBuildThreaded(args: dict):
             N10X.Editor.LogToBuildOutput(" ".join(build_args))
             N10X.Editor.LogToBuildOutput("\n")
             exe_path = cmake_build(build_args, directory, build_dir)
+            if exe_path["error_code"] != 0:
+                N10X.Editor.LogToBuildOutput("----- CMake Build Failed -----\n")
+                N10X.Editor.OnBuildFinished(False)
+                return True
+        else:
+            N10X.Editor.LogToBuildOutput("----- CMake Build Failed -----\n")
+            N10X.Editor.OnBuildFinished(False)
+            return True
 
     N10X.Editor.LogToBuildOutput("----- CMake Build Complete -----\n")
     N10X.Editor.OnBuildFinished(True)
