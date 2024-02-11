@@ -4,11 +4,16 @@ def Define():
 	ClassName = N10X.Editor.GetCurrentScopeName()
 	CurrentLineText = N10X.Editor.GetCurrentLine()
 
+	BeforeVariables = CurrentLineText.split("(")[0]
+	
 	#removing a stupid amount of edge cases
-	CurrentLineText = CurrentLineText.replace(";","")
-	CurrentLineText = CurrentLineText.replace("virtual", "")
-	CurrentLineText = CurrentLineText.replace("override", "")
-	CurrentLineText = CurrentLineText.replace("const", "")
+	BeforeVariables = BeforeVariables.replace(";","")
+	BeforeVariables = BeforeVariables.replace("virtual", "")
+	BeforeVariables = BeforeVariables.replace("override", "")
+	BeforeVariables = BeforeVariables.replace("const", "")
+	BeforeVariables = BeforeVariables.replace("static", "")
+
+	CurrentLineText = BeforeVariables + "(" + CurrentLineText.split("(")[1]
 
 
 	SplitLine = CurrentLineText.split()
