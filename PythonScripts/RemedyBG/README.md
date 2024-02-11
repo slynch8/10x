@@ -2,10 +2,31 @@
 # RemedyBG debugger integration
 RemedyBG: https://remedybg.handmade.network/  
 
-For more info/documentation **please read the top of the python script.**
-Note that this script only works with RemedyBG version 0.3.8 and above
+Note that this script only works with RemedyBG version 0.3.8 and above. Some features might also be unavailable for the early versions. It is recommended to get the latest version of RemedyBG.
 
-To install the script copy it to %appdata%\10x\PythonScripts\
+## Features
+
+- Replaces visual-studio debugger integration with RemedyBG
+- Supports RemedyBG session files. Saving a session file while debugger is open will bind the session file to your specific Config/Platform and preserves all extra debugger session data on the next runs
+- Two way breakpoint syncing between RemedyBG / 10x
+- Cursor position syncing in 10x when execution suspends
+- Resolves breakpoints on the RemedyBG side, so invalid or unreachable breakpoints will be cleaned out from the editor
+- Can execute custom 10x commands when debugging target is started or stopped
+- StepInto/StepOut/StepOver/RunToCursor commands 
+- Can divert all debugger output text into 10x output window
+- AddSelectionToWatch: Adds a selected text in 10x to debugger's watch window
+- GotoCursor: RemedyBG will jump to the current cursor in 10x editor
+
+## Installation
+
+- First, Copy the script file (RemedyBG.py) in to `%appdata%\10x\PythonScripts\` directory or just run `RemedyBG_Install.bat` and then restart 10x editor.
+- By this time, you should be able to see `RDBG_` family of commands in command panel (CTRL+SHIFT+X).
+- Set `RemedyBG.Path` setting to the correct path of your remedybg.exe binary
+- Now you can add the setting `RemedyBG.Hook: true` to hook RemedyBG instead of the default visual-studio debugger. So every time you run debugging commands like "Start debugger (F5)" a new RemedyBG session will be opened. If you wish to keep visual-studio debugger integration, you can just assign different shortcuts to `RDBG_StartDebugging`/`RDBG_StopDebugging` and `RDBG_RestartDebugging` commands.
+
+## Additional settings and commands
+
+For more details on additional settings and commands. Please refer to the comments section in the script itself [here](./RemedyBG.py).
 
 # RemedyBG Debugger Updater 
 Version: 0.1.0
