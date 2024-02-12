@@ -1,7 +1,7 @@
 '''
 RemedyBG debugger integration for 10x (10xeditor.com) 
 RemedyBG: https://remedybg.handmade.network/ (should be above 0.3.8)
-Version: 0.11.7
+Version: 0.11.9
 Original Script author: septag@discord / septag@pm.me
 
 To get started go to Settings.10x_settings, and enable the hook, by adding this line:
@@ -19,8 +19,8 @@ RDBG_Options:
     - RemedyBG.WorkDir: Path that remedy will use as a working directory
     - RemedyBG.KeepSessionOnActiveChange: (default=False) when active project or config is changed, it leaves the previously opened RemedyBG session
                                            This is useful when you want to debug multiple binaries within a project like client/server apps
-    - RemedyBG.StartProcessExtraCommand: Extra 10x command that will be executed after process is started in RemedyBG
-    - RemedyBG.StopProcessExtraCommand: Extra 10x command that will be executed after process is stopped in RemedyBG
+    - RemedyBG.StartProcessExtraCommand: Extra 10x command that will be executed after process is started in RemedyBG. Several commands can be separated by semicolon.
+    - RemedyBG.StopProcessExtraCommand: Extra 10x command that will be executed after process is stopped in RemedyBG. Several commands can be separated by semicolon.
     - RemedyBG.BringToForegroundOnSuspended: (default=True) Bring debugger to front when debugging session is paused
 
 Commands:
@@ -49,6 +49,18 @@ RemedyBG sessions:
     and it will load that next time instead of starting a new session
 
 History:
+  0.11.9
+    - Now StepIn/StepOut starts debugging and steps into the program with the new RemedyBG update (0.3.9.8)
+    - Minor improvement to OpenDebugger command
+    - Debugger suspend event now works when we pause the program in RemedyBG (0.3.9.8)
+    - RestartDebugging starts the session if not it's started before
+
+  0.11.8
+    - Fixed bugs and improved `KeepSessionOnActiveChange` experience. Now when user switches from one workspace/config to another, RemedyBG sessions are properly retained and reloaded
+    - Fixed a bug when we do not receive events right after RemedyBG session opens
+    - Fixed a bug with 10x debug state not updated properly when RemedyBG is closed by user
+    - `StartProcessExtraCommand` and `StopProcessExtraCommand` now receives several commands, semicolon separated
+
   0.11.7
     - Minor cleanups
 
@@ -627,6 +639,41 @@ class RDBG_Session:
 
         return None
 
+    def open_existing(self)->bool:
+        # first check if we have already spawned the process and it's still alive (poll)
+        global gProcessCache
+        if self.name not in gProcessCache:
+            return False
+        self.process = gProcessCache[self.name]
+        if self.process.poll() is not None:
+            del gProcessCache[self.name]
+            return False
+
+        try:
+            assert self.cmd_pipe == None
+            name = RDBG_PREFIX + self.name
+            self.cmd_pipe = win32file.CreateFile(name, win32file.GENERIC_READ|win32file.GENERIC_WRITE, 0, None, win32file.OPEN_EXISTING, 0, None)
+            win32pipe.SetNamedPipeHandleState(self.cmd_pipe, win32pipe.PIPE_READMODE_MESSAGE, None, None)
+            
+            assert self.event_pipe == None
+            name = name + '-events'
+            self.event_pipe = win32file.CreateFile(name, win32file.GENERIC_READ|256, 0, None, win32file.OPEN_EXISTING, 0, None)
+            win32pipe.SetNamedPipeHandleState(self.event_pipe, win32pipe.PIPE_READMODE_MESSAGE, None, None)
+
+            print("RDBG: Connection re-established")
+
+            self.sync_breakpoints(two_way=False)
+            return True
+        except:
+            if self.cmd_pipe:
+                win32file.CloseHandle(self.cmd_pipe)
+                self.cmd_pipe = None
+
+            if self.event_pipe is not None:
+                win32file.CloseHandle(self.event_pipe)
+                self.event_pipe = None            
+            return False
+
     def open(self)->bool:
         try:
             self.load_session_ref()
@@ -670,8 +717,7 @@ class RDBG_Session:
             wait_time:float = 0.1
             for retry in range(0, 5):
                 try:
-                    self.cmd_pipe = win32file.CreateFile(name, win32file.GENERIC_READ|win32file.GENERIC_WRITE, \
-                        0, None, win32file.OPEN_EXISTING, 0, None)
+                    self.cmd_pipe = win32file.CreateFile(name, win32file.GENERIC_READ|win32file.GENERIC_WRITE, 0, None, win32file.OPEN_EXISTING, 0, None)
                 except pywintypes.error:
                     time.sleep(wait_time)
                     wait_time = wait_time*2.0
@@ -736,6 +782,7 @@ class RDBG_Session:
 
         Editor.ClearStatusBarColour()
         Editor.ClearDebuggerStepLine()
+        Editor.OnDebuggerStopped()
 
         self.target_state:RDBG_TargetState = RDBG_TargetState.NONE
         self.first_start = True
@@ -758,13 +805,10 @@ class RDBG_Session:
             state:RDBG_TargetState = self.send_command(RDBG_Command.GET_TARGET_STATE)
             if state == RDBG_TargetState.NONE:
                 r = self.send_command(RDBG_Command.START_DEBUGGING)
-
-                # TODO: have to get rid of this part eventually. currently, RemedyBG doesn't seem to triggered TARGET_STARTED after the first start
                 if r and self.first_start:
-                    self.target_state = RDBG_TargetState.EXECUTING
-                    Editor.OnDebuggerStarted()
-                    Editor.SetStatusBarColour((202, 81, 0))
                     self.first_start = False
+                    self.update()
+
             elif state == RDBG_TargetState.SUSPENDED:
                 self.send_command(RDBG_Command.CONTINUE_EXECUTION)
             elif state == RDBG_TargetState.EXECUTING:
@@ -794,6 +838,7 @@ class RDBG_Session:
     def update(self)->bool:
         global gOptions
         global gOptionsOverride
+        global gProcessCache
 
         tm:float = time.time()
  
@@ -814,6 +859,7 @@ class RDBG_Session:
             # Check if the active config/project has changed
             if self.update_active_project():
                 if gOptions.keep_session:
+                    gProcessCache[self.name] = self.process
                     self.process = None
                 else:
                     print('RDBG: Active project changed. Closing session...')
@@ -908,6 +954,10 @@ class RDBG_Session:
                         if gOptions.stop_debug_command and gOptions.stop_debug_command != '':
                             print('RDBG: Execute:', gOptions.stop_debug_command)
                             Editor.ExecuteCommand(gOptions.stop_debug_command)
+                            cmds = gOptions.stop_debug_command.split(';')
+                            for cmd in cmds:
+                                if cmd.strip() != '':
+                                    Editor.ExecuteCommand(cmd)
 
                     elif event_type == RDBG_EventType.TARGET_STARTED:
                         print('RDBG: Debugging started')
@@ -917,7 +967,10 @@ class RDBG_Session:
 
                         if gOptions.start_debug_command and gOptions.start_debug_command != '':
                             print('RDBG: Execute:', gOptions.start_debug_command)
-                            Editor.ExecuteCommand(gOptions.start_debug_command)
+                            cmds = gOptions.start_debug_command.split(';')
+                            for cmd in cmds:
+                                if cmd.strip() != '':
+                                    Editor.ExecuteCommand(cmd)
                     elif event_type == RDBG_EventType.TARGET_CONTINUED:
                         Editor.ClearDebuggerStepLine()
                         Editor.SetStatusBarColour((202, 81, 0))
@@ -931,13 +984,15 @@ class RDBG_Session:
             
         return True
 
-def RDBG_StartDebugging():
+def RDBG_StartDebugging(run_after_open = True):
     global gSession
     global gOptions
+    global gProcessCache
 
     if gSession is not None:
         if gSession.update_active_project():
             if gOptions.keep_session:
+                gProcessCache[gSession.name] = gSession.process
                 gSession.process = None
             else:
                 print('RDBG: Project config/platform changed. Restarting RemedyBG ...')
@@ -945,8 +1000,9 @@ def RDBG_StartDebugging():
             gSession.close()
             gSession = None
             RDBG_StartDebugging()
-
-        gSession.run()
+        
+        if run_after_open:
+            gSession.run()
     else:
         if Editor.GetWorkspaceFilename() == '':
             Editor.ShowMessageBox(RDBG_TITLE, 'No Workspace is opened for debugging')
@@ -955,8 +1011,9 @@ def RDBG_StartDebugging():
         print('RDBG: Workspace: ' + Editor.GetWorkspaceFilename())
 
         gSession = RDBG_Session()
-        if gSession.open():
-            gSession.run()			
+        if gSession.open_existing() or gSession.open():
+            if run_after_open:
+                gSession.run()			
         else:
             gSession = None
     
@@ -981,7 +1038,9 @@ def RDBG_Reset():
 def RDBG_RestartDebugging():
     global gSession
     if gSession is not None:
-        gSession.send_command(RDBG_Command.RESTART_DEBUGGING)		
+        gSession.send_command(RDBG_Command.RESTART_DEBUGGING)	
+    else:
+        RDBG_StartDebugging()	
 
 def RDBG_RunToCursor():
     global gSession
@@ -1006,11 +1065,18 @@ def RDBG_StepOver():
     global gSession
     if gSession is not None:
         gSession.send_command(RDBG_Command.STEP_OVER_BY_LINE)
+    else:
+        RDBG_StartDebugging(run_after_open=False)
+        RDBG_StepOver()
 
 def RDBG_StepOut():
     global gSession
     if gSession is not None:
         gSession.send_command(RDBG_Command.STEP_OUT)
+    else:
+        RDBG_StartDebugging(run_after_open=False)
+        RDBG_StepOver()
+
 
 def RDBG_AddSelectionToWatch():
     global gSession
@@ -1020,17 +1086,7 @@ def RDBG_AddSelectionToWatch():
             gSession.send_command(RDBG_Command.ADD_WATCH, expr=selection)
 
 def RDBG_OpenDebugger():
-    global gSession
-    if Editor.GetWorkspaceFilename() == '':
-        Editor.ShowMessageBox(RDBG_TITLE, 'No Workspace is opened for debugging')
-        return
-
-    if not gSession:
-        print('RDBG: Workspace: ' + Editor.GetWorkspaceFilename())
-
-        gSession = RDBG_Session()
-        if not gSession.open():
-            gSession = None
+    RDBG_StartDebugging(run_after_open=False)
 
 def RDBG_UnbindSession():
     global gSession
@@ -1137,6 +1193,7 @@ def InitialiseRemedy():
 gSession:RDBG_Session = None
 gOptions:RDBG_Options = None
 gOptionsOverride:bool = False
+gProcessCache = {} # key = self.name, value = subprocess.Popen. Only populate this with KeepSessionOnActiveChange setting
 
 Editor.CallOnMainThread(InitialiseRemedy)
 
