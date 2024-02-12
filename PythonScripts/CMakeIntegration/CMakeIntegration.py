@@ -19,12 +19,15 @@ import base64
 
 """
 CMake build integration for 10x (10xeditor.com)
-Version: 0.1.5
+Version: 0.1.6
 Original Script author: https://github.com/andersama
 
 To get started go to Settings.10x_settings, and enable the hooks, by adding these lines:
     CMake.HookBuild: true
     CMake.HookWorkspaceOpened: true
+
+If cmake complains about not finding include directories or is "unable to compile a simple test program" find:
+    vcvarsall.bat in MSVC's install directory (will likely be under /Common7/Tools) if it's not already detected
 
 This script assumes CMake.exe is in your path! To change this modify CMake.Path
 
@@ -34,8 +37,11 @@ CMake_Options:
     - CMake.Path:                                Path to a custom cmake executable or directory, default assumes CMake is on the path!
     - CMake.GuiPath:                             Path to cmake-gui executable or directory, default assumes cmake-gui is on the path!
     - CMake.Verbose: (default=False)             Turns on debugging print statements
+    - CMake.vcvarsall:                           Path to vcvarsall.bat or directory, default assumes vcvarsall.bat is on the path
 
 History:
+  0.1.6
+      - Make use of vcvarsall.bat to set environment variables
   0.1.5
       - Use workspace build and rebuild commands to pass cmake variables
   0.1.4
@@ -75,15 +81,17 @@ def write_json_file(json_path, json_obj, pretty=True):
             json.dump(json_obj, f)
 
 
-def cmd(cmd_args, working_dir) -> dict:
-    my_env = os.environ.copy()
+def cmd(cmd_args, working_dir, env=None, verbose=False) -> dict:
+    current_env = env if env != None else os.environ.copy()
+    if verbose:
+        print("Env:\n{0}".format(json.dumps(current_env, indent="\t")))
     process = subprocess.Popen(
         cmd_args,
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,  # direct errors to stdout
         cwd=working_dir,
+        env=current_env,
         encoding="utf8",
-        env=my_env,
     )
     returncode = process.wait()
     result = process.stdout.read()
@@ -100,16 +108,22 @@ def get_10x_bool_setting(setting: str):
     return str and str.lower() == "true"
 
 
-def get_10x_exe_path(setting: str, exe_name: str):
-    exe = N10X.Editor.GetSetting("CMake.Path").strip()
+def get_10x_cmdpath(setting: str, exe_name: str, ext: str):
+    exe = N10X.Editor.GetSetting(setting).strip()
     if not exe:
         exe = shutil.which(exe_name)
+    if not exe:
+        return exe
     if os.path.isdir(exe):
-        if exe_name.endswith(".exe"):
+        if exe_name.endswith(ext):
             exe = os.path.join(exe, exe_name)
         else:
-            exe = os.path.join(exe, exe_name + ".exe")
+            exe = os.path.join(exe, exe_name + ext)
     return exe
+
+
+def get_10x_exe_path(setting: str, exe_name: str):
+    return get_10x_cmdpath(setting, exe_name, ".exe")
 
 
 # use \'s for paths, default window behavior
@@ -124,6 +138,10 @@ def norm_path_fslash(path) -> str:
 
 def escape_bslash(input: str) -> str:
     return re.sub("\\\\", "\\\\\\\\", input)
+
+
+def sub_bslash_fslash(input: str) -> str:
+    return re.sub(r"[\\]", "/", input)
 
 
 def cmake_paths(directory: str) -> dict:
@@ -1005,23 +1023,69 @@ def cmake_gui(src_dir: str = ""):
         src_dir = directory
 
     cmakelists_exists = IsCMakeDirectory(src_dir)
-
-    cmake_gui = N10X.Editor.GetSetting("CMake.GuiPath").strip()
-    if not cmake_gui:
-        cmake_gui = "cmake-gui"
-    if os.path.isdir(cmake_gui):
-        cmake_gui = os.path.join(cmake_gui, "cmake-gui.exe")
+    global CMake_GUI
 
     if cmakelists_exists:
-        stdtxt = run_cmd([cmake_gui, "-S", src_dir], src_dir)
+        stdtxt = run_cmd([CMake_GUI, "-S", src_dir], src_dir)
         return stdtxt
 
     return ""
 
 
-def cmake_configure(cmd_args, working_dir) -> dict:
+#
+# Syntax:
+#    vcvarsall.bat [arch] [platform_type] [winsdk_version] [-vcvars_ver=vc_version] [-vcvars_spectre_libs=spectre_mode]
+# where :
+#    [arch]: x86 | amd64 | x86_amd64 | x86_arm | x86_arm64 | amd64_x86 | amd64_arm | amd64_arm64
+#    [platform_type]: {empty} | store | uwp
+#    [winsdk_version] : full Windows 10 SDK number (e.g. 10.0.10240.0) or "8.1" to use the Windows 8.1 SDK.
+#    [vc_version] : {none} for latest installed VC++ compiler toolset |
+#                   "14.0" for VC++ 2015 Compiler Toolset |
+#                   "14.xx" for the latest 14.xx.yyyyy toolset installed (e.g. "14.11") |
+#                   "14.xx.yyyyy" for a specific full version number (e.g. "14.11.25503")
+#    [spectre_mode] : {none} for libraries without spectre mitigations |
+#                     "spectre" for libraries with spectre mitigations
+
+
+def cmake_env(vcvarsall, directory, platform) -> dict:  # x64 etc...
+    env_out = os.path.join(directory, "cmake_env.txt")
+    args = [vcvarsall, platform, "&&", "set", ">", env_out]
+    print(" ".join(args))
+    r = cmd(args, directory)
+    print("cmake_env")
+    if r["stdout"]:
+        print(r["stdout"])
+
+    if r["error_code"] == 0:
+        o = {}
+        current_env = os.environ.copy()
+        # clone existing env
+        for k in current_env:
+            o[k] = current_env[k]
+
+        with open(env_out, "r", encoding="utf-8-sig") as env_data:
+            env_txt = env_data.read()
+            lines = env_txt.splitlines()
+            for l in lines:
+                if l.startswith("**") or l.startswith("[vcvarsall.bat]"):
+                    continue
+                env_line = re.match("^([^=]+)=(.*)$", l)
+                if (
+                    env_line
+                    and len(env_line.group(1)) > 0
+                    and len(env_line.group(2)) > 0
+                ):
+                    o[env_line.group(1)] = env_line.group(2)
+
+        return o
+    else:
+        o = os.environ.copy()
+        return o
+
+
+def cmake_configure(cmd_args, working_dir, env=None) -> dict:
     # ["cmake", ...]
-    cmdline = cmd(cmd_args, working_dir)
+    cmdline = cmd(cmd_args, working_dir, env)
     # read the stdout to grab the build directory
     if "stdout" in cmdline:
         N10X.Editor.LogToBuildOutput(cmdline["stdout"])
@@ -1053,7 +1117,7 @@ def cmake_configure(cmd_args, working_dir) -> dict:
     return result
 
 
-def cmake_build(cmd_args, working_dir, build_dir) -> dict:
+def cmake_build(cmd_args, working_dir, build_dir, env=None) -> dict:
     # ["cmake", ...]
     # write file api query
     query_dir = norm_path_fslash(
@@ -1082,7 +1146,7 @@ def cmake_build(cmd_args, working_dir, build_dir) -> dict:
     with open(query_file, "w") as f:
         json.dump(query_json, f)
 
-    cmdline = cmd(cmd_args, working_dir)
+    cmdline = cmd(cmd_args, working_dir, env)
     if "stdout" in cmdline and len(cmdline["stdout"]) > 0:
         N10X.Editor.LogToBuildOutput(cmdline["stdout"])
         print(cmdline["stdout"])
@@ -1107,15 +1171,17 @@ def cmake_build(cmd_args, working_dir, build_dir) -> dict:
 
     if index_json == None or len(index_json) <= 0:
         print(
-            "No index.json file found in reply directory, make sure you're running an up to date version of CMake"
+            "No index.json file found in reply directory\n{0}!\nMake sure you're running an up to date version of CMake".format(
+                reply_dir
+            )
         )
         return result
 
     index_path = norm_path_fslash(os.path.join(reply_dir, index_json))
     index_data = read_json_file(index_path)
     generator_data = index_data["cmake"]["generator"]
-    generator = generator_data["name"]
-    platform = generator_data["platform"]
+    generator = generator_data["name"] if "name" in generator_data else None
+    platform = generator_data["platform"] if "platform" in generator_data else None
 
     # Read "objects" which includes all the json file responses
     objects_data = index_data["objects"]
@@ -1215,12 +1281,15 @@ def cmake_build(cmd_args, working_dir, build_dir) -> dict:
     if exact_sln != None:
         newest_sln = exact_sln
 
-    N10X.Editor.SetWorkspaceSetting("DebugSln", newest_sln)
+    if newest_sln and len(newest_sln) > 0:
+        N10X.Editor.SetWorkspaceSetting("DebugSln", newest_sln)
+    else:
+        N10X.Editor.SetWorkspaceSetting("DebugSln", "")
 
     result["exe"] = newest_target
     result["sln"] = newest_sln
     result["pdb"] = newest_pdb
-    return newest_target
+    return result
 
 
 def write10xWorkspace(
@@ -1347,6 +1416,7 @@ def CMakeBuildThreaded(args: dict):
     n10x_platform = args["platform"]
     verbose = args["verbose"]
     CMake_EXE = args["cmake"]
+    vcvarsall = args["vcvarsall"]
     build_args = args["build_args"]
     rebuild_args = args["rebuild_args"]
     rebuild = args["rebuild"]
@@ -1545,19 +1615,35 @@ def CMakeBuildThreaded(args: dict):
             with open(initial_cache_script_path, "w") as cache_script:
                 for k in cmake_vars:
                     if "type" in cmake_vars[k] and cmake_vars[k]["type"] != None:
-                        cache_script.write(
-                            'set({0} "{1}" CACHE {2} "")\n'.format(
-                                k,
-                                escape_bslash(cmake_vars[k]["value"]),
-                                cmake_vars[k]["type"],
+                        if type(cmake_vars[k]["value"]) == str:
+                            cache_script.write(
+                                'set({0} "{1}" CACHE {2} "")\n'.format(
+                                    k,
+                                    escape_bslash(cmake_vars[k]["value"]),
+                                    cmake_vars[k]["type"],
+                                )
                             )
-                        )
+                        elif type(cmake_vars[k]["value"]) == bool:
+                            cache_script.write(
+                                'set({0} "{1}" CACHE {2} "")\n'.format(
+                                    k,
+                                    "true" if cmake_vars[k]["value"] else "false",
+                                    cmake_vars[k]["type"],
+                                )
+                            )
                     else:
-                        cache_script.write(
-                            'set({0} "{1}" CACHE STRING "")\n'.format(
-                                k, escape_bslash(cmake_vars[k]["value"])
+                        if type(cmake_vars[k]["value"]) == str:
+                            cache_script.write(
+                                'set({0} "{1}" CACHE STRING "")\n'.format(
+                                    k, escape_bslash(cmake_vars[k]["value"])
+                                )
                             )
-                        )
+                        elif type(cmake_vars[k]["value"]) == bool:
+                            cache_script.write(
+                                'set({0} "{1}" CACHE STRING "")\n'.format(
+                                    k, "true" if cmake_vars[k]["value"] else "false"
+                                )
+                            )
 
             config_args.append("-C")
             config_args.append(initial_cache_script_path)
@@ -1569,7 +1655,17 @@ def CMakeBuildThreaded(args: dict):
 
         N10X.Editor.LogToBuildOutput(" ".join(config_args))
         N10X.Editor.LogToBuildOutput("\n")
-        config_result = cmake_configure(config_args, directory)
+
+        arch = "x64"
+        if (
+            "architecture" in cmake_config_obj
+            and "value" in cmake_config_obj["architecture"]
+        ):
+            arch = cmake_config_obj["architecture"]["value"]
+
+        env = cmake_env(vcvarsall, directory, arch)
+
+        config_result = cmake_configure(config_args, directory, env)
         build_dir = config_result["build_dir"]
         if config_result["error_code"] == 0 and build_dir and len(build_dir):
             if (
@@ -1581,7 +1677,7 @@ def CMakeBuildThreaded(args: dict):
 
             N10X.Editor.LogToBuildOutput(" ".join(build_args))
             N10X.Editor.LogToBuildOutput("\n")
-            exe_path = cmake_build(build_args, directory, build_dir)
+            exe_path = cmake_build(build_args, directory, build_dir, env)
             if exe_path["error_code"] != 0:
                 N10X.Editor.LogToBuildOutput("----- CMake Build Failed -----\n")
                 N10X.Editor.OnBuildFinished(False)
@@ -1682,19 +1778,35 @@ def CMakeBuildThreaded(args: dict):
             with open(initial_cache_script_path, "w") as cache_script:
                 for k in cmake_vars:
                     if "type" in cmake_vars[k] and cmake_vars[k]["type"] != None:
-                        cache_script.write(
-                            'set({0} "{1}" CACHE {2} "")\n'.format(
-                                k,
-                                escape_bslash(cmake_vars[k]["value"]),
-                                cmake_vars[k]["type"],
+                        if type(cmake_vars[k]["value"]) == str:
+                            cache_script.write(
+                                'set({0} "{1}" CACHE {2} "")\n'.format(
+                                    k,
+                                    escape_bslash(cmake_vars[k]["value"]),
+                                    cmake_vars[k]["type"],
+                                )
                             )
-                        )
+                        elif type(cmake_vars[k]["value"]) == bool:
+                            cache_script.write(
+                                'set({0} "{1}" CACHE {2} "")\n'.format(
+                                    k,
+                                    "true" if cmake_vars[k]["value"] else "false",
+                                    cmake_vars[k]["type"],
+                                )
+                            )
                     else:
-                        cache_script.write(
-                            'set({0} "{1}" CACHE STRING "")\n'.format(
-                                k, escape_bslash(cmake_vars[k]["value"])
+                        if type(cmake_vars[k]["value"]) == str:
+                            cache_script.write(
+                                'set({0} "{1}" CACHE STRING "")\n'.format(
+                                    k, escape_bslash(cmake_vars[k]["value"])
+                                )
                             )
-                        )
+                        elif type(cmake_vars[k]["value"]) == bool:
+                            cache_script.write(
+                                'set({0} "{1}" CACHE STRING "")\n'.format(
+                                    k, "true" if cmake_vars[k]["value"] else "false"
+                                )
+                            )
 
             config_args.append("-C")  # see cmake ide integration guide
             config_args.append(initial_cache_script_path)
@@ -1703,7 +1815,17 @@ def CMakeBuildThreaded(args: dict):
 
         N10X.Editor.LogToBuildOutput(" ".join(config_args))
         N10X.Editor.LogToBuildOutput("\n")
-        config_result = cmake_configure(config_args, directory)
+
+        arch = "x64"
+        if (
+            "architecture" in cmake_config_obj
+            and "value" in cmake_config_obj["architecture"]
+        ):
+            arch = cmake_config_obj["architecture"]["value"]
+
+        env = cmake_env(vcvarsall, directory, arch)
+
+        config_result = cmake_configure(config_args, directory, env)
         build_dir = config_result["build_dir"]
         if config_result["error_code"] == 0 and build_dir and len(build_dir):
             build_args = [
@@ -1716,7 +1838,7 @@ def CMakeBuildThreaded(args: dict):
 
             N10X.Editor.LogToBuildOutput(" ".join(build_args))
             N10X.Editor.LogToBuildOutput("\n")
-            exe_path = cmake_build(build_args, directory, build_dir)
+            exe_path = cmake_build(build_args, directory, build_dir, env)
             if exe_path["error_code"] != 0:
                 N10X.Editor.LogToBuildOutput("----- CMake Build Failed -----\n")
                 N10X.Editor.OnBuildFinished(False)
@@ -1751,19 +1873,35 @@ def CMakeBuildThreaded(args: dict):
             with open(initial_cache_script_path, "w") as cache_script:
                 for k in cmake_vars:
                     if "type" in cmake_vars[k] and cmake_vars[k]["type"] != None:
-                        cache_script.write(
-                            'set({0} "{1}" CACHE {2} "")\n'.format(
-                                k,
-                                escape_bslash(cmake_vars[k]["value"]),
-                                cmake_vars[k]["type"],
+                        if type(cmake_vars[k]["value"]) == str:
+                            cache_script.write(
+                                'set({0} "{1}" CACHE {2} "")\n'.format(
+                                    k,
+                                    escape_bslash(cmake_vars[k]["value"]),
+                                    cmake_vars[k]["type"],
+                                )
                             )
-                        )
+                        elif type(cmake_vars[k]["value"]) == bool:
+                            cache_script.write(
+                                'set({0} "{1}" CACHE {2} "")\n'.format(
+                                    k,
+                                    "true" if cmake_vars[k]["value"] else "false",
+                                    cmake_vars[k]["type"],
+                                )
+                            )
                     else:
-                        cache_script.write(
-                            'set({0} "{1}" CACHE STRING "")\n'.format(
-                                k, escape_bslash(cmake_vars[k]["value"])
+                        if type(cmake_vars[k]["value"]) == str:
+                            cache_script.write(
+                                'set({0} "{1}" CACHE STRING "")\n'.format(
+                                    k, escape_bslash(cmake_vars[k]["value"])
+                                )
                             )
-                        )
+                        elif type(cmake_vars[k]["value"]) == bool:
+                            cache_script.write(
+                                'set({0} "{1}" CACHE STRING "")\n'.format(
+                                    k, "true" if cmake_vars[k]["value"] else "false"
+                                )
+                            )
 
             config_args.append("-C")  # see cmake ide integration guide
             config_args.append(initial_cache_script_path)
@@ -1773,7 +1911,17 @@ def CMakeBuildThreaded(args: dict):
 
         N10X.Editor.LogToBuildOutput(" ".join(config_args))
         N10X.Editor.LogToBuildOutput("\n")
-        config_result = cmake_configure(config_args, directory)
+
+        arch = "x64"
+        if (
+            "architecture" in cmake_config_obj
+            and "value" in cmake_config_obj["architecture"]
+        ):
+            arch = cmake_config_obj["architecture"]["value"]
+
+        env = cmake_env(vcvarsall, directory, arch)
+
+        config_result = cmake_configure(config_args, directory, env)
         build_dir = config_result["build_dir"]
         if config_result["error_code"] == 0 and build_dir and len(build_dir):
             build_args = [CMake_EXE, "--build", build_dir]
@@ -1800,10 +1948,10 @@ def CMakeBuildStarted(filename: str, rebuild: bool = False):
         print("CMake: ignoring build command (set CMake.HookBuild to true)")
         return False
 
-    verbose_setting = N10X.Editor.GetSetting("CMake.Verbose")
-    verbose = verbose_setting and verbose_setting.lower()
-
-    CMake_EXE = get_10x_exe_path("CMake.Path", "cmake")
+    global CMake_EXE
+    global vcvarsall
+    global verbose
+    global version
 
     txworkspace = N10X.Editor.GetWorkspaceFilename()
     directory, filename = split(txworkspace)  # os.path.split
@@ -1820,44 +1968,31 @@ def CMakeBuildStarted(filename: str, rebuild: bool = False):
     build_dir = None
     print("Checking for CMake build...")
     if paths_exist["lists"]:
-        version = cmake_version()
         use_threads = True
+        parameters = {
+            "directory": directory,
+            "preset_exists": paths_exist["preset"],
+            "user_preset_exists": paths_exist["userpreset"],
+            "settings_exists": paths_exist["settings"],
+            "version": version,
+            "config": N10X.Editor.GetWorkspaceBuildConfig(),
+            "platform": N10X.Editor.GetWorkspaceBuildPlatform(),
+            "verbose": verbose,
+            "cmake": CMake_EXE,
+            "build_args": build_args,
+            "rebuild_args": rebuild_args,
+            "rebuild": rebuild,
+            "vcvarsall": vcvarsall,
+        }
+
         if use_threads:
             build_thread = Thread(
                 target=CMakeBuildThreaded,
-                args=[
-                    {
-                        "directory": directory,
-                        "preset_exists": paths_exist["preset"],
-                        "user_preset_exists": paths_exist["userpreset"],
-                        "settings_exists": paths_exist["settings"],
-                        "version": version,
-                        "config": N10X.Editor.GetWorkspaceBuildConfig(),
-                        "platform": N10X.Editor.GetWorkspaceBuildPlatform(),
-                        "verbose": verbose,
-                        "cmake": CMake_EXE,
-                        "build_args": build_args,
-                        "rebuild_args": rebuild_args,
-                        "rebuild": rebuild,
-                    }
-                ],
+                args=[parameters],
             )
             build_thread.start()
         else:
-            CMakeBuildThreaded(
-                {
-                    "directory": directory,
-                    "preset_exists": paths_exist["preset"],
-                    "user_preset_exists": paths_exist["userpreset"],
-                    "settings_exists": paths_exist["settings"],
-                    "version": version,
-                    "config": N10X.Editor.GetWorkspaceBuildConfig(),
-                    "platform": N10X.Editor.GetWorkspaceBuildPlatform(),
-                    "verbose": verbose,
-                    "cmake": CMake_EXE,
-                    "rebuild": rebuild,
-                }
-            )
+            CMakeBuildThreaded(parameters)
         return True
     else:
         print("No CMake related files found...")
@@ -1877,6 +2012,63 @@ def OnCMakeBuildFinished(build_result: bool):
     N10X.Editor.LogToBuildOutput(
         "----- CMake OK  -----\n" if build_result else "----- CMake FAIL  -----\n"
     )
+    return
+
+
+def OnCMakeSettingsChanged():
+    global verbose
+    verbose = get_10x_bool_setting("CMake.Verbose")
+
+    global CMake_EXE
+    CMake_EXE = get_10x_exe_path("CMake.Path", "cmake")
+    if verbose and CMake_EXE != None:
+        print(CMake_EXE)
+
+    global version
+    version = cmake_version()
+
+    txworkspace = N10X.Editor.GetWorkspaceFilename()
+    directory, filename = split(txworkspace)  # os.path.split
+
+    global vcvarsall
+    vcvarsall = get_10x_cmdpath("CMake.vcvarsall", "vcvarsall.bat", ".bat")
+    if vcvarsall == None or not (len(vcvarsall) > 0):
+        vswhere_result = cmd(
+            [
+                "C:/Program Files (x86)/Microsoft Visual Studio/Installer/vswhere.exe",
+                "-legacy",
+                "-prerelease",
+                "-format",
+                "json",
+            ],
+            directory,
+        )
+        if vswhere_result["error_code"] == 0 and type(vswhere_result["stdout"]) == str:
+            vswhere_json = json.loads(vswhere_result["stdout"])
+            for vsinstall_obj in vswhere_json:
+                vsinstall = vsinstall_obj["installationPath"]
+                vcvarsall_check = norm_path_fslash(
+                    os.path.join(vsinstall, "Common7\\Tools\\vcvarsall.bat")
+                )
+                print(vcvarsall_check)
+                if exists(vcvarsall_check):
+                    vcvarsall = vcvarsall_check
+                    break
+                vcvarsall_check = norm_path_fslash(
+                    os.path.join(vsinstall, "VC\\Auxiliary\\Build\\vcvarsall.bat")
+                )
+                print(vcvarsall_check)
+                if exists(vcvarsall_check):
+                    vcvarsall = vcvarsall_check
+                    break
+    if verbose and vcvarsall != None:
+        print(vcvarsall)
+
+    global CMake_GUI
+    CMake_GUI = get_10x_exe_path("CMake.GuiPath", "cmake-gui")
+    if verbose and CMake_GUI != None:
+        print(CMake_GUI)
+
     return
 
 
@@ -2069,7 +2261,8 @@ def OnCMakeWorkspaceOpened():
         )
         return False
 
-    verbose = get_10x_bool_setting("CMake.Verbose")
+    global verbose
+    global version
 
     cmakelists_exists = False
     cmakepresets_exists = False
@@ -2120,7 +2313,6 @@ def OnCMakeWorkspaceOpened():
         "$(RootWorkspaceDirectory)/out/build/$(Configuration)/project_name.exe"
     )
 
-    version = cmake_version()
     old_workspace = IsOldWorkspace()
 
     if paths_exist["lists"]:
@@ -2222,6 +2414,7 @@ def OnCMakeWorkspaceOpened():
 
 
 def InitializeCMake():
+    N10X.Editor.AddOnSettingsChangedFunction(OnCMakeSettingsChanged)
     N10X.Editor.AddOnWorkspaceOpenedFunction(OnCMakeWorkspaceOpened)
     N10X.Editor.AddProjectBuildFunction(OnCMakeBuildStarted)
     N10X.Editor.AddProjectRebuildFunction(OnCMakeRebuildStarted)
