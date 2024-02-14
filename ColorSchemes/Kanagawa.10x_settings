@@ -1,0 +1,67 @@
+## Need:
+# 1. Support for `T x = ...`, T is just "text"
+# 2. Have another variable for argument colors, right now it's `Language.Variable`
+# 3. Have a `Language.Quote`, right now it's using `Language.String`
+# 4. Differentiate creating macro's and using macro's
+# 5. Have another keyword for `return`?
+# These are just to get a 1:1 match, but it's close enough.
+
+## UI
+UI.UI:                                            363646
+UI.UI Text:                                       dddddd
+
+UI.Panels.Active Tab: 323242
+UI.Panels.Inactive Tab: 323242
+
+UI.Panels.Scrollbar Bar: 39364a
+UI.Panels.Scrollbar Bar (hover): 39394a
+UI.Panels.Scrollbar Bar (drag): 47476ccc
+
+## Menu
+UI.Menu: 16161D
+UI.Menu (highlighted): 2a2a37
+UI.Menu (selected): 2a2a37
+
+## Editor
+Editor.Background: 1f1f28
+Editor.Selection Back: 223249
+
+Editor.Current Line: 2a2a37
+
+Editor.BraceDepth1: eeac31
+Editor.BraceDepth2: 659db2
+Editor.BraceDepth3: e9669e
+# Reset
+Editor.BraceDepth4: eeac31
+Editor.BraceDepth5: 659db2
+Editor.BraceDepth6: e9669e
+
+## Language
+Language.Comment: 727169
+Language.Preprocessor: 9b9b9b
+Language.Text: 9b9b9b
+Language.Variable: 9cdcfe
+
+Language.String: 98bb6c
+Language.Comma: c0a36e
+Language.Operator: c0a36e
+
+Language.Brace: 51ade4
+Language.Bracket: 51ade4
+Language.SquareBracket: ab6e36
+
+Language.MemberFunction: dbd8a1
+Language.MemberVariable: dddddd
+
+Language.Function: dbd8a1
+Language.Type: 957fb8
+Language.Keyword: 957fb8
+Language.Class: 4ac8aa
+Language.SemiColon: c0a36e
+
+Language.Typedef: 4ac8aa
+Language.Namespace: c8c8c8
+Language.Number: d17b87
+
+# Green: 4ac8aa
+# Rose:  d17b87
