@@ -2,7 +2,7 @@
 # 1. Support for `T x = ...`, T is just "text"
 # 2. Have another variable for argument colors, right now it's `Language.Variable`
 # 3. Have a `Language.Quote`, right now it's using `Language.String`
-# 4. Differentiate creating macro's and using macro's (the colors)
+# 4. Differentiate creating macro's and using macro's
 # 5. Have another keyword for `return`?
 # These are just to get a 1:1 match, but it's close enough.
 
@@ -19,8 +19,8 @@ UI.Panels.Scrollbar Bar (drag): 47476ccc
 
 ## Menu
 UI.Menu: 16161D
-UI.Menu (highlighted): 363646
-UI.Menu (selected): 363646
+UI.Menu (highlighted): 2a2a37
+UI.Menu (selected): 2a2a37
 
 ## Editor
 Editor.Background: 1f1f28
