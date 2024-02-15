@@ -1,7 +1,7 @@
 '''
 RemedyBG debugger integration for 10x (10xeditor.com) 
 RemedyBG: https://remedybg.handmade.network/ (should be above 0.3.8)
-Version: 0.11.9
+Version: 0.11.10
 Original Script author: septag@discord / septag@pm.me
 
 To get started go to Settings.10x_settings, and enable the hook, by adding this line:
@@ -49,6 +49,9 @@ RemedyBG sessions:
     and it will load that next time instead of starting a new session
 
 History:
+  0.11.10
+    - Fix for the stepper arrow. Now it shows where your program is actually at. Won't show the arrow for callstack walks and other things
+
   0.11.9
     - Now StepIn/StepOut starts debugging and steps into the program with the new RemedyBG update (0.3.9.8)
     - Minor improvement to OpenDebugger command
@@ -917,7 +920,7 @@ class RDBG_Session:
                         reason:RDBG_SourceLocChangedReason = int.from_bytes(event_buffer.read(4), 'little')
 
                         if reason != RDBG_SourceLocChangedReason.DRIVER:
-                            Editor.SetDebuggerStepLine(filename, line-1) # convert to index-based
+                            filename_win = filename
                             filename = filename.replace('\\', '/')
                             if reason == RDBG_SourceLocChangedReason.BREAKPOINT_HIT or \
                                reason == RDBG_SourceLocChangedReason.EXCEPTION_HIT or \
@@ -926,6 +929,8 @@ class RDBG_Session:
                                reason == RDBG_SourceLocChangedReason.STEP_OUT or \
                                reason == RDBG_SourceLocChangedReason.NON_USER_BREAKPOINT or \
                                reason == RDBG_SourceLocChangedReason.DEBUG_BREAK:
+                                
+                                Editor.SetDebuggerStepLine(filename_win, line-1) # convert to index-based
                                 
                                 if reason != RDBG_SourceLocChangedReason.EXCEPTION_HIT: Editor.SetStatusBarColour((202, 131, 0))
                                 else: Editor.SetStatusBarColour((145, 18, 18))
@@ -940,6 +945,10 @@ class RDBG_Session:
                                      reason != RDBG_SourceLocChangedReason.STEP_OUT):
                                     Editor.SetForegroundWindow()
                                     self.send_command(RDBG_Command.BRING_DEBUGGER_TO_FOREGROUND)
+                            elif filename:
+                                Editor.OpenFile(filename)
+                                Editor.SetCursorPos((0, line-1)) # convert to index-based
+
                     elif event_type == RDBG_EventType.BREAKPOINT_MODIFIED:
                         # used for enabling/disabling breakpoints, we don't have that now
                         pass
