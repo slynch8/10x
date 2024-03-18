@@ -2,6 +2,8 @@
 # From https://gitlab.com/bogez57/10x_editor/-/blob/main/PythonScripts/Utils.py
 # (expired link)
 
+import N10X
+
 def SortLines():
 
     N10X.Editor.PushUndoGroup()
