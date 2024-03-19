@@ -4,7 +4,7 @@
 
 import N10X
 
-def SortLines():
+def SortLines(CaseInsensitive=True):
 
     N10X.Editor.PushUndoGroup()
 
@@ -14,14 +14,18 @@ def SortLines():
     for i in range(line_count):
         lines.append(N10X.Editor.GetLine(i))
 
-    lines.sort()
+    if CaseInsensitive == True:
+        lines.sort(key=str.lower)
+    else:
+        lines.sort()
+
 
     for i in range(line_count):
         N10X.Editor.SetLine(i, lines[i])
 
     N10X.Editor.PopUndoGroup()
 
-def SortSelectedLines():
+def SortSelectedLines(CaseInsensitive=True):
 
     N10X.Editor.PushUndoGroup()
 
@@ -45,7 +49,10 @@ def SortSelectedLines():
     for i in range(line_count):
         lines.append(N10X.Editor.GetLine(i + start_pos[1]))
 
-    lines.sort()
+    if CaseInsensitive == True:
+        lines.sort(key=str.lower)
+    else:
+        lines.sort()
 
     for i in range(line_count):
         N10X.Editor.SetLine(i + start_pos[1], lines[i])
