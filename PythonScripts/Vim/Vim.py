@@ -2457,6 +2457,15 @@ def HandleInsertModeKey(key, shift, control, alt):
         MoveCursorPos(x_delta=1, max_offset=0)
         return True
     
+    # disable keys that shouldn't do anything in insert mode
+    if (key == "A" and control) or \
+       (key == "X" and control) or \
+       (key == "V" and control):
+        return True
+
+    if key == "V" and control:
+        return True
+
     if not g_PerformingDot:
         RecordKey(g_InsertBuffer, key, shift, control, alt)
     return False
