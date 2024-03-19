@@ -2352,6 +2352,18 @@ def HandleCommandModeKey(key, shift, control, alt):
     elif key == "Tab":
         N10X.Editor.ExecuteCommand("NextPanelTab")
    
+    elif key == "A" and control:
+        pass # todo
+   
+    elif key == "V" and control:
+        pass # todo
+   
+    elif key == "Z" and control:
+        pass
+
+    elif key == "X" and control:
+        pass
+
     elif key == "W" and control:
         g_PaneSwap = True
 
@@ -2457,7 +2469,7 @@ def HandleInsertModeKey(key, shift, control, alt):
         MoveCursorPos(x_delta=1, max_offset=0)
         return True
     
-    # disable keys that shouldn't do anything in insert mode
+    # disable keys that aren't implemented yet or shouldn't do anything
     if (key == "A" and control) or \
        (key == "X" and control) or \
        (key == "V" and control):
