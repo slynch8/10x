@@ -2359,7 +2359,7 @@ def HandleCommandModeKey(key, shift, control, alt):
         pass # todo
    
     elif key == "Z" and control:
-        pass
+        N10X.Editor.ExecuteCommand("Undo")
 
     elif key == "X" and control:
         pass
