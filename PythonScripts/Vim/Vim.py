@@ -2361,7 +2361,7 @@ def HandleCommandModeKey(key, shift, control, alt):
     elif key == "Z" and control:
         N10X.Editor.ExecuteCommand("Undo")
 
-    elif key == "X" and control:
+    elif key == "X" and control and not shift:
         pass
 
     elif key == "W" and control:
@@ -2471,7 +2471,7 @@ def HandleInsertModeKey(key, shift, control, alt):
     
     # disable keys that aren't implemented yet or shouldn't do anything
     if (key == "A" and control) or \
-       (key == "X" and control) or \
+       (key == "X" and control and not shift) or \
        (key == "Y" and control) or \
        (key == "V" and control):
         return True
