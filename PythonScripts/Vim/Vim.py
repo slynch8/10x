@@ -2475,9 +2475,6 @@ def HandleInsertModeKey(key, shift, control, alt):
        (key == "V" and control):
         return True
 
-    if key == "V" and control:
-        return True
-
     if not g_PerformingDot:
         RecordKey(g_InsertBuffer, key, shift, control, alt)
     return False
