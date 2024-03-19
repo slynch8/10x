@@ -2472,6 +2472,7 @@ def HandleInsertModeKey(key, shift, control, alt):
     # disable keys that aren't implemented yet or shouldn't do anything
     if (key == "A" and control) or \
        (key == "X" and control) or \
+       (key == "Y" and control) or \
        (key == "V" and control):
         return True
 
