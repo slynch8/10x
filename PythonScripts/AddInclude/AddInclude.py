@@ -108,3 +108,4 @@ def AddInclude():
         N10X.Editor.InsertText(f"\n")
 
     N10X.Editor.SetCursorPos((x, y + 1))
+    N10X.Editor.PopUndoGroup()
