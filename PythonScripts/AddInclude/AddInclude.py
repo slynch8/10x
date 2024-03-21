@@ -17,6 +17,7 @@ allowedSymbolTypes = [
 ]
 
 def AddInclude():
+    x, y = N10X.Editor.GetCursorPos()
     symbol = N10X.Editor.GetCurrentSymbolType()
 
     symbolTypeFound = False
@@ -44,15 +45,12 @@ def AddInclude():
         return
 
     # grab the filepath for the current symbol
-    N10X.Editor.ExecuteCommand("GotoSymbolDefinition");
-    path = N10X.Editor.GetCurrentFilename();
+    path = N10X.Editor.GetSymbolDefinitionFilename(N10X.Editor.GetCursorPos())
 
     # dont bother including if the symbol
     # is defined in the current file
     if path == currentPath:
         return
-
-    N10X.Editor.ExecuteCommand("PrevLocation");
 
     # trim the path if possible
     #
@@ -60,7 +58,11 @@ def AddInclude():
     # use the shortest path available
     commonpath = os.path.commonpath((path, currentPath))
     relpath = os.path.relpath(path, commonpath)
-    output = f"#include \"{relpath}\""
+
+    # windows backslash separators are undefined behavior
+    relpathStandard = relpath.replace(os.sep, '/')
+
+    output = f"#include \"{relpathStandard}\""
 
     otherDir, otherFile = os.path.split(path)
     
@@ -82,11 +84,28 @@ def AddInclude():
             N10X.Editor.SetCursorPos((len(line)-2,i))
             N10X.Editor.PushUndoGroup()
             N10X.Editor.InsertText(f"\n{output}")
+            N10X.Editor.SetCursorPos((x, y+1))
             N10X.Editor.PopUndoGroup()
             return
+        N10X.Editor.SetCursorPos((x, y+1))
     
-    # in the odd case that there arn't already includes in the file
-    N10X.Editor.SetCursorPos((0,0))
     N10X.Editor.PushUndoGroup()
-    N10X.Editor.InsertText(f"\n{output}")
+    # in the odd case that there aren't already includes in the file
+    # find first uncommented line
+    topY = 0
+
+    line = N10X.Editor.GetLine(topY)
+    while re.search(r"//", line):
+        topY = topY + 1
+        line = N10X.Editor.GetLine(topY)
+
+    N10X.Editor.SetCursorPos((0,topY))
+    # if there are top-level comments, add a newline
+    if topY > 0:
+        N10X.Editor.InsertText(f"\n")
+    N10X.Editor.InsertText(f"{output}\n")
+    if not line.isspace():
+        N10X.Editor.InsertText(f"\n")
+
+    N10X.Editor.SetCursorPos((x, y + 1))
     N10X.Editor.PopUndoGroup()
