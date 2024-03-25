@@ -49,6 +49,9 @@ RemedyBG sessions:
     and it will load that next time instead of starting a new session
 
 History:
+  0.11.11
+    - Minor bug fixed when opening a workspace for json sessions for the first time and start debugging
+
   0.11.10
     - Fix for the stepper arrow. Now it shows where your program is actually at. Won't show the arrow for callstack walks and other things
 
@@ -604,9 +607,10 @@ class RDBG_Session:
 
     def save_session_ref(self):
         workspace_path:str = Editor.GetAppDataWorkspacePath()
-        session_list_file = os.path.join(workspace_path, 'rdbg_sessions.json')
-        with open(session_list_file, 'w') as f:
-            json.dump(self.session_refs, f, indent = 2)
+        if os.path.isdir(workspace_path):
+            session_list_file = os.path.join(workspace_path, 'rdbg_sessions.json')
+            with open(session_list_file, 'w') as f:
+                json.dump(self.session_refs, f, indent = 2)
 
     def load_session_ref(self)->str:
         try:
