@@ -2939,6 +2939,11 @@ def HandleCommandPanelCommand(command):
         return True
 
 #------------------------------------------------------------------------
+def OnFileLosingFocus():
+    if g_Mode != Mode.SUSPENDED:
+        EnterCommandMode()
+
+#------------------------------------------------------------------------
 def EnableVim():
     global g_VimEnabled
     global g_VimOverrideKeybindings
@@ -2955,6 +2960,7 @@ def EnableVim():
             print("[vim] Enabling Vim")
             N10X.Editor.AddOnInterceptCharKeyFunction(OnInterceptCharKey)
             N10X.Editor.AddOnInterceptKeyFunction(OnInterceptKey)
+            N10X.Editor.AddOnFileLosingFocusFunction(OnFileLosingFocus)
             N10X.Editor.OverrideSetting("ReverseFindSelection","true")
             N10X.Editor.PushUndoGroup() # EnterCommandMode will do a PopUndoGroup because we were not in visual mode, so must push here
             EnterCommandMode()
@@ -2965,6 +2971,7 @@ def EnableVim():
             N10X.Editor.ResetCursorMode()
             N10X.Editor.RemoveOnInterceptCharKeyFunction(OnInterceptCharKey)
             N10X.Editor.RemoveOnInterceptKeyFunction(OnInterceptKey)
+            N10X.Editor.RemoveOnFileLosingFocusFunction(OnFileLosingFocus)
             N10X.Editor.RemoveSettingOverride("ReverseFindSelection")
 
     g_SneakEnabled = N10X.Editor.GetSetting("VimSneakEnabled") == "true"
