@@ -2346,10 +2346,10 @@ def HandleCommandModeKey(key, shift, control, alt):
             N10X.Editor.ClearSelection()
         SetCursorPos(x=x, y=y)
 
-    elif key == "Tab" and shift:
+    elif key == "Tab" and shift and not control:
         N10X.Editor.ExecuteCommand("PrevPanelTab")
 
-    elif key == "Tab":
+    elif key == "Tab" and not control:
         N10X.Editor.ExecuteCommand("NextPanelTab")
    
     elif key == "A" and control:
