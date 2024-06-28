@@ -351,10 +351,11 @@ def EnterInsertMode():
     global g_PerformingDot
     global g_InsertBuffer
 
-    if g_Mode != Mode.INSERT:
-        g_Mode = Mode.INSERT
-        N10X.Editor.ResetCursorBlink()
-        UpdateCursorMode()
+    assert g_Mode != Mode.INSERT
+
+    g_Mode = Mode.INSERT
+    N10X.Editor.ResetCursorBlink()
+    UpdateCursorMode()
 
     N10X.Editor.PushUndoGroup()
     if g_PerformingDot:
