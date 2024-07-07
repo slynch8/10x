@@ -50,7 +50,7 @@ RemedyBG sessions:
 
 History:
   0.12.0
-    - Added 10x CommandLineArgSelector support with immediate changes to RemedyBG session.
+    - Added 10x CommandLineArgSelector support with immediate changes to RemedyBG session. Needs RemedyBG v0.4.0.4 and higher.
     
   0.11.11
     - Minor bug fixed when opening a workspace for json sessions for the first time and start debugging
