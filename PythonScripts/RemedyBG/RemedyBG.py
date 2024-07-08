@@ -16,7 +16,7 @@ RDBG_Options:
     - RemedyBG.Hook: (default=False) Hook RemedyBg into default Start/Stop/Restart debugging commands instead of the msvc debugger integration
     - RemedyBG.Path: Path to remedybg.exe. If not set, the script will assume remedybg.exe is in PATH or current dir
     - RemedyBG.OutputDebugText: (default=True) receives and output debug text to 10x output
-    - RemedyBG.WorkDir: Path that remedy will use as a working directory
+    - RemedyBG.WorkDir: Path that remedy will use as a working directory, if not specified it will use the 'Run Working Directory' of the workspace settings.
     - RemedyBG.KeepSessionOnActiveChange: (default=False) when active project or config is changed, it leaves the previously opened RemedyBG session
                                            This is useful when you want to debug multiple binaries within a project like client/server apps
     - RemedyBG.StartProcessExtraCommand: Extra 10x command that will be executed after process is started in RemedyBG. Several commands can be separated by semicolon.
@@ -754,7 +754,7 @@ class RDBG_Session:
                     return False
 
                 work_dir = self.get_work_dir()
-                args = gOptions.executable + ' --servername ' + self.name + ' "' + Editor.GetWorkspaceExePath() + '"' + (' ' if debug_args!='' else '') + debug_args
+                args = gOptions.executable + ' --servername ' + self.name + ' "' + debug_cmd + '"' + (' ' if debug_args!='' else '') + debug_args
 
             if work_dir != '' and not os.path.isdir(work_dir):
                 Editor.ShowMessageBox(RDBG_TITLE, 'Debugger working directory is invalid: ' + work_dir)
@@ -1236,11 +1236,11 @@ def _RDBG_DebugCommandLineChanged():
             if config['id'] == config_id:
                 config['command'] = Editor.GetDebugCommand()
                 config['command_args'] = Editor.GetDebugCommandArgs()
-                config['working_dir'] = Editor.GetDebugCommandCwd()
+                config['working_dir'] = gSession.get_work_dir()
                 gSession.send_command(RDBG_Command.MODIFY_SESSION_CONFIG, 
                                       config_id=config_id,
                                       command = config['command'],
-                                      command_args = Editor.GetDebugCommandArgs(),
+                                      command_args = config['command_args'],
                                       working_dir = config['working_dir'],
                                       env_vars = config['env_vars'],
                                       inherit_environment_vars_from_parent = config['inherit_environment_vars_from_parent'],
