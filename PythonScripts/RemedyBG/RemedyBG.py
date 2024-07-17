@@ -1,7 +1,7 @@
 '''
 RemedyBG debugger integration for 10x (10xeditor.com) 
 RemedyBG: https://remedybg.handmade.network/ (should be above 0.3.8)
-Version: 0.11.10
+Version: 0.12.0
 Original Script author: septag@discord / septag@pm.me
 
 To get started go to Settings.10x_settings, and enable the hook, by adding this line:
@@ -16,7 +16,7 @@ RDBG_Options:
     - RemedyBG.Hook: (default=False) Hook RemedyBg into default Start/Stop/Restart debugging commands instead of the msvc debugger integration
     - RemedyBG.Path: Path to remedybg.exe. If not set, the script will assume remedybg.exe is in PATH or current dir
     - RemedyBG.OutputDebugText: (default=True) receives and output debug text to 10x output
-    - RemedyBG.WorkDir: Path that remedy will use as a working directory
+    - RemedyBG.WorkDir: Path that remedy will use as a working directory, if not specified it will use the 'Run Working Directory' of the workspace settings.
     - RemedyBG.KeepSessionOnActiveChange: (default=False) when active project or config is changed, it leaves the previously opened RemedyBG session
                                            This is useful when you want to debug multiple binaries within a project like client/server apps
     - RemedyBG.StartProcessExtraCommand: Extra 10x command that will be executed after process is started in RemedyBG. Several commands can be separated by semicolon.
@@ -49,6 +49,9 @@ RemedyBG sessions:
     and it will load that next time instead of starting a new session
 
 History:
+  0.12.0
+    - Added 10x CommandLineArgSelector support with immediate changes to RemedyBG session. Needs RemedyBG v0.4.0.4 and higher.
+    
   0.11.11
     - Minor bug fixed when opening a workspace for json sessions for the first time and start debugging
 
@@ -281,6 +284,9 @@ class RDBG_Command(IntEnum):
     OPEN_SESSION = 103
     SAVE_SESSION = 104
     SAVE_AS_SESSION = 105
+    GET_SESSION_CONFIGS = 106
+    GET_ACTIVE_SESSION_CONFIG = 111
+    MODIFY_SESSION_CONFIG = 112
     GOTO_FILE_AT_LINE = 200
     CLOSE_FILE = 201
     CLOSE_ALL_FILES = 202
@@ -509,6 +515,24 @@ class RDBG_Session:
             pass
         elif cmd == RDBG_Command.GET_BREAKPOINTS:
             pass
+        elif cmd == RDBG_Command.GET_SESSION_CONFIGS:
+            pass
+        elif cmd == RDBG_Command.GET_ACTIVE_SESSION_CONFIG:
+            pass
+        elif cmd == RDBG_Command.MODIFY_SESSION_CONFIG:
+            cmd_buffer.write(ctypes.c_uint32(cmd_args['config_id']))
+            cmd_buffer.write(ctypes.c_uint16(len(cmd_args['command'])))
+            cmd_buffer.write(bytes(cmd_args['command'], 'utf-8'))
+            cmd_buffer.write(ctypes.c_uint16(len(cmd_args['command_args'])))
+            cmd_buffer.write(bytes(cmd_args['command_args'], 'utf-8'))
+            cmd_buffer.write(ctypes.c_uint16(len(cmd_args['working_dir'])))
+            cmd_buffer.write(bytes(cmd_args['working_dir'], 'utf-8'))
+            cmd_buffer.write(ctypes.c_uint16(len(cmd_args['env_vars'])))
+            cmd_buffer.write(bytes(cmd_args['env_vars'], 'utf-8'))
+            cmd_buffer.write(ctypes.c_uint8(cmd_args['inherit_environment_vars_from_parent']))
+            cmd_buffer.write(ctypes.c_uint8(cmd_args['break_at_nominal_entry_point']))
+            cmd_buffer.write(ctypes.c_uint16(len(cmd_args['display_name'])))
+            cmd_buffer.write(bytes(cmd_args['display_name'], 'utf-8'))
         else:
             assert 0
             return 0		# not implemented
@@ -576,6 +600,29 @@ class RDBG_Session:
                             num_bytes:int = int.from_bytes(out_buffer.read(1), 'little')
                             access_kind:int = int.from_bytes(out_buffer.read(1), 'little')                    
                 return bps  
+            elif cmd == RDBG_Command.GET_SESSION_CONFIGS:
+                num_configs:int = int.from_bytes(out_buffer.read(2), 'little')
+                configs = []
+                for session_index in range(0, num_configs):
+                    uid:int = int.from_bytes(out_buffer.read(4), 'little')
+                    command:str = out_buffer.read(int.from_bytes(out_buffer.read(2), 'little')).decode('utf-8')
+                    command_args:str = out_buffer.read(int.from_bytes(out_buffer.read(2), 'little')).decode('utf-8')
+                    working_dir:str = out_buffer.read(int.from_bytes(out_buffer.read(2), 'little')).decode('utf-8')
+                    env_vars:str = out_buffer.read(int.from_bytes(out_buffer.read(2), 'little')).decode('utf-8')
+                    inherit_env_vars_from_parent:bool = int.from_bytes(out_buffer.read(1), 'little')
+                    break_at_nominal_entry_point:bool = int.from_bytes(out_buffer.read(1), 'little')
+                    name:str = out_buffer.read(int.from_bytes(out_buffer.read(2), 'little')).decode('utf-8')
+                    configs.append({'id': uid,
+                                    'command': command,
+                                    'command_args': command_args,
+                                    'working_dir': working_dir,
+                                    'env_vars': env_vars,
+                                    'inherit_environment_vars_from_parent': inherit_env_vars_from_parent,
+                                    'break_at_nominal_entry_point': break_at_nominal_entry_point,
+                                    'display_name': name})
+                return configs
+            elif cmd == RDBG_Command.GET_ACTIVE_SESSION_CONFIG:
+                return int.from_bytes(out_buffer.read(4), 'little')
         else:
             # TODO: we have to ignore this error for now. because when RemedyBG is not currently focused, we will get an error
             if cmd == RDBG_Command.BRING_DEBUGGER_TO_FOREGROUND:
@@ -707,7 +754,7 @@ class RDBG_Session:
                     return False
 
                 work_dir = self.get_work_dir()
-                args = gOptions.executable + ' --servername ' + self.name + ' "' + Editor.GetWorkspaceExePath() + '"' + (' ' if debug_args!='' else '') + debug_args
+                args = gOptions.executable + ' --servername ' + self.name + ' "' + debug_cmd + '"' + (' ' if debug_args!='' else '') + debug_args
 
             if work_dir != '' and not os.path.isdir(work_dir):
                 Editor.ShowMessageBox(RDBG_TITLE, 'Debugger working directory is invalid: ' + work_dir)
@@ -1181,6 +1228,27 @@ def _RDBG_StepOutHit():
     if gOptions.hook_calls:
         RDBG_StepOut()
 
+def _RDBG_DebugCommandLineChanged():
+    if gSession is not None:
+        config_id:int = gSession.send_command(RDBG_Command.GET_ACTIVE_SESSION_CONFIG)
+        configs = gSession.send_command(RDBG_Command.GET_SESSION_CONFIGS)
+        for config in configs:
+            if config['id'] == config_id:
+                config['command'] = Editor.GetDebugCommand()
+                config['command_args'] = Editor.GetDebugCommandArgs()
+                config['working_dir'] = gSession.get_work_dir()
+                gSession.send_command(RDBG_Command.MODIFY_SESSION_CONFIG, 
+                                      config_id=config_id,
+                                      command = config['command'],
+                                      command_args = config['command_args'],
+                                      working_dir = config['working_dir'],
+                                      env_vars = config['env_vars'],
+                                      inherit_environment_vars_from_parent = config['inherit_environment_vars_from_parent'],
+                                      break_at_nominal_entry_point = config['break_at_nominal_entry_point'],
+                                      display_name = config['display_name'])
+                break
+    
+
 def InitialiseRemedy():
     global gOptions
     gOptions = RDBG_Options()
@@ -1202,6 +1270,8 @@ def InitialiseRemedy():
     Editor.AddDebugStepOverFunction(_RDBG_StepOverHit)
     Editor.AddDebugStepIntoFunction(_RDBG_StepIntoHit)
     Editor.AddDebugStepOutFunction(_RDBG_StepOutHit)
+
+    Editor.AddDebugCommandLineChangedFunction(_RDBG_DebugCommandLineChanged)
 
 gSession:RDBG_Session = None
 gOptions:RDBG_Options = None
