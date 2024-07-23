@@ -39,7 +39,7 @@ def ClangFormatSelection():
                                         '--lines=' + str(start[1]) + ':' + str(end[1]),
                                         '-i',
                                         N10X.Editor.GetCurrentFilename()],
-                            shell=False, stdin=None, stdout=None, stderr=None, 
+                            shell=True, stdin=None, stdout=None, stderr=None, 
                             close_fds=True)
             process.communicate()
         except FileNotFoundError:
@@ -56,7 +56,7 @@ def ClangFormatFile():
                                     '-style=' + settings.style_name,
                                     '-i',
                                     N10X.Editor.GetCurrentFilename()],
-                            shell=False, stdin=None, stdout=None, stderr=None, 
+                            shell=True, stdin=None, stdout=None, stderr=None, 
                             close_fds=True)
         process.communicate()
     except FileNotFoundError:
