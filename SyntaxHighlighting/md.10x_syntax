@@ -1,0 +1,46 @@
+# Format: <SettingName>: <Settingvalue>
+# Setting name must appear at start of line and there must be whitespace after the colon.
+# Multiple values can be comma separated or on subsequent lines.
+#
+# Valid settings for colour rules:
+# REGEX()   A regular expression. Colours entire match or first group.
+# WORD()	Matches a word (case sensitive)
+# WORDI()   Matches a word (case insensitive)
+# TEXT()	Match any text in the line (case sensitive)
+# TEXTI()	Match any text in the line (case insensitive)
+
+#----------------------------------------------
+# settings
+
+Extensions: .md
+
+#----------------------------------------------
+# colour rules
+
+Language.Heading:
+REGEX(^#.*)
+REGEX(^--+)
+REGEX(^=+)
+
+Language.Bold:
+REGEX(\*\*.*\*\*)
+REGEX(__.*__)
+
+Language.Italic:
+REGEX(\*.*\*)
+
+Language.Blockquote:
+REGEX(^>+.*)
+
+Language.ListItem:
+REGEX([0-9]+\.\s.*)
+REGEX(^\s*[-*]\s.*)
+
+Language.Link:
+REGEX(\[.*?\]\(.*?\))
+
+Language.CodeBlock:
+REGEX(`.*?`)
+
+Language.Operator:
+TEXT(-)
