@@ -7,17 +7,24 @@ def IsSkipChar(c):
     return c == " " or c == "\t"
 
 #------------------------------------------------------------------------
-# Skip the largest possible number of spaces or tabs.
-#
-# @Cleanup: Merge both cases
 def OnInterceptKey(key, shift, control, alt):
     if key == "Left":
         (x, y) = N10X.Editor.GetCursorPos()
 
-        line = N10X.Editor.GetLine(y).rstrip()
+        line = N10X.Editor.GetLine(y)
         count = len(line)
 
-        if count > 0 and x > count:
+        if count == 2 and x != 0:
+            # We are at the end of the current line. The next line is empty
+            # count is two (\r\n) and the cursor still returns the end
+            # position of the last line position and visually the cursor is
+            # in the new line aligned with indentation by design. If you now
+            # click on the left, it should jump from the visual position to
+            # the beginning of the empty line.
+            #
+            # VisualEmptyLine:
+            N10X.Editor.SetCursorPos((0, y+1))
+        elif count > 0 and x > count:
             N10X.Editor.SetCursorPos((0, y))
         elif count > 0 and x < count and x-1 > -1 and IsSkipChar(line[x-1]):
             move = True
@@ -38,10 +45,13 @@ def OnInterceptKey(key, shift, control, alt):
     elif key == "Right":
         (x, y) = N10X.Editor.GetCursorPos()
 
-        line = N10X.Editor.GetLine(y).rstrip()
+        line = N10X.Editor.GetLine(y)
         count = len(line)
 
-        if count > 0 and x < count and x+1 < count and IsSkipChar(line[x+1]):
+        if count == 2 and x != 0:
+            # VisualEmptyLine:
+            N10X.Editor.SetCursorPos((0, y+1))
+        elif count > 0 and x < count and x+1 < count and IsSkipChar(line[x+1]):
             move = True
             a = 0
 
@@ -59,4 +69,6 @@ def OnInterceptKey(key, shift, control, alt):
 
 
 #------------------------------------------------------------------------
+# uncomment this line to skip the largest possible number of spaces or tabs
+# while moving
 N10X.Editor.AddOnInterceptKeyFunction(OnInterceptKey)
