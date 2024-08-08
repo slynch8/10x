@@ -2397,7 +2397,7 @@ def HandleCommandModeKey(key, shift, control, alt):
     elif key == "B" and control:
         N10X.Editor.SendKey("PageUp")
 
-    elif key == "F" and control:
+    elif key == "F" and control and not shift:
         N10X.Editor.SendKey("PageDown")
 
     elif key == "Y" and control:
