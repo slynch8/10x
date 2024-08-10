@@ -2323,7 +2323,7 @@ def HandleCommandModeKey(key, shift, control, alt):
 
     pass_through = False
 
-    if key == "Escape":
+    if key == "Escape" or key == "C" and control:
         EnterCommandMode()
 
     elif g_PaneSwap:
