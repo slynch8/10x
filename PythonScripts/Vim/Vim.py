@@ -2475,7 +2475,7 @@ def HandleInsertModeKey(key: Key):
     global g_InsertBuffer
     global g_PerformingDot
 
-    if key == Key("Escape") and not N10X.Editor.IsShowingAutocomplete():
+    if key == Key("Escape"):
         EnterCommandMode()
         return False
 
