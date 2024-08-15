@@ -2815,7 +2815,7 @@ def UpdateCursorMode():
 def RecordKey(buffer, key: Key):
     r = RecordedKey()
     r.type = RecordedKey.KEY
-    r.key = key.key
+    r.key = key
     buffer.append(r)
 
 #------------------------------------------------------------------------
