@@ -410,7 +410,9 @@ def EnterCommandMode():
     global g_SingleReplace
     global g_MultiReplace
     global g_PaneSwap
+    global g_Error
 
+    g_Error = ""
     g_PaneSwap = False
     ClearCommandStr(False)
 
@@ -431,9 +433,10 @@ def EnterCommandMode():
 
 #------------------------------------------------------------------------
 def EnterCommandlineMode(char):
-    global g_Mode, g_CommandlineText, g_CommandlineTextCursorPos
+    global g_Mode, g_Error, g_CommandlineText, g_CommandlineTextCursorPos
 
     g_Mode = Mode.COMMANDLINE
+    g_Error = ""
     g_CommandlineText = char 
     g_CommandlineTextCursorPos = 1
     UpdateCursorMode()
@@ -442,6 +445,7 @@ def EnterCommandlineMode(char):
 def EnterVisualMode(mode):
     global g_Mode
     global g_VisualModeStartPos
+
     if g_Mode != mode:
         g_Mode = mode
         g_VisualModeStartPos = N10X.Editor.GetCursorPos()
@@ -451,7 +455,6 @@ def EnterVisualMode(mode):
 #------------------------------------------------------------------------
 def EnterSuspendedMode():
     global g_Mode
-    g_Mode = Mode.SUSPENDED
     UpdateCursorMode()
 
 #------------------------------------------------------------------------
@@ -2523,10 +2526,11 @@ def HandleCommandlineModeKey(key: Key):
     elif key == Key("Enter") and is_command:
         # TODO: Strip spaces between ':' and next alphanumeric character from g_CommandlineText
         valid_command = SubmitCommandline(g_CommandlineText)
+        EnterCommandMode()
         if not valid_command:
+            # Set g_Error after EnterCommandMode as this clears it
             g_Error = "Error: Not an editor command: " + g_CommandlineText[1:]
         g_CommandlineText = ""
-        EnterCommandMode()
 
     # Delete operations
 
