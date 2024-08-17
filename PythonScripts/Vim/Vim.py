@@ -14,13 +14,19 @@ import time
 g_VimEnabled = False
 g_VimOverrideKeybindings = True
 
+# Commandline mode uses the status panel instead of 10x's command panel for commands. 
+# E.g. :w :q and searching with / 
+# Enable in settings with VimEnableCommandlineMode.  
+g_EnableCommandlineMode = False
+
 #------------------------------------------------------------------------
 class Mode:
     INSERT      = 0
     COMMAND     = 1
-    VISUAL      = 2
-    VISUAL_LINE = 3
-    SUSPENDED   = 4 # Vim is enabled but all vim bindings are disabled except for vim command panel commands
+    COMMANDLINE = 2
+    VISUAL      = 3
+    VISUAL_LINE = 4
+    SUSPENDED   = 5 # Vim is enabled but all vim bindings are disabled except for vim command panel commands
 
 #------------------------------------------------------------------------
 g_Mode = Mode.INSERT
@@ -34,6 +40,13 @@ g_HandingKey = False
 
 # the current command for command mode
 g_Command = ""
+
+# the current command for commandline mode
+g_CommandlineText = ""
+g_CommandlineCursorChar = '_'
+# if using to index directly into g_CommandLineText be sure to clamp to len(g_CommandlineText)-1
+# slicing is fine as this handled by python, i.e. it will return "" if sliced out of bounds.
+g_CommandlineTextCursorPos = 0
 
 # flag to enable/disable whether we handle key intercepts
 g_HandleKeyIntercepts = True
@@ -67,6 +80,9 @@ g_SneakEnabled = False
 g_HorizontalTarget = 0
 g_PrevCursorY = 0
 g_PrevCursorX = 0
+
+# Error text for status bar
+g_Error = ""
 
 class Key:
     """
@@ -406,11 +422,20 @@ def EnterCommandMode():
         was_visual = InVisualMode()
         N10X.Editor.ResetCursorBlink()
 
-        if not was_visual:
+        if not was_visual and not g_Mode == Mode.COMMANDLINE:
             N10X.Editor.PopUndoGroup()
             MoveCursorPos(x_delta=-1, override_horizontal_target=True)
 
     g_Mode = Mode.COMMAND
+    UpdateCursorMode()
+
+#------------------------------------------------------------------------
+def EnterCommandlineMode(char):
+    global g_Mode, g_CommandlineText, g_CommandlineTextCursorPos
+
+    g_Mode = Mode.COMMANDLINE
+    g_CommandlineText = char 
+    g_CommandlineTextCursorPos = 1
     UpdateCursorMode()
 
 #------------------------------------------------------------------------
@@ -1717,6 +1742,8 @@ def HandleCommandModeChar(char):
         g_LastJumpPoint = N10X.Editor.GetCursorPos()
         g_ReverseSearch = False
         N10X.Editor.ExecuteCommand("FindInFile")
+        # TODO - Enter commandline mode when we get the 10x command to SetFindText
+        #EnterCommandlineMode(c)
 
     elif c == "?":
         print("[vim] "+c+" (reverse search) unimplemented- regular searching")
@@ -2281,11 +2308,14 @@ def HandleCommandModeChar(char):
         else:
             print("[vim] no named buffer \""+m.group(1)+"\" recorded")
 
-    # Command Panel
-
+    # Command line Panel
     elif c == ":":
-        N10X.Editor.ExecuteCommand("ShowCommandPanel")
-        N10X.Editor.SetCommandPanelText(":")
+        if not g_EnableCommandlineMode:
+            N10X.Editor.ExecuteCommand("ShowCommandPanel")
+            N10X.Editor.SetCommandPanelText(":")
+        else:
+            EnterCommandlineMode(c)
+
 
     # Visual Mode
 
@@ -2468,6 +2498,140 @@ def HandleCommandModeKey(key: Key):
     UpdateVisualModeSelection()
 
     return not pass_through
+
+#------------------------------------------------------------------------
+def HandleCommandlineModeKey(key: Key):
+    global g_VimOverrideKeybindings
+    global g_HandingKey
+    global g_Command
+    global g_PaneSwap
+    global g_CommandlineText
+    global g_CommandlineTextCursorPos
+    global g_Error
+
+    handled = True
+
+    is_command = g_CommandlineText[0] == ':'
+    is_search  = g_CommandlineText[0] == '/'
+
+    # Exit 
+    if key == Key("Escape") or key == Key("C", control=True):
+        g_CommandlineText = ""
+        EnterCommandMode()
+    
+    # Submit command
+    elif key == Key("Enter") and is_command:
+        # TODO: Strip spaces between ':' and next alphanumeric character from g_CommandlineText
+        valid_command = SubmitCommandline(g_CommandlineText)
+        if not valid_command:
+            g_Error = "Error: Not an editor command: " + g_CommandlineText[1:]
+        g_CommandlineText = ""
+        EnterCommandMode()
+
+    # Delete operations
+
+    elif key == Key("Backspace"):
+        # When there's a character after the starting char ':' and '/' you can't delete it so guard against that here
+        # We can backspace/delete if we only have the starting char or the cursor pos is not after the starting char
+        if len(g_CommandlineText) == 1 or g_CommandlineTextCursorPos > 1:
+            # Move cursor back one
+            prev_cursor_pos = g_CommandlineTextCursorPos
+            g_CommandlineTextCursorPos = max(0, g_CommandlineTextCursorPos - 1)
+            # Delete character between current and prev cursor pos
+            g_CommandlineText = g_CommandlineText[:g_CommandlineTextCursorPos] + g_CommandlineText[prev_cursor_pos:] 
+            if len(g_CommandlineText) == 0:
+                EnterCommandMode()
+
+    elif key == Key("Delete"):
+            next_cursor_pos = min(len(g_CommandlineText), g_CommandlineTextCursorPos + 1)
+            g_CommandlineText = g_CommandlineText[:g_CommandlineTextCursorPos] + g_CommandlineText[next_cursor_pos:] 
+
+    # Navigation
+
+    elif key == Key("Left"):
+        # max with 1 is intentional here as you can't move before the starting char
+        g_CommandlineTextCursorPos = max(1, g_CommandlineTextCursorPos - 1)
+
+    elif key == Key("Right"):
+        g_CommandlineTextCursorPos = min(len(g_CommandlineText), g_CommandlineTextCursorPos + 1)
+        
+    elif key == Key("Home"):
+        g_CommandlineTextCursorPos = 1
+
+    elif key == Key("End"):
+        g_CommandlineTextCursorPos = len(g_CommandlineText) 
+
+
+    else:
+        handled = False
+
+    UpdateCursorMode()
+
+    return handled
+
+#------------------------------------------------------------------------
+def SubmitCommandline(command):
+
+    if command == ":sp":
+        x, y = N10X.Editor.GetCursorPos()
+        N10X.Editor.ExecuteCommand("DuplicatePanel")
+        N10X.Editor.ExecuteCommand("MovePanelDown")
+        SetCursorPos(x,y)
+        return True
+    
+    if command == ":vsp":
+        x, y = N10X.Editor.GetCursorPos()
+        N10X.Editor.ExecuteCommand("DuplicatePanelRight")
+        SetCursorPos(x,y)
+        return True
+
+    if command == ":w" or command == ":W":
+        N10X.Editor.ExecuteCommand("SaveFile")
+        return True
+
+    if command == ":wa":
+        N10X.Editor.ExecuteCommand("SaveAll")
+        return True
+
+    if command == ":wq":
+        N10X.Editor.ExecuteCommand("SaveFile")
+        N10X.Editor.ExecuteCommand("CloseFile")
+        return True
+
+    if command == ":q" or command == ":Q" or command == ":x" or command == ":X":
+        N10X.Editor.ExecuteCommand("CloseFile")
+        return True
+
+    if command == ":q!" or command == ":x!":
+        N10X.Editor.DiscardUnsavedChanges()
+        N10X.Editor.ExecuteCommand("CloseFile")
+        return True
+    
+    split = command.split(":")
+    if len(split) == 2 and split[1].isdecimal(): 
+        SetCursorPos(y=int(split[1]) - 1)
+        return True
+
+
+#------------------------------------------------------------------------
+def HandleCommandlineModeChar(char):
+    global g_Mode
+    global g_ReverseSearch
+    global g_LastJumpPoint
+    global g_CommandlineText
+    global g_CommandlineTextCursorPos
+
+    # Insert char at cursor pos
+    g_CommandlineText = g_CommandlineText[:g_CommandlineTextCursorPos] + char + g_CommandlineText[g_CommandlineTextCursorPos:]
+    g_CommandlineTextCursorPos += 1
+
+    UpdateCursorMode()
+   
+    # searching
+    if g_CommandlineText[0] == '/' and len(g_CommandlineText) > 1:
+        pass #TODO
+
+    return True
 
 
 #------------------------------------------------------------------------
@@ -2804,6 +2968,14 @@ def UpdateCursorMode():
     elif g_Mode == Mode.SUSPENDED:
         N10X.Editor.SetCursorMode("Line")
         N10X.Editor.SetStatusBarText("-- VIM DISABLED --")
+    elif g_Mode == Mode.COMMANDLINE:
+        N10X.Editor.SetCursorMode("Block")
+        # Insert cursor char into commandline text
+        text = g_CommandlineText[:g_CommandlineTextCursorPos] + g_CommandlineCursorChar + g_CommandlineText[g_CommandlineTextCursorPos:]
+        N10X.Editor.SetStatusBarText(text)
+    elif g_Error:
+        N10X.Editor.SetStatusBarText(g_Error)
+        N10X.Editor.SetCursorMode("Block")
     else:
         N10X.Editor.SetCursorMode("Block")
         N10X.Editor.SetStatusBarText("")
@@ -2865,6 +3037,8 @@ def OnInterceptKey(key, shift, control, alt):
                 supress = HandleInsertModeKey(key)
             case Mode.COMMAND:
                 supress = HandleCommandModeKey(key)
+            case Mode.COMMANDLINE:
+                supress = HandleCommandlineModeKey(key)
             case Mode.VISUAL:
                 supress = HandleCommandModeKey(key)
             case Mode.VISUAL_LINE:
@@ -2899,6 +3073,8 @@ def OnInterceptCharKey(c):
                 supress = HandleInsertModeChar(c)
             case Mode.COMMAND:
                 HandleCommandModeChar(c)
+            case Mode.COMMANDLINE:
+                HandleCommandlineModeChar(c)
             case Mode.VISUAL:
                 HandleVisualModeChar(c)
             case Mode.VISUAL_LINE:
@@ -2911,46 +3087,7 @@ def OnInterceptCharKey(c):
 
 #------------------------------------------------------------------------
 def HandleCommandPanelCommand(command):
-
-    if command == ":sp":
-        x, y = N10X.Editor.GetCursorPos()
-        N10X.Editor.ExecuteCommand("DuplicatePanel")
-        N10X.Editor.ExecuteCommand("MovePanelDown")
-        SetCursorPos(x,y)
-        return True
-    
-    if command == ":vsp":
-        x, y = N10X.Editor.GetCursorPos()
-        N10X.Editor.ExecuteCommand("DuplicatePanelRight")
-        SetCursorPos(x,y)
-        return True
-
-    if command == ":w" or command == ":W":
-        N10X.Editor.ExecuteCommand("SaveFile")
-        return True
-
-    if command == ":wa":
-        N10X.Editor.ExecuteCommand("SaveAll")
-        return True
-
-    if command == ":wq":
-        N10X.Editor.ExecuteCommand("SaveFile")
-        N10X.Editor.ExecuteCommand("CloseFile")
-        return True
-
-    if command == ":q" or command == ":Q" or command == ":x" or command == ":X":
-        N10X.Editor.ExecuteCommand("CloseFile")
-        return True
-
-    if command == ":q!" or command == ":x!":
-        N10X.Editor.DiscardUnsavedChanges()
-        N10X.Editor.ExecuteCommand("CloseFile")
-        return True
-    
-    split = command.split(":")
-    if len(split) == 2 and split[1].isdecimal(): 
-        SetCursorPos(y=int(split[1]) - 1)
-        return True
+    return SubmitCommandline(command)
 
 #------------------------------------------------------------------------
 def OnFileLosingFocus():
@@ -2961,11 +3098,15 @@ def OnFileLosingFocus():
 def EnableVim():
     global g_VimEnabled
     global g_VimOverrideKeybindings
+    global g_EnableCommandlineMode
     global g_SneakEnabled
 
     enable_vim = N10X.Editor.GetSetting("Vim") == "true"
     if N10X.Editor.GetSetting("VimOverrideKeybindings") == "false":
         g_VimOverrideKeybindings = False;
+
+    if N10X.Editor.GetSetting("VimEnableCommandlineMode") == "true":
+        g_EnableCommandlineMode = True;
 
     if g_VimEnabled != enable_vim:
         g_VimEnabled = enable_vim
