@@ -2344,6 +2344,9 @@ def HandleCommandModeChar(char):
     elif c == "gd":
         N10X.Editor.ExecuteCommand("GotoSymbolDefinition")
 
+    elif c == "gr":
+        N10X.Editor.ExecuteCommand("FindSymbolReferences")
+
     else:
         print("[vim] Unknown command!")
 
