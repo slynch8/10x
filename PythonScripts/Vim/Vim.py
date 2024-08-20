@@ -2958,29 +2958,37 @@ def HandleSuspendedModeKey(key: Key):
 #------------------------------------------------------------------------
 def UpdateCursorMode():
     if g_Command or g_SingleReplace or g_MultiReplace:
+        N10X.Editor.SetCursorVisible(0, True)
         N10X.Editor.SetCursorMode("HalfBlock")
         N10X.Editor.SetStatusBarText(g_Command)
     elif g_Mode == Mode.INSERT:
+        N10X.Editor.SetCursorVisible(0, True)
         N10X.Editor.SetCursorMode("Line")
         N10X.Editor.SetStatusBarText("-- INSERT --")
     elif g_Mode == Mode.VISUAL:
+        N10X.Editor.SetCursorVisible(0, True)
         N10X.Editor.SetCursorMode("Block")
         N10X.Editor.SetStatusBarText("-- VISUAL --")
     elif g_Mode == Mode.VISUAL_LINE:
+        N10X.Editor.SetCursorVisible(0, True)
         N10X.Editor.SetCursorMode("Block")
         N10X.Editor.SetStatusBarText("-- VISUAL LINE --")
     elif g_Mode == Mode.SUSPENDED:
+        N10X.Editor.SetCursorVisible(0, True)
         N10X.Editor.SetCursorMode("Line")
         N10X.Editor.SetStatusBarText("-- VIM DISABLED --")
     elif g_Mode == Mode.COMMANDLINE:
+        N10X.Editor.SetCursorVisible(0, False)
         N10X.Editor.SetCursorMode("Block")
         # Insert cursor char into commandline text
         text = g_CommandlineText[:g_CommandlineTextCursorPos] + g_CommandlineCursorChar + g_CommandlineText[g_CommandlineTextCursorPos:]
         N10X.Editor.SetStatusBarText(text)
     elif g_Error:
+        N10X.Editor.SetCursorVisible(0, True)
         N10X.Editor.SetStatusBarText(g_Error)
         N10X.Editor.SetCursorMode("Block")
     else:
+        N10X.Editor.SetCursorVisible(0, True)
         N10X.Editor.SetCursorMode("Block")
         N10X.Editor.SetStatusBarText("")
 
