@@ -1431,8 +1431,25 @@ def HandleCommandModeChar(char):
     elif c == "z":
         return
 
+    elif c == "zt":
+        # Apply offset so we don't set the current line as the first visible line but the one just after.
+        # This is so we can smooth scroll up using k after zt because 10x prevents the cursor being
+        # on the first visible line.
+        offset = 1
+        N10X.Editor.SetScrollLine(max(0, N10X.Editor.GetCursorPos()[1] - offset))
+
     elif c == "zz":
         N10X.Editor.CenterViewAtLinePos(N10X.Editor.GetCursorPos()[1])
+
+    elif c == "zb":
+        # Apply offset so we don't set the current line as last visible line but the one just before.
+        # This is so we can smooth scroll down using j after zb because 10x prevents the cursor being
+        # on the last visible line.
+        offset = 1
+        # Subtract 1 because ScrollLine is 0 indexed
+        bottom = N10X.Editor.GetScrollLine() + N10X.Editor.GetVisibleLineCount() - 1 - offset
+        scroll_delta = bottom - N10X.Editor.GetCursorPos()[1]
+        N10X.Editor.SetScrollLine(max(0, N10X.Editor.GetScrollLine() - scroll_delta))
 
     elif c == " ":
         Unhilight()
