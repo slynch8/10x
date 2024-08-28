@@ -31,6 +31,10 @@ class Mode:
 #------------------------------------------------------------------------
 g_Mode = Mode.INSERT
 
+# For implementing keystroke in order to exit command mode
+g_Timer = 0
+g_ExitInsertMode = None
+g_ExitInsertModeCharBuffer = None
 
 # position of the cursor when visual mode was entered
 g_VisualModeStartPos = None
@@ -2688,14 +2692,54 @@ def HandleInsertModeKey(key: Key):
         RecordKey(g_InsertBuffer, key)
     return False
 
+def ExitInsertModeTimerCheck():
+    global g_Timer;
+    global g_ExitInsertModeCharBuffer;
+     
+    if time.time() - g_Timer > 1:
+        HandleInsertModeChar(g_ExitInsertModeCharBuffer)
+        N10X.Editor.RemoveUpdateFunction(ExitInsertModeTimerCheck)
+    
 #------------------------------------------------------------------------
 def HandleInsertModeChar(char):
     global g_SingleReplace
     global g_MultiReplace
     global g_InsertBuffer
+    global g_Timer;
+    global g_ExitInsertModeCharBuffer;
+    global g_ExitInsertMode;
 
     if not g_PerformingDot:
         RecordCharKey(g_InsertBuffer, char)
+
+    # Check if we might exit insert mode based on the ExitVimInsertMode setting in the settings file
+    if g_ExitInsertMode != None:
+        if char == g_ExitInsertMode[0] and g_ExitInsertModeCharBuffer == None and g_Timer == 0:
+            g_Timer = time.time()
+            g_ExitInsertModeCharBuffer = char
+            N10X.Editor.AddUpdateFunction(ExitInsertModeTimerCheck)
+            return True
+        elif g_ExitInsertModeCharBuffer != None and time.time() - g_Timer <= 1:
+            g_ExitInsertModeCharBuffer += char
+            if g_ExitInsertModeCharBuffer == g_ExitInsertMode:
+                g_ExitInsertModeCharBuffer = None
+                g_Timer = 0
+                EnterCommandMode()
+                N10X.Editor.RemoveUpdateFunction(ExitInsertModeTimerCheck)
+            elif len(g_ExitInsertModeCharBuffer) >= len(g_ExitInsertMode):
+                N10X.Editor.InsertText(g_ExitInsertModeCharBuffer)
+                g_ExitInsertModeCharBuffer = None
+                g_Timer = 0
+                N10X.Editor.RemoveUpdateFunction(ExitInsertModeTimerCheck)
+            return True
+        elif time.time() - g_Timer > 1 and g_ExitInsertModeCharBuffer != None:
+            N10X.Editor.InsertText(g_ExitInsertModeCharBuffer)
+            g_Timer = 0
+            g_ExitInsertModeCharBuffer = None
+            return True
+        elif char != g_ExitInsertMode[0]:
+            g_Timer = 0
+            g_ExitInsertModeCharBuffer = None
 
     if g_SingleReplace or g_MultiReplace:
         x, y = N10X.Editor.GetCursorPos()
@@ -3128,8 +3172,15 @@ def HandleCommandPanelCommand(command):
 
 #------------------------------------------------------------------------
 def OnFileLosingFocus():
+    global g_Timer
+    global g_ExitInsertModeCharBuffer;
+    
     if g_Mode != Mode.SUSPENDED:
         EnterCommandMode()
+    if g_ExitInsertModeCharBuffer != None:
+        g_ExitInsertModeCharBuffer = None
+        g_Timer = 0
+        N10X.Editor.RemoveUpdateFunction(ExitInsertModeTimerCheck)
 
 #------------------------------------------------------------------------
 def EnableVim():
@@ -3137,6 +3188,13 @@ def EnableVim():
     global g_VimOverrideKeybindings
     global g_EnableCommandlineMode
     global g_SneakEnabled
+    global g_ExitInsertMode;
+
+    if N10X.Editor.GetSetting("ExitVimInsertMode"):
+        g_ExitInsertMode = N10X.Editor.GetSetting("ExitVimInsertMode")
+        if len(g_ExitInsertMode) == 1 or len(g_ExitInsertMode) > 3:
+            g_ExitInsertMode = None
+            print("Couldn't set ExitVimInsertMode, must be 2 or 3 characters in length only") 
 
     enable_vim = N10X.Editor.GetSetting("Vim") == "true"
     if N10X.Editor.GetSetting("VimOverrideKeybindings") == "false":
