@@ -1,6 +1,7 @@
 import N10X
 import os
 import re
+import xml.etree.ElementTree as ET
 
 cppExtensions = [
     "inl"
@@ -15,6 +16,82 @@ allowedSymbolTypes = [
     , "MemberFunctionDeclaration"
     , "FunctionDeclaration"
 ]
+
+
+# return the path to Unreal Engine if it is present
+def _GetUE5ProjectFilePath():
+    projFiles = N10X.Editor.GetWorkspaceProjectFiles()
+    for p in projFiles:
+        if "UE5.vcxproj" in p:
+            return p
+    return None
+
+# returns true is this appears to be an Unreal Engine 5 workspace
+def _IsUE5Workspace():
+    path = _GetUE5ProjectFilePath()
+    if path:
+        return True
+    return False
+
+# returns an array of include paths (forward single slash) for the given project file
+def _GetIncludePaths(projFilePath):
+    includePaths = []
+    includeText= ""
+
+    #parse vcxproj file to find include paths
+    tree = ET.parse(projFilePath)
+    root = tree.getroot()
+
+    #search include paths
+    nodeName = _GetXMLNameSpace(root.tag) + "IncludePath"
+    for includePath in root.iter(nodeName):
+        includeText += includePath.text
+
+    #split include paths by semi colon and put in array
+    for includeText in includeText.split(";"):
+        includePaths.append(includeText.replace(os.sep, '/'))
+
+    #remove any empty entry in includePaths
+    includePaths = list(filter(None, includePaths))
+
+    # search additional include directories too
+    for child in root.iter():
+        if "ProjectAdditionalIncludeDirectories" in child.tag:
+            includePaths.append(child.text.replace(os.sep, '/'))
+
+    return includePaths
+
+# helper to extract the xml namespace
+def _GetXMLNameSpace(tag):
+    namespace = ""
+    if tag.startswith("{"):
+        namespace = tag.split("}")[0] + "}"
+    return namespace
+
+# locate the shortest common path for the current active project
+def _FindShortestIncludePath(path, includePathArray):
+    activeProject = N10X.Editor.GetActiveProject()
+    activeProjectDir = os.path.dirname(activeProject)
+
+    #Find the shortest relative path by looking through includePaths
+    shortestPath = path
+    shortestPathLength = len(path)
+    for i in includePathArray:
+        #Find normalised path to remove any relative parts, and convert to forward slashes for comparison
+        possiblePrefix = os.path.normpath(activeProjectDir + "/" + i).replace(os.sep, '/')
+        #print(" Path: " + possiblePrefix)
+
+        if path.startswith(possiblePrefix):
+            candidate = path[len(possiblePrefix)+1:]
+            candidateLength = len(candidate)
+            #print("Found path candidate: " + candidate)
+            if candidateLength < shortestPathLength:
+                shortestPath = candidate
+                shortestPathLength = candidateLength
+
+    #print("Best path candidate: " + shortestPath)
+    return shortestPath
+
 
 def AddInclude():
     x, y = N10X.Editor.GetCursorPos()
@@ -44,20 +121,36 @@ def AddInclude():
     if extensionFound == False:
         return
 
+    # cache GotoFunctionImplementation and force it off temporarily
+    oldGotoFunctionImplementation = N10X.Editor.GetSetting("GotoFunctionImplementation") 
+    N10X.Editor.SetSetting("GotoFunctionImplementation", "false") 
+
     # grab the filepath for the current symbol
     path = N10X.Editor.GetSymbolDefinitionFilename(N10X.Editor.GetCursorPos())
+
+    # restore GotoFunctionImplementation to old value
+    N10X.Editor.SetSetting("GotoFunctionImplementation", oldGotoFunctionImplementation) 
 
     # dont bother including if the symbol
     # is defined in the current file
     if path == currentPath:
         return
+    
+    # get the include paths for the active project
+    activeProject = N10X.Editor.GetActiveProject() 
+    includePaths = _GetIncludePaths(activeProject)
+
+    # add the include paths from Unreal Engine plugins and engine code
+    # TODO: Find a more general way to determine this kind of dependency, and make sure this works for all workspace types
+    if _IsUE5Workspace():
+        engineProjectFile = _GetUE5ProjectFilePath()
+        engineIncludePaths = _GetIncludePaths(engineProjectFile)
+        includePaths = includePaths + engineIncludePaths
 
     # trim the path if possible
-    #
-    # TODO: could check against include paths and
-    # use the shortest path available
     commonpath = os.path.commonpath((path, currentPath))
-    relpath = os.path.relpath(path, commonpath)
+    relpath = os.path.relpath(path, commonpath)    
+    relpath = _FindShortestIncludePath(path, includePaths)
 
     # windows backslash separators are undefined behavior
     relpathStandard = relpath.replace(os.sep, '/')
