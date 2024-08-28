@@ -81,8 +81,8 @@ g_HorizontalTarget = 0
 g_PrevCursorY = 0
 g_PrevCursorX = 0
 
-# Error text for status bar
-g_Error = ""
+# Text displayed in status bar after submitting command. e.g. Error: Not an editor command, File <filepath> written.
+g_CommandlineResultText = ""
 
 class Key:
     """
@@ -410,9 +410,10 @@ def EnterCommandMode():
     global g_SingleReplace
     global g_MultiReplace
     global g_PaneSwap
-    global g_Error
-
-    g_Error = ""
+    global g_CommandlineResultText
+    
+    if g_Mode != Mode.COMMANDLINE:
+        g_CommandlineResultText = ""
     g_PaneSwap = False
     ClearCommandStr(False)
 
@@ -433,10 +434,10 @@ def EnterCommandMode():
 
 #------------------------------------------------------------------------
 def EnterCommandlineMode(char):
-    global g_Mode, g_Error, g_CommandlineText, g_CommandlineTextCursorPos
+    global g_Mode, g_CommandlineResultText, g_CommandlineText, g_CommandlineTextCursorPos
 
     g_Mode = Mode.COMMANDLINE
-    g_Error = ""
+    g_CommandlineResultText = ""
     g_CommandlineText = char 
     g_CommandlineTextCursorPos = 1
     UpdateCursorMode()
@@ -2530,7 +2531,7 @@ def HandleCommandlineModeKey(key: Key):
     global g_PaneSwap
     global g_CommandlineText
     global g_CommandlineTextCursorPos
-    global g_Error
+    global g_CommandlineResultText
 
     handled = True
 
@@ -2546,11 +2547,10 @@ def HandleCommandlineModeKey(key: Key):
     elif key == Key("Enter") and is_command:
         # TODO: Strip spaces between ':' and next alphanumeric character from g_CommandlineText
         valid_command = SubmitCommandline(g_CommandlineText)
-        EnterCommandMode()
         if not valid_command:
-            # Set g_Error after EnterCommandMode as this clears it
-            g_Error = "Error: Not an editor command: " + g_CommandlineText[1:]
+            g_CommandlineResultText = "Error: Not an editor command: " + g_CommandlineText[1:]
         g_CommandlineText = ""
+        EnterCommandMode()
 
     # Delete operations
 
@@ -2595,7 +2595,8 @@ def HandleCommandlineModeKey(key: Key):
 
 #------------------------------------------------------------------------
 def SubmitCommandline(command):
-
+    global g_CommandlineResultText
+    
     if command == ":sp":
         x, y = N10X.Editor.GetCursorPos()
         N10X.Editor.ExecuteCommand("DuplicatePanel")
@@ -2611,14 +2612,18 @@ def SubmitCommandline(command):
 
     if command == ":w" or command == ":W":
         N10X.Editor.ExecuteCommand("SaveFile")
+        g_CommandlineResultText = "Saved " + N10X.Editor.GetCurrentFilename()
+        print(g_CommandlineResultText)
         return True
 
     if command == ":wa":
         N10X.Editor.ExecuteCommand("SaveAll")
+        g_CommandlineResultText = "Saved file(s)"
         return True
 
     if command == ":wq":
         N10X.Editor.ExecuteCommand("SaveFile")
+        g_CommandlineResultText = "Saved " + N10X.Editor.GetCurrentFilename()
         N10X.Editor.ExecuteCommand("CloseFile")
         return True
 
@@ -3003,9 +3008,9 @@ def UpdateCursorMode():
         # Insert cursor char into commandline text
         text = g_CommandlineText[:g_CommandlineTextCursorPos] + g_CommandlineCursorChar + g_CommandlineText[g_CommandlineTextCursorPos:]
         N10X.Editor.SetStatusBarText(text)
-    elif g_Error:
+    elif g_CommandlineResultText:
         N10X.Editor.SetCursorVisible(0, True)
-        N10X.Editor.SetStatusBarText(g_Error)
+        N10X.Editor.SetStatusBarText(g_CommandlineResultText)
         N10X.Editor.SetCursorMode("Block")
     else:
         N10X.Editor.SetCursorVisible(0, True)
