@@ -278,22 +278,22 @@ def MoveToLineText(action, search):
     if len(search) == 1:
         if action == 'f':
             x = FindNextOccurrenceForward(search)
-            if x:
+            if x != None:
                 SetCursorPos(x=x)
             g_ReverseCharSearch = False
         elif action == 'F':
             x = FindNextOccurrenceBackward(search)
-            if x:
+            if x != None:
                 SetCursorPos(x=x)
             g_ReverseCharSearch = True
         elif action == 't':
             x = FindNextOccurrenceForward(search)
-            if x:
+            if x != None:
                 SetCursorPos(x=x-1)
             g_ReverseCharSearch = False
         elif action == 'T':
             x = FindNextOccurrenceBackward(search)
-            if x:
+            if x != None:
                 SetCursorPos(x=x+1)
             g_ReverseCharSearch = True
         else:
@@ -304,11 +304,11 @@ def MoveToLineText(action, search):
     elif len(search) == 2 and g_SneakEnabled:
         if action == 's':
             x,y = FindNextOccurrenceForward2(search)
-            if x:
+            if x != None:
                 SetCursorPos(x=x, y=y)
         elif action == 'S':
             x,y = FindNextOccurrenceBackward2(search)
-            if x:
+            if x != None:
                 SetCursorPos(x=x, y=y)
         else:
             return False
