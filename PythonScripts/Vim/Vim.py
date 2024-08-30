@@ -2295,6 +2295,19 @@ def HandleCommandModeChar(char):
         N10X.Editor.PopUndoGroup()
         should_save = True
 
+    # Folding
+
+    elif c == "zc":
+        N10X.Editor.ExecuteCommand("CollapseRegion")
+    elif c == "zo":
+        N10X.Editor.ExecuteCommand("ExpandRegion")
+    elif c == "za":
+        N10X.Editor.ExecuteCommand("ToggleCollapseExpandRegion")
+    elif c == "zR":
+        N10X.Editor.ExecuteCommand("ExpandAllRegions")
+    elif c == "zM":
+        N10X.Editor.ExecuteCommand("CollapseAllRegions")
+
     # Macros
 
     elif (m := re.match("q(.)", c)):
