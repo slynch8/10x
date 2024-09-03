@@ -5,6 +5,7 @@
 #                            Or 'file' if you are providing .clang-format file in your project
 #
 import subprocess
+import os
 import N10X
 from typing import NamedTuple
 
@@ -33,6 +34,9 @@ def ClangFormatSelection():
     end = N10X.Editor.GetSelectionEnd()
     if start[1] != end[1]:
         N10X.Editor.SaveFile()
+        cwd = None
+        if settings.style_name == 'file':
+            cwd = os.path.dirname(settings.bin_path)
         try:
             process = subprocess.Popen([settings.bin_path,
                                         '--style=' + settings.style_name,
@@ -40,7 +44,7 @@ def ClangFormatSelection():
                                         '-i',
                                         N10X.Editor.GetCurrentFilename()],
                             shell=True, stdin=None, stdout=None, stderr=None, 
-                            close_fds=True)
+                            close_fds=True, cwd=cwd)
             process.communicate()
         except FileNotFoundError:
             print('[ClangFormat]: clang-format executable "' + settings.bin_path + '" could not be found')    
@@ -52,12 +56,15 @@ def ClangFormatFile():
 
     N10X.Editor.SaveFile()
     try:
+        cwd = None
+        if settings.style_name == 'file':
+            cwd = os.path.dirname(settings.bin_path)
         process = subprocess.Popen([settings.bin_path,
                                     '-style=' + settings.style_name,
                                     '-i',
                                     N10X.Editor.GetCurrentFilename()],
                             shell=True, stdin=None, stdout=None, stderr=None, 
-                            close_fds=True)
+                            close_fds=True, cwd=cwd)
         process.communicate()
     except FileNotFoundError:
          print('[ClangFormat]: clang-format executable "' + settings.bin_path + '" could not be found')
