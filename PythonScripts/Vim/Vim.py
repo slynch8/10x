@@ -12,7 +12,6 @@ import time
 #
 #------------------------------------------------------------------------
 g_VimEnabled = False
-g_VimOverrideKeybindings = True
 
 # Commandline mode uses the status panel instead of 10x's command panel for commands. 
 # E.g. :w :q and searching with / 
@@ -36,7 +35,7 @@ g_Mode = Mode.INSERT
 g_VisualModeStartPos = None
 
 # guard to stop infinite recursion in key handling
-g_HandingKey = False
+g_HandlingKey = False
 
 # the current command for command mode
 g_Command = ""
@@ -84,6 +83,14 @@ g_PrevCursorX = 0
 # Text displayed in status bar after submitting command. e.g. Error: Not an editor command, File <filepath> written.
 g_CommandlineResultText = ""
 
+class UserHandledResult:
+    """
+    Return value for user calls, e.g. handle key/char callbacks
+    """
+    UNHANDLED       = 0  # Not handled, pass back to caller.
+    HANDLED         = 1  # Handled, do not pass back to caller.
+    PASS_TO_10X     = 2  # Not handled and don't pass back to caller, pass back to 10x.
+
 class Key:
     """
     Key + modifiers
@@ -116,6 +123,8 @@ g_PerformingDot = False
 g_RecordingName = ""
 g_NamedBuffers = {}
 
+# Vim user bindings
+import VimUser
 
 #------------------------------------------------------------------------
 def InVisualMode():
@@ -2386,18 +2395,21 @@ def HandleCommandModeChar(char):
 
 #------------------------------------------------------------------------
 def HandleCommandModeKey(key: Key):
-    global g_VimOverrideKeybindings
-    global g_HandingKey
+    global g_HandlingKey
     global g_Command
     global g_PaneSwap
 
-    if g_HandingKey:
+    if g_HandlingKey:
         return
-    g_HandingKey = True
+    g_HandlingKey = True
 
-    overridden = False #not g_VimOverrideKeybindings and N10X.Editor.HasKeybinding(key, shift, control, alt)
-    if overridden:
-        ClearCommandStr(False)
+    # Call user bindings
+    user_result = VimUser.UserHandleCommandModeKey(key)
+    if user_result == UserHandledResult.HANDLED:
+        g_HandlingKey = False
+        return True
+    elif user_result == UserHandledResult.PASS_TO_10X:
+        g_HandlingKey = False
         return False
 
     handled = True
@@ -2530,7 +2542,7 @@ def HandleCommandModeKey(key: Key):
     if handled or pass_through:
         ClearCommandStr(False)
 
-    g_HandingKey = False
+    g_HandlingKey = False
 
     UpdateVisualModeSelection()
 
@@ -2538,8 +2550,7 @@ def HandleCommandModeKey(key: Key):
 
 #------------------------------------------------------------------------
 def HandleCommandlineModeKey(key: Key):
-    global g_VimOverrideKeybindings
-    global g_HandingKey
+    global g_HandlingKey
     global g_Command
     global g_PaneSwap
     global g_CommandlineText
@@ -2610,6 +2621,13 @@ def HandleCommandlineModeKey(key: Key):
 def SubmitCommandline(command):
     global g_CommandlineResultText
     
+    # Call user bindings
+    user_result = VimUser.UserHandleCommandline(command)
+    if user_result == UserHandledResult.HANDLED:
+        return True
+    elif user_result == UserHandledResult.PASS_TO_10X:
+        return False
+
     if command == ":sp":
         x, y = N10X.Editor.GetCursorPos()
         N10X.Editor.ExecuteCommand("DuplicatePanel")
@@ -2680,6 +2698,13 @@ def HandleCommandlineModeChar(char):
 def HandleInsertModeKey(key: Key):
     global g_InsertBuffer
     global g_PerformingDot
+
+    # Call user bindings
+    user_result = VimUser.UserHandleInsertModeKey(key)
+    if user_result == UserHandledResult.HANDLED:
+        return True
+    elif user_result == UserHandledResult.PASS_TO_10X:
+        return False
 
     if key == Key("Escape"):
         EnterCommandMode()
@@ -3147,13 +3172,10 @@ def OnFileLosingFocus():
 #------------------------------------------------------------------------
 def EnableVim():
     global g_VimEnabled
-    global g_VimOverrideKeybindings
     global g_EnableCommandlineMode
     global g_SneakEnabled
 
     enable_vim = N10X.Editor.GetSetting("Vim") == "true"
-    if N10X.Editor.GetSetting("VimOverrideKeybindings") == "false":
-        g_VimOverrideKeybindings = False;
 
     if N10X.Editor.GetSetting("VimEnableCommandlineMode") == "true":
         g_EnableCommandlineMode = True;
@@ -3191,7 +3213,10 @@ def InitialiseVim():
     EnableVim()
 
 #------------------------------------------------------------------------
-N10X.Editor.AddOnSettingsChangedFunction(OnSettingsChanged)
-N10X.Editor.AddCommandPanelHandlerFunction(HandleCommandPanelCommand)
 
-N10X.Editor.CallOnMainThread(InitialiseVim)
+
+# Prevent against being registered multiple times as VimUser.py imports Vim.py
+if __name__ == "__main__":
+    N10X.Editor.AddOnSettingsChangedFunction(OnSettingsChanged)
+    N10X.Editor.AddCommandPanelHandlerFunction(HandleCommandPanelCommand)
+    N10X.Editor.CallOnMainThread(InitialiseVim)
