@@ -1478,8 +1478,21 @@ def HandleCommandModeChar(char):
     elif c == "de":
         N10X.Editor.PushUndoGroup()
         start = N10X.Editor.GetCursorPos()
-        for i in range(repeat_count):
+        for _ in range(repeat_count):
             MoveToWordEnd()
+        end = N10X.Editor.GetCursorPos()
+        if start != end:
+            end = (max(0, end[0]), end[1])
+            SetSelection(start, end)
+            N10X.Editor.ExecuteCommand("Cut")
+        N10X.Editor.PopUndoGroup()
+        should_save = True
+
+    elif c == "dE":
+        N10X.Editor.PushUndoGroup()
+        start = N10X.Editor.GetCursorPos()
+        for _ in range(repeat_count):
+            MoveToTokenEnd()
         end = N10X.Editor.GetCursorPos()
         if start != end:
             end = (max(0, end[0]), end[1])
@@ -1491,8 +1504,47 @@ def HandleCommandModeChar(char):
     elif c == "dw":
         N10X.Editor.PushUndoGroup()
         start = N10X.Editor.GetCursorPos()
-        for i in range(repeat_count):
+        for _ in range(repeat_count):
             MoveToNextWordStart()
+        end = N10X.Editor.GetCursorPos()
+        if start != end:
+            end = (max(0, end[0] - 1), end[1])
+            SetSelection(start, end)
+            N10X.Editor.ExecuteCommand("Cut")
+        N10X.Editor.PopUndoGroup()
+        should_save = True
+
+    elif c == "dW":
+        N10X.Editor.PushUndoGroup()
+        start = N10X.Editor.GetCursorPos()
+        for _ in range(repeat_count):
+            MoveToNextTokenStart()
+        end = N10X.Editor.GetCursorPos()
+        if start != end:
+            end = (max(0, end[0] - 1), end[1])
+            SetSelection(start, end)
+            N10X.Editor.ExecuteCommand("Cut")
+        N10X.Editor.PopUndoGroup()
+        should_save = True
+
+    elif c == "db":
+        N10X.Editor.PushUndoGroup()
+        start = N10X.Editor.GetCursorPos()
+        for _ in range(repeat_count):
+            MoveToWordStart()
+        end = N10X.Editor.GetCursorPos()
+        if start != end:
+            end = (max(0, end[0] - 1), end[1])
+            SetSelection(start, end)
+            N10X.Editor.ExecuteCommand("Cut")
+        N10X.Editor.PopUndoGroup()
+        should_save = True
+
+    elif c == "dB":
+        N10X.Editor.PushUndoGroup()
+        start = N10X.Editor.GetCursorPos()
+        for _ in range(repeat_count):
+            MoveToTokenStart()
         end = N10X.Editor.GetCursorPos()
         if start != end:
             end = (max(0, end[0] - 1), end[1])
@@ -1906,6 +1958,19 @@ def HandleCommandModeChar(char):
         EnterInsertMode()
         should_save = True
 
+    elif c == "cE":
+        N10X.Editor.PushUndoGroup()
+        start = N10X.Editor.GetCursorPos()
+        MoveToTokenEnd()
+        end = N10X.Editor.GetCursorPos()
+        if start != end:
+            end = (max(0, end[0]), end[1])
+            SetSelection(start, end)
+            N10X.Editor.ExecuteCommand("Cut")
+        N10X.Editor.PopUndoGroup()
+        EnterInsertMode()
+        should_save = True
+
     elif c == "cw":
         x, y = N10X.Editor.GetCursorPos()
         x = min(GetLineLength(y) - 1, x)
@@ -1916,6 +1981,45 @@ def HandleCommandModeChar(char):
             end_x += 1
         SetSelection((x, y), (end_x, y))
         N10X.Editor.ExecuteCommand("Cut")
+        EnterInsertMode()
+        should_save = True
+
+    elif c == "cW":
+        N10X.Editor.PushUndoGroup()
+        start = N10X.Editor.GetCursorPos()
+        MoveToNextTokenStart()
+        end = N10X.Editor.GetCursorPos()
+        if start != end:
+            end = (max(0, end[0]), end[1])
+            SetSelection(start, end)
+            N10X.Editor.ExecuteCommand("Cut")
+        N10X.Editor.PopUndoGroup()
+        EnterInsertMode()
+        should_save = True
+
+    elif c == "cb":
+        N10X.Editor.PushUndoGroup()
+        start = N10X.Editor.GetCursorPos()
+        MoveToWordStart()
+        end = N10X.Editor.GetCursorPos()
+        if start != end:
+            end = (max(0, end[0]), end[1])
+            SetSelection(start, end)
+            N10X.Editor.ExecuteCommand("Cut")
+        N10X.Editor.PopUndoGroup()
+        EnterInsertMode()
+        should_save = True
+
+    elif c == "cB":
+        N10X.Editor.PushUndoGroup()
+        start = N10X.Editor.GetCursorPos()
+        MoveToTokenStart()
+        end = N10X.Editor.GetCursorPos()
+        if start != end:
+            end = (max(0, end[0]), end[1])
+            SetSelection(start, end)
+            N10X.Editor.ExecuteCommand("Cut")
+        N10X.Editor.PopUndoGroup()
         EnterInsertMode()
         should_save = True
 
@@ -2873,13 +2977,25 @@ def HandleVisualModeChar(char):
         for _ in range(repeat_count):
             MoveToNextWordStart()
 
+    elif c == "W":
+        for _ in range(repeat_count):
+            MoveToNextTokenStart()
+
     elif c == "e":
         for _ in range(repeat_count):
             MoveToWordEnd()
 
+    elif c == "E":
+        for _ in range(repeat_count):
+            MoveToTokenEnd()
+
     elif c == "b":
         for _ in range(repeat_count):
             MoveToWordStart()
+
+    elif c == "B":
+        for _ in range(repeat_count):
+            MoveToTokenStart()
 
     elif (m := re.match("([fFtT;,])(.?)", c)):
         for _ in range(repeat_count):
