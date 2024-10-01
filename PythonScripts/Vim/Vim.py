@@ -1813,15 +1813,22 @@ def HandleCommandModeChar(char):
     # Searching
 
     elif c == "*":
-        for i in range(repeat_count):
+        for _ in range(repeat_count):
             SendKey("Right")
+            # Turn on word matching to stop partial matches and restore after
+            cached_find_by_word = N10X.Editor.GetFindByWord()
+            N10X.Editor.SetFindByWord(True)
             N10X.Editor.ExecuteCommand("FindInFileNextCurrentWord")
+            N10X.Editor.SetFindByWord(cached_find_by_word)
             SendKey("Left")
 
     elif c == "#":
-        for i in range(repeat_count):
+        for _ in range(repeat_count):
             SendKey("Right")
+            cached_find_by_word = N10X.Editor.GetFindByWord()
+            N10X.Editor.SetFindByWord(True)
             N10X.Editor.ExecuteCommand("FindInFilePrevCurrentWord")
+            N10X.Editor.SetFindByWord(cached_find_by_word)
             SendKey("Left")
 
     elif c == "/":
