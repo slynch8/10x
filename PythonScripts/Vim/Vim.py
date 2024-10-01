@@ -3145,7 +3145,7 @@ def HandleVisualModeChar(char):
     elif (m := re.match("a" + g_BlockMatch, c)):
         g_Mode = Mode.VISUAL
         action = m.group(1)
-        if sel := GetAroundBlockSelection(m.group(1), N10X.Editor.GetCursorPos()):
+        if sel := GetBlockSelection(m.group(1), N10X.Editor.GetCursorPos()):
             start, end = sel
             SetVisualModeSelection(start, end)
     
@@ -3159,7 +3159,7 @@ def HandleVisualModeChar(char):
     elif (m := re.match("a([`'\"])", c)):
         g_Mode = Mode.VISUAL
         action = m.group(1)
-        if sel := GetAroundQuoteSelection(m.group(1), N10X.Editor.GetCursorPos()):
+        if sel := GetQuoteSelection(m.group(1), N10X.Editor.GetCursorPos()):
             start, end = sel
             SetVisualModeSelection(start, end)
 
