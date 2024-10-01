@@ -2310,7 +2310,7 @@ def HandleCommandModeChar(char):
     elif (m := re.match("y" + g_RepeatMatch + "a" + g_BlockMatch, c)):
         count = int(m.group(1)) if m.group(1) else 1
         action = m.group(2)
-        if pos := SelectAroundBlock(action, N10X.Editor.GetCursorPos(), count):
+        if pos := SelectAroundBlock(action, count):
             N10X.Editor.ExecuteCommand("Copy")
             SetCursorPos(pos[0], pos[1])
     
