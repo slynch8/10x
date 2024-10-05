@@ -20,12 +20,13 @@ g_EnableCommandlineMode = False
 
 #------------------------------------------------------------------------
 class Mode:
-    INSERT      = 0
-    COMMAND     = 1
-    COMMANDLINE = 2
-    VISUAL      = 3
-    VISUAL_LINE = 4
-    SUSPENDED   = 5 # Vim is enabled but all vim bindings are disabled except for vim command panel commands
+    INSERT       = 0
+    COMMAND      = 1
+    COMMANDLINE  = 2
+    VISUAL       = 3
+    VISUAL_LINE  = 4
+    VISUAL_BLOCK = 5
+    SUSPENDED    = 6 # Vim is enabled but all vim bindings are disabled except for vim command panel commands
 
 #------------------------------------------------------------------------
 g_Mode = Mode.INSERT
@@ -37,6 +38,10 @@ g_ExitInsertCharBuffer = None
 
 # position of the cursor when visual mode was entered
 g_VisualModeStartPos = None
+
+# position of the cursor end on visual block mode 
+g_VisualBlockModeEndPos = None
+g_VisualBlockModeEnabled = True
 
 # guard to stop infinite recursion in key handling
 g_HandlingKey = False
@@ -133,7 +138,7 @@ import VimUser
 #------------------------------------------------------------------------
 def InVisualMode():
     global g_Mode
-    return g_Mode == Mode.VISUAL or g_Mode == Mode.VISUAL_LINE
+    return g_Mode == Mode.VISUAL or g_Mode == Mode.VISUAL_LINE or g_Mode == Mode.VISUAL_BLOCK
 
 #------------------------------------------------------------------------
 def Clamp(min_val, max_val, n):
@@ -184,7 +189,8 @@ def SetCursorPos(x=None, y=None, max_offset=1, override_horizontal_target=True):
         line_start_x, line_start_y = GetFirstNonWhitespace(y)
         x = max(g_HorizontalTarget, line_start_x)
 
-    x = min(GetLineLength(y) - max_offset, x)
+    if g_Mode != Mode.VISUAL_BLOCK:
+        x = min(GetLineLength(y) - max_offset, x)
 
     N10X.Editor.SetCursorPos((x, y))
     g_PrevCursorX, g_PrevCursorY = N10X.Editor.GetCursorPos()
@@ -533,6 +539,7 @@ def AddVisualModeSelection(start, end):
 def UpdateVisualModeSelection():
     global g_Mode
     global g_VisualModeStartPos
+    global g_VisualBlockModeEndPos
 
     end = N10X.Editor.GetCursorPos()
 
@@ -541,14 +548,36 @@ def UpdateVisualModeSelection():
         SetSelection(start, end, cursor_index=1)
     elif g_Mode == Mode.VISUAL_LINE:
         SetLineSelection(start[1], end[1], cursor_index=1)
-
+    elif g_Mode == Mode.VISUAL_BLOCK:
+        g_VisualBlockModeEndPos = end
+        N10X.Editor.SetCursorRectSelect(start, end)
+                             
     N10X.Editor.SetCursorVisible(1, False)
 
 #------------------------------------------------------------------------
 def SubmitVisualModeSelection():
-    start_pos, end_pos = N10X.Editor.GetCursorSelection(cursor_index=1)
-    EnterCommandMode()
-    N10X.Editor.SetSelection(start_pos, end_pos)
+    if g_Mode == Mode.VISUAL_BLOCK:
+        start_pos = g_VisualModeStartPos
+        end_pos = g_VisualBlockModeEndPos
+    
+        if g_VisualModeStartPos[0] > g_VisualBlockModeEndPos[0]:
+            start_pos = (start_pos[0] + 1, start_pos[1])
+        else:
+            end_pos = (end_pos[0] + 1, end_pos[1])
+            
+        EnterCommandMode()
+        N10X.Editor.SetCursorRectSelect(start_pos, end_pos)
+
+        if g_VisualModeStartPos[0] > g_VisualBlockModeEndPos[0]:
+            start_pos = g_VisualBlockModeEndPos
+            end_pos = g_VisualModeStartPos
+
+    else:
+        start_pos, end_pos = N10X.Editor.GetCursorSelection(cursor_index=1)
+            
+        EnterCommandMode()
+        N10X.Editor.SetSelection(start_pos, end_pos)
+
     return start_pos, end_pos
 
 #------------------------------------------------------------------------
@@ -1326,12 +1355,14 @@ def HandleCommandModeChar(char):
             MoveCursorPos(x_delta=-1)
 
     elif c == "j":
+        override_horizontal_target = True if g_Mode == Mode.VISUAL_BLOCK else False
         for i in range(repeat_count):
-            MoveCursorPos(y_delta=1, override_horizontal_target=False)
+            MoveCursorPos(y_delta=1, override_horizontal_target=override_horizontal_target)
 
     elif c == "k":
+        override_horizontal_target = True if g_Mode == Mode.VISUAL_BLOCK else False
         for i in range(repeat_count):
-            MoveCursorPos(y_delta=-1, override_horizontal_target=False)
+            MoveCursorPos(y_delta=-1, override_horizontal_target=override_horizontal_target)
 
     elif c == "l":
         for i in range(repeat_count):
@@ -2578,7 +2609,8 @@ def HandleCommandModeKey(key: Key):
         pass # todo
    
     elif key == Key("V", control=True):
-        pass # todo
+        if g_VisualBlockModeEnabled: 
+            EnterVisualMode(Mode.VISUAL_BLOCK)
    
     elif key == Key("Z", control=True):
         N10X.Editor.ExecuteCommand("Undo")
@@ -2934,13 +2966,13 @@ def HandleVisualModeChar(char):
     should_save = False
 
     if c == "v":
-        if g_Mode == Mode.VISUAL:
+        if g_Mode == Mode.VISUAL or g_Mode == Mode.VISUAL_BLOCK:
             EnterCommandMode()
         else:
             g_Mode = Mode.VISUAL
 
     elif c == "V":
-        if g_Mode == Mode.VISUAL_LINE:
+        if g_Mode == Mode.VISUAL_LINE or g_Mode == Mode.VISUAL_BLOCK:
             EnterCommandMode()
         else:
             g_Mode = Mode.VISUAL_LINE
@@ -3113,8 +3145,7 @@ def HandleVisualModeChar(char):
         should_save = True
     
     elif c == "i" or c == "a":
-        # Stub for text-object motions.
-        return
+        EnterInsertMode()
 
     elif c == "ip":
         start, end = GetInsideParagraphSelection()
@@ -3216,6 +3247,10 @@ def UpdateCursorMode():
         N10X.Editor.SetCursorVisible(0, True)
         N10X.Editor.SetCursorMode("Block")
         N10X.Editor.SetStatusBarText("-- VISUAL LINE --")
+    elif g_Mode == Mode.VISUAL_BLOCK:
+        N10X.Editor.SetCursorVisible(0, True)
+        N10X.Editor.SetCursorMode("Block")
+        N10X.Editor.SetStatusBarText("-- VISUAL BLOCK--")
     elif g_Mode == Mode.SUSPENDED:
         N10X.Editor.SetCursorVisible(0, True)
         N10X.Editor.SetCursorMode("Line")
@@ -3298,6 +3333,8 @@ def OnInterceptKey(key, shift, control, alt):
                 supress = HandleCommandModeKey(key)
             case Mode.VISUAL_LINE:
                 supress = HandleCommandModeKey(key)
+            case Mode.VISUAL_BLOCK:
+                supress = HandleCommandModeKey(key)
             case Mode.SUSPENDED:
                 supress = HandleSuspendedModeKey(key)
         UpdateCursorMode()
@@ -3333,6 +3370,8 @@ def OnInterceptCharKey(c):
             case Mode.VISUAL:
                 HandleVisualModeChar(c)
             case Mode.VISUAL_LINE:
+                HandleVisualModeChar(c)
+            case Mode.VISUAL_BLOCK:
                 HandleVisualModeChar(c)
             case Mode.SUSPENDED:
                 supress = False
