@@ -3144,7 +3144,7 @@ def HandleVisualModeChar(char):
           SetVisualModeSelection(start, end)
         should_save = True
     
-    elif c == "i" or c == "a":
+    elif c == "I" or c == "A":
         EnterInsertMode()
 
     elif c == "ip":
