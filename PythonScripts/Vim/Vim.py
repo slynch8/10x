@@ -13,10 +13,14 @@ import time
 #------------------------------------------------------------------------
 g_VimEnabled = False
 
-# Commandline mode uses the status panel instead of 10x's command panel for commands. 
-# E.g. :w :q and searching with / 
-# Enable in settings with VimEnableCommandlineMode.  
-g_EnableCommandlineMode = False
+# Commandline mode uses 10x's command panel for commands. 
+# E.g. :w :q 
+# Enable in settings with VimUse10xCommandlineMode.  
+g_Use10xCommandPanel = False
+
+# Search with '/' uses 10x's find panel
+# Enable in settings with VimUse10xFindPanel
+g_Use10xFindPanel = False
 
 #------------------------------------------------------------------------
 class Mode:
@@ -437,7 +441,9 @@ def EnterCommandMode():
     ClearCommandStr(False)
 
     if g_Mode != Mode.COMMAND:
-        N10X.Editor.ClearSelection()
+        # Don't clear selection as we might have been searching
+        if g_Mode != Mode.COMMANDLINE:
+            N10X.Editor.ClearSelection()
         g_SingleReplace = False
         g_MultiReplace = False
 
@@ -1865,9 +1871,10 @@ def HandleCommandModeChar(char):
     elif c == "/":
         g_LastJumpPoint = N10X.Editor.GetCursorPos()
         g_ReverseSearch = False
-        N10X.Editor.ExecuteCommand("FindInFile")
-        # TODO - Enter commandline mode when we get the 10x command to SetFindText
-        #EnterCommandlineMode(c)
+        if g_Use10xFindPanel:
+            N10X.Editor.ExecuteCommand("FindInFile")
+        else:
+            EnterCommandlineMode(c)
 
     elif c == "?":
         print("[vim] "+c+" (reverse search) unimplemented- regular searching")
@@ -2512,7 +2519,7 @@ def HandleCommandModeChar(char):
 
     # Command line Panel
     elif c == ":":
-        if not g_EnableCommandlineMode:
+        if g_Use10xCommandPanel:
             N10X.Editor.ExecuteCommand("ShowCommandPanel")
             N10X.Editor.SetCommandPanelText(":")
         else:
@@ -2725,15 +2732,18 @@ def HandleCommandlineModeKey(key: Key):
     # Exit 
     if key == Key("Escape") or key == Key("C", control=True):
         g_CommandlineText = ""
+        if is_search and g_LastJumpPoint:
+            SetCursorPos(g_LastJumpPoint[0], g_LastJumpPoint[1])
         EnterCommandMode()
     
     # Submit command
-    elif key == Key("Enter") and is_command:
-        # TODO: Strip spaces between ':' and next alphanumeric character from g_CommandlineText
-        valid_command = SubmitCommandline(g_CommandlineText)
-        if not valid_command:
-            g_CommandlineResultText = "Error: Not an editor command: " + g_CommandlineText[1:]
-        g_CommandlineText = ""
+    elif key == Key("Enter"):
+        if is_command:
+            # TODO: Strip spaces between ':' and next alphanumeric character from g_CommandlineText
+            valid_command = SubmitCommandline(g_CommandlineText)
+            if not valid_command:
+                g_CommandlineResultText = "Error: Not an editor command: " + g_CommandlineText[1:]
+            g_CommandlineText = ""
         EnterCommandMode()
 
     # Delete operations
@@ -2849,7 +2859,7 @@ def HandleCommandlineModeChar(char):
    
     # searching
     if g_CommandlineText[0] == '/' and len(g_CommandlineText) > 1:
-        pass #TODO
+        N10X.Editor.SetFindText(g_CommandlineText[1:])
 
     return True
 
@@ -3402,7 +3412,8 @@ def OnFileLosingFocus():
 #------------------------------------------------------------------------
 def EnableVim():
     global g_VimEnabled
-    global g_EnableCommandlineMode
+    global g_Use10xCommandPanel
+    global g_Use10xFindPanel
     global g_SneakEnabled
     global g_VimExitInsertModeCharSequence;
 
@@ -3414,8 +3425,11 @@ def EnableVim():
 
     enable_vim = N10X.Editor.GetSetting("Vim") == "true"
 
-    if N10X.Editor.GetSetting("VimEnableCommandlineMode") == "true":
-        g_EnableCommandlineMode = True;
+    if N10X.Editor.GetSetting("VimUse10xCommandPanel") == "true":
+        g_Use10xCommandPanel = True
+
+    if N10X.Editor.GetSetting("VimUse10xFindPanel") == "true":
+        g_Use10xFindPanel = True
 
     if g_VimEnabled != enable_vim:
         g_VimEnabled = enable_vim
