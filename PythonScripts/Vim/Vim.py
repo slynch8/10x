@@ -1273,6 +1273,15 @@ def MergeLinesTrimIndentation():
     N10X.Editor.InsertText(" ")
     SetCursorPos(startx,y)
 
+
+#------------------------------------------------------------------------
+def UpdateSearchText(search_text):
+    if g_Mode != Mode.COMMANDLINE:
+        return
+    
+    N10X.Editor.SetFindText(search_text)
+
+
 #------------------------------------------------------------------------
 # Key Intercepting
 
@@ -2759,11 +2768,14 @@ def HandleCommandlineModeKey(key: Key):
             g_CommandlineText = g_CommandlineText[:g_CommandlineTextCursorPos] + g_CommandlineText[prev_cursor_pos:] 
             if len(g_CommandlineText) == 0:
                 EnterCommandMode()
+            elif is_search:
+                UpdateSearchText(g_CommandlineText[1:])
 
     elif key == Key("Delete"):
             next_cursor_pos = min(len(g_CommandlineText), g_CommandlineTextCursorPos + 1)
             g_CommandlineText = g_CommandlineText[:g_CommandlineTextCursorPos] + g_CommandlineText[next_cursor_pos:] 
-
+            if is_search:
+                UpdateSearchText(g_CommandlineText[1:])
     # Navigation
 
     elif key == Key("Left"):
@@ -2859,7 +2871,7 @@ def HandleCommandlineModeChar(char):
    
     # searching
     if g_CommandlineText[0] == '/' and len(g_CommandlineText) > 1:
-        N10X.Editor.SetFindText(g_CommandlineText[1:])
+        UpdateSearchText(g_CommandlineText[1:])
 
     return True
 
