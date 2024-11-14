@@ -96,6 +96,9 @@ g_PrevCursorX = 0
 # Text displayed in status bar after submitting command. e.g. Error: Not an editor command, File <filepath> written.
 g_CommandlineResultText = ""
 
+# smart case when searching - e.g. if one upper case letter is present, searching is case sensitive.
+g_SmartCaseEnabled = True 
+
 class UserHandledResult:
     """
     Return value for user calls, e.g. handle key/char callbacks
@@ -140,9 +143,22 @@ g_NamedBuffers = {}
 import VimUser
 
 #------------------------------------------------------------------------
+def GetSetting(setting, default_value):
+    value = N10X.Editor.GetSetting(setting)
+    return default_value if value == "" else value 
+
+#------------------------------------------------------------------------
+def GetSettingBool(setting, default_value):
+    return GetSetting(setting, default_value) == "true"
+
+#------------------------------------------------------------------------
 def InVisualMode():
     global g_Mode
     return g_Mode == Mode.VISUAL or g_Mode == Mode.VISUAL_LINE or g_Mode == Mode.VISUAL_BLOCK
+
+#------------------------------------------------------------------------
+def SetFindText(text, case=False, word=False, regex=False, start_pos=(-1,-1)):
+    N10X.Editor.SetFindText(text, case, word, regex, start_pos)
 
 #------------------------------------------------------------------------
 def Clamp(min_val, max_val, n):
@@ -1275,11 +1291,34 @@ def MergeLinesTrimIndentation():
 
 
 #------------------------------------------------------------------------
+def IsSearching():
+    if g_Mode != Mode.COMMANDLINE:
+        return False
+
+    # / forward search, ? reverse search
+    return g_CommandlineText[:1] == "/" or g_CommandlineText[:1] == "?"
+
+#------------------------------------------------------------------------
 def UpdateSearchText(search_text):
     if g_Mode != Mode.COMMANDLINE:
         return
-    
-    N10X.Editor.SetFindText(search_text)
+   
+    case_sensitive = False
+
+    # When smart case is enabled, case-sensitive search is turned on
+    # if any char is upper case in the search string.
+    if g_SmartCaseEnabled:
+        for c in search_text:
+            if c.isupper():
+                case_sensitive = True
+                break
+
+    word = False
+    regex = False
+    reverse = g_ReverseSearch
+    # This is required for reverse search to work correctly
+    start_pos = g_LastJumpPoint
+    N10X.Editor.SetFindText(search_text, case_sensitive, word, regex, reverse, start_pos)
 
 
 #------------------------------------------------------------------------
@@ -1861,20 +1900,35 @@ def HandleCommandModeChar(char):
     elif c == "*":
         for _ in range(repeat_count):
             SendKey("Right")
-            # Turn on word matching to stop partial matches and restore after
             cached_find_by_word = N10X.Editor.GetFindByWord()
+            cached_case = N10X.Editor.GetFindByCase()
+            cached_regex = N10X.Editor.GetFindByRegex()
+            # Set word to stop partial matching, case off, regex off
             N10X.Editor.SetFindByWord(True)
+            N10X.Editor.SetFindByCase(False)
+            N10X.Editor.SetFindByRegex(False)
             N10X.Editor.ExecuteCommand("FindInFileNextCurrentWord")
+            # Unset options
             N10X.Editor.SetFindByWord(cached_find_by_word)
+            N10X.Editor.SetFindByCase(cached_case)
+            N10X.Editor.SetFindByRegex(cached_regex)
             SendKey("Left")
 
     elif c == "#":
         for _ in range(repeat_count):
             SendKey("Right")
             cached_find_by_word = N10X.Editor.GetFindByWord()
+            cached_case = N10X.Editor.GetFindByCase()
+            cached_regex = N10X.Editor.GetFindByRegex()
+            # Set word to stop partial matching, case off, regex off
             N10X.Editor.SetFindByWord(True)
+            N10X.Editor.SetFindByCase(False)
+            N10X.Editor.SetFindByRegex(False)
             N10X.Editor.ExecuteCommand("FindInFilePrevCurrentWord")
+            # Unset options
             N10X.Editor.SetFindByWord(cached_find_by_word)
+            N10X.Editor.SetFindByCase(cached_case)
+            N10X.Editor.SetFindByRegex(cached_regex)
             SendKey("Left")
 
     elif c == "/":
@@ -1886,10 +1940,12 @@ def HandleCommandModeChar(char):
             EnterCommandlineMode(c)
 
     elif c == "?":
-        print("[vim] "+c+" (reverse search) unimplemented- regular searching")
         g_ReverseSearch = True
         g_LastJumpPoint = N10X.Editor.GetCursorPos()
-        N10X.Editor.ExecuteCommand("FindInFile")
+        if g_Use10xFindPanel:
+            N10X.Editor.ExecuteCommand("FindInFile")
+        else:
+            EnterCommandlineMode(c)
 
     elif g_SneakEnabled and (m := re.match("([fFtTsS;,])(.{0,2})", c)):
         for i in range(repeat_count):
@@ -2736,7 +2792,7 @@ def HandleCommandlineModeKey(key: Key):
     handled = True
 
     is_command = g_CommandlineText[0] == ':'
-    is_search  = g_CommandlineText[0] == '/'
+    is_search  = IsSearching() 
 
     # Exit 
     if key == Key("Escape") or key == Key("C", control=True):
@@ -2758,7 +2814,7 @@ def HandleCommandlineModeKey(key: Key):
     # Delete operations
 
     elif key == Key("Backspace"):
-        # When there's a character after the starting char ':' and '/' you can't delete it so guard against that here
+        # When there's a character after the starting char, e.g. ':' and '/' you can't delete it so guard against that here
         # We can backspace/delete if we only have the starting char or the cursor pos is not after the starting char
         if len(g_CommandlineText) == 1 or g_CommandlineTextCursorPos > 1:
             # Move cursor back one
@@ -2870,7 +2926,7 @@ def HandleCommandlineModeChar(char):
     UpdateCursorMode()
    
     # searching
-    if g_CommandlineText[0] == '/' and len(g_CommandlineText) > 1:
+    if IsSearching() and len(g_CommandlineText) > 1:
         UpdateSearchText(g_CommandlineText[1:])
 
     return True
@@ -3282,7 +3338,11 @@ def UpdateCursorMode():
         N10X.Editor.SetCursorMode("Line")
         N10X.Editor.SetStatusBarText("-- VIM DISABLED --")
     elif g_Mode == Mode.COMMANDLINE:
-        N10X.Editor.SetCursorVisible(0, False)
+        # Don't hide cursor when searching 
+        if IsSearching():
+            N10X.Editor.SetCursorVisible(0, True)
+        else:
+            N10X.Editor.SetCursorVisible(0, False)
         N10X.Editor.SetCursorMode("Block")
         # Insert cursor char into commandline text
         text = g_CommandlineText[:g_CommandlineTextCursorPos] + g_CommandlineCursorChar + g_CommandlineText[g_CommandlineTextCursorPos:]
@@ -3428,6 +3488,7 @@ def EnableVim():
     global g_Use10xFindPanel
     global g_SneakEnabled
     global g_VimExitInsertModeCharSequence;
+    global g_SmartCaseEnabled
 
     if N10X.Editor.GetSetting("VimExitInsertModeCharSequence"):
         g_VimExitInsertModeCharSequence = N10X.Editor.GetSetting("VimExitInsertModeCharSequence")
@@ -3435,13 +3496,12 @@ def EnableVim():
             g_VimExitInsertModeCharSequence = None
             print("Couldn't set VimExitInsertModeCharSequence, must be 2 or 3 characters in length only") 
 
-    enable_vim = N10X.Editor.GetSetting("Vim") == "true"
-
-    if N10X.Editor.GetSetting("VimUse10xCommandPanel") == "true":
-        g_Use10xCommandPanel = True
-
-    if N10X.Editor.GetSetting("VimUse10xFindPanel") == "true":
-        g_Use10xFindPanel = True
+    # Settings
+    enable_vim           = GetSettingBool("Vim",                    default_value="false")
+    g_SneakEnabled       = GetSettingBool("VimSneakEnabled",        default_value="false")
+    g_SmartCaseEnabled   = GetSettingBool("VimSmartCaseEnabled",    default_value="true") 
+    g_Use10xCommandPanel = GetSettingBool("VimUse10xCommandPanel",  default_value="false")
+    g_Use10xFindPanel    = GetSettingBool("VimUse10xFindPanel",     default_value="false")
 
     if g_VimEnabled != enable_vim:
         g_VimEnabled = enable_vim
@@ -3464,7 +3524,6 @@ def EnableVim():
             N10X.Editor.RemoveOnFileLosingFocusFunction(OnFileLosingFocus)
             N10X.Editor.RemoveSettingOverride("ReverseFindSelection")
 
-    g_SneakEnabled = N10X.Editor.GetSetting("VimSneakEnabled") == "true"
 
 #------------------------------------------------------------------------
 # enable/disable Vim when it's changed in the settings file
