@@ -14,6 +14,7 @@ def Define():
 	BeforeVariables = BeforeVariables.replace("static", "")
 
 	CurrentLineText = BeforeVariables + "(" + CurrentLineText.split("(")[1]
+	CurrentLineText = CurrentLineText.replace(';', '')
 
 
 	SplitLine = CurrentLineText.split()
