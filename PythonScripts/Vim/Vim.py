@@ -497,6 +497,7 @@ def EnterVisualMode(mode):
 #------------------------------------------------------------------------
 def EnterSuspendedMode():
     global g_Mode
+    g_Mode = Mode.SUSPENDED
     UpdateCursorMode()
 
 #------------------------------------------------------------------------
