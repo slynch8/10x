@@ -1900,7 +1900,6 @@ def HandleCommandModeChar(char):
 
     elif c == "*":
         for _ in range(repeat_count):
-            SendKey("Right")
             cached_find_by_word = N10X.Editor.GetFindByWord()
             cached_case = N10X.Editor.GetFindByCase()
             cached_regex = N10X.Editor.GetFindByRegex()
@@ -1913,11 +1912,9 @@ def HandleCommandModeChar(char):
             N10X.Editor.SetFindByWord(cached_find_by_word)
             N10X.Editor.SetFindByCase(cached_case)
             N10X.Editor.SetFindByRegex(cached_regex)
-            SendKey("Left")
 
     elif c == "#":
         for _ in range(repeat_count):
-            SendKey("Right")
             cached_find_by_word = N10X.Editor.GetFindByWord()
             cached_case = N10X.Editor.GetFindByCase()
             cached_regex = N10X.Editor.GetFindByRegex()
@@ -1930,7 +1927,6 @@ def HandleCommandModeChar(char):
             N10X.Editor.SetFindByWord(cached_find_by_word)
             N10X.Editor.SetFindByCase(cached_case)
             N10X.Editor.SetFindByRegex(cached_regex)
-            SendKey("Left")
 
     elif c == "/":
         g_LastJumpPoint = N10X.Editor.GetCursorPos()
