@@ -22,6 +22,9 @@ g_Use10xCommandPanel = False
 # Enable in settings with VimUse10xFindPanel
 g_Use10xFindPanel = False
 
+# Whether the commandline history is filtered on what's currently typed - same behaviour as NeoVim.
+g_UseFilteredCommandlineHistory = True
+
 #------------------------------------------------------------------------
 class Mode:
     INSERT       = 0
@@ -53,12 +56,27 @@ g_HandlingKey = False
 # the current command for command mode
 g_Command = ""
 
-# the current command for commandline mode
-g_CommandlineText = ""
-g_CommandlineCursorChar = '_'
-# if using to index directly into g_CommandLineText be sure to clamp to len(g_CommandlineText)-1
-# slicing is fine as this handled by python, i.e. it will return "" if sliced out of bounds.
-g_CommandlineTextCursorPos = 0
+class CommandlineContext:
+    def __init__(self):
+        # the current command for commandline mode
+        self.text = ""
+        # Character to display as cursor position
+        self.cursorChar = '_'
+        # if using to index directly into g_CommandLineText be sure to clamp to len(g_CommandlineText)-1
+        # slicing is fine as this handled by python, i.e. it will return "" if sliced out of bounds.
+        self.cursorPos = 0
+        # Stores history of commands in commandline mode, most recent is last
+        self.commandHistory = []
+        # Stores history of search strings in commandline mode, most recent is last
+        self.searchHistory = []
+        # When in commandline mode points to the currently selected item in either g_Commandline.commandHistory or g_Commandline.searchHistory
+        self.historyIndex = 0 
+        # Maximum size of the history buffers
+        self.historyLength = 100 
+        # Text displayed in status bar after submitting command. e.g. Error: Not an editor command, File <filepath> written.
+        self.result = ""
+
+g_Commandline = CommandlineContext()
 
 # flag to enable/disable whether we handle key intercepts
 g_HandleKeyIntercepts = True
@@ -92,9 +110,6 @@ g_SneakEnabled = False
 g_HorizontalTarget = 0
 g_PrevCursorY = 0
 g_PrevCursorX = 0
-
-# Text displayed in status bar after submitting command. e.g. Error: Not an editor command, File <filepath> written.
-g_CommandlineResultText = ""
 
 # smart case when searching - e.g. if one upper case letter is present, searching is case sensitive.
 g_SmartCaseEnabled = True 
@@ -449,10 +464,11 @@ def EnterCommandMode():
     global g_SingleReplace
     global g_MultiReplace
     global g_PaneSwap
-    global g_CommandlineResultText
+    global g_Commandline
     
     if g_Mode != Mode.COMMANDLINE:
-        g_CommandlineResultText = ""
+        g_Commandline.result = ""
+
     g_PaneSwap = False
     ClearCommandStr(False)
 
@@ -475,12 +491,21 @@ def EnterCommandMode():
 
 #------------------------------------------------------------------------
 def EnterCommandlineMode(char):
-    global g_Mode, g_CommandlineResultText, g_CommandlineText, g_CommandlineTextCursorPos
+    global g_Mode, g_Commandline
 
     g_Mode = Mode.COMMANDLINE
-    g_CommandlineResultText = ""
-    g_CommandlineText = char 
-    g_CommandlineTextCursorPos = 1
+    g_Commandline.result = ""
+    g_Commandline.text = char 
+    g_Commandline.cursorPos = 1
+
+    # Create entry in history buffer and update index
+    history_buffer = GetHistoryBuffer() 
+    g_Commandline.historyIndex = len(history_buffer)
+    # Make sure we don't grow too large
+    if len(history_buffer) >= g_Commandline.historyLength:
+        history_buffer.pop(0)
+    history_buffer.append("")
+
     UpdateCursorMode()
 
 #------------------------------------------------------------------------
@@ -1290,14 +1315,13 @@ def MergeLinesTrimIndentation():
     N10X.Editor.InsertText(" ")
     SetCursorPos(startx,y)
 
-
 #------------------------------------------------------------------------
 def IsSearching():
     if g_Mode != Mode.COMMANDLINE:
         return False
 
     # / forward search, ? reverse search
-    return g_CommandlineText[:1] == "/" or g_CommandlineText[:1] == "?"
+    return g_Commandline.text[:1] == "/" or g_Commandline.text[:1] == "?"
 
 #------------------------------------------------------------------------
 def UpdateSearchText(search_text):
@@ -1321,6 +1345,28 @@ def UpdateSearchText(search_text):
     start_pos = g_LastJumpPoint
     N10X.Editor.SetFindText(search_text, case_sensitive, word, regex, reverse, start_pos)
 
+#------------------------------------------------------------------------
+def GetHistoryBuffer():
+    global g_Commandline 
+
+    is_command = g_Commandline.text[0] == ':'
+    is_search  = IsSearching() 
+
+    if is_command:
+        return g_Commandline.commandHistory
+    elif is_search:
+        return g_Commandline.searchHistory
+    else:
+        return [] 
+
+#------------------------------------------------------------------------
+def GetFilteredHistoryBuffer():
+    global g_Commandline 
+    history_buffer = GetHistoryBuffer()
+    if g_UseFilteredCommandlineHistory:
+        filter = history_buffer[-1]
+        history_buffer = [elem for elem in history_buffer if elem.startswith(filter)]
+    return history_buffer
 
 #------------------------------------------------------------------------
 # Key Intercepting
@@ -2783,18 +2829,19 @@ def HandleCommandlineModeKey(key: Key):
     global g_HandlingKey
     global g_Command
     global g_PaneSwap
-    global g_CommandlineText
-    global g_CommandlineTextCursorPos
-    global g_CommandlineResultText
+    global g_Commandline
 
     handled = True
 
-    is_command = g_CommandlineText[0] == ':'
+    is_command = g_Commandline.text[0] == ':'
     is_search  = IsSearching() 
+    history_buffer = GetHistoryBuffer() 
+    filtered_history_buffer = GetFilteredHistoryBuffer() 
+    g_Commandline.historyIndex = Clamp(0, len(filtered_history_buffer)-1, g_Commandline.historyIndex) 
 
     # Exit 
     if key == Key("Escape") or key == Key("C", control=True):
-        g_CommandlineText = ""
+        g_Commandline.text = ""
         if is_search and g_LastJumpPoint:
             SetCursorPos(g_LastJumpPoint[0], g_LastJumpPoint[1])
         EnterCommandMode()
@@ -2802,11 +2849,11 @@ def HandleCommandlineModeKey(key: Key):
     # Submit command
     elif key == Key("Enter"):
         if is_command:
-            # TODO: Strip spaces between ':' and next alphanumeric character from g_CommandlineText
-            valid_command = SubmitCommandline(g_CommandlineText)
+            # TODO: Strip spaces between ':' and next alphanumeric character from g_Commandline.text
+            valid_command = SubmitCommandline(g_Commandline.text)
             if not valid_command:
-                g_CommandlineResultText = "Error: Not an editor command: " + g_CommandlineText[1:]
-            g_CommandlineText = ""
+                g_Commandline.result = "Error: Not an editor command: " + g_Commandline.text[1:]
+            g_Commandline.text = ""
         EnterCommandMode()
 
     # Delete operations
@@ -2814,40 +2861,73 @@ def HandleCommandlineModeKey(key: Key):
     elif key == Key("Backspace"):
         # When there's a character after the starting char, e.g. ':' and '/' you can't delete it so guard against that here
         # We can backspace/delete if we only have the starting char or the cursor pos is not after the starting char
-        if len(g_CommandlineText) == 1 or g_CommandlineTextCursorPos > 1:
+        if len(g_Commandline.text) == 1 or g_Commandline.cursorPos > 1:
             # Move cursor back one
-            prev_cursor_pos = g_CommandlineTextCursorPos
-            g_CommandlineTextCursorPos = max(0, g_CommandlineTextCursorPos - 1)
+            prev_cursor_pos = g_Commandline.cursorPos
+            g_Commandline.cursorPos = max(0, g_Commandline.cursorPos - 1)
             # Delete character between current and prev cursor pos
-            g_CommandlineText = g_CommandlineText[:g_CommandlineTextCursorPos] + g_CommandlineText[prev_cursor_pos:] 
-            if len(g_CommandlineText) == 0:
+            g_Commandline.text = g_Commandline.text[:g_Commandline.cursorPos] + g_Commandline.text[prev_cursor_pos:] 
+            # Update history buffer
+            history_buffer[-1] = g_Commandline.text[1:]
+            g_Commandline.historyIndex = len(history_buffer)-1 
+            if len(g_Commandline.text) == 0:
                 EnterCommandMode()
             elif is_search:
-                UpdateSearchText(g_CommandlineText[1:])
+                UpdateSearchText(g_Commandline.text[1:])
 
     elif key == Key("Delete"):
-            next_cursor_pos = min(len(g_CommandlineText), g_CommandlineTextCursorPos + 1)
-            g_CommandlineText = g_CommandlineText[:g_CommandlineTextCursorPos] + g_CommandlineText[next_cursor_pos:] 
+            next_cursor_pos = min(len(g_Commandline.text), g_Commandline.cursorPos + 1)
+            g_Commandline.text = g_Commandline.text[:g_Commandline.cursorPos] + g_Commandline.text[next_cursor_pos:] 
+            # Update history buffer
+            history_buffer[-1] = g_Commandline.text[1:]
+            g_Commandline.historyIndex = len(history_buffer)-1 
             if is_search:
-                UpdateSearchText(g_CommandlineText[1:])
+                UpdateSearchText(g_Commandline.text[1:])
     # Navigation
 
     elif key == Key("Left"):
         # max with 1 is intentional here as you can't move before the starting char
-        g_CommandlineTextCursorPos = max(1, g_CommandlineTextCursorPos - 1)
+        g_Commandline.cursorPos = max(1, g_Commandline.cursorPos - 1)
 
     elif key == Key("Right"):
-        g_CommandlineTextCursorPos = min(len(g_CommandlineText), g_CommandlineTextCursorPos + 1)
+        g_Commandline.cursorPos = min(len(g_Commandline.text), g_Commandline.cursorPos + 1)
         
     elif key == Key("Home"):
-        g_CommandlineTextCursorPos = 1
+        g_Commandline.cursorPos = 1
 
     elif key == Key("End"):
-        g_CommandlineTextCursorPos = len(g_CommandlineText) 
+        g_Commandline.cursorPos = len(g_Commandline.text) 
 
+    # History
+    elif key == Key("Up"):
+        g_Commandline.historyIndex = Clamp(0, len(filtered_history_buffer)-1, g_Commandline.historyIndex - 1) 
+        g_Commandline.text = g_Commandline.text[0] + filtered_history_buffer[g_Commandline.historyIndex]
+        g_Commandline.cursorPos = len(g_Commandline.text) 
+
+    elif key == Key("Down"):
+        g_Commandline.historyIndex = Clamp(0, len(filtered_history_buffer)-1, g_Commandline.historyIndex + 1) 
+        g_Commandline.text = g_Commandline.text[0] + filtered_history_buffer[g_Commandline.historyIndex]
+        g_Commandline.cursorPos = len(g_Commandline.text) 
 
     else:
         handled = False
+
+    # On commandline mode exit
+    if g_Mode != Mode.COMMANDLINE:
+        # clean up empty entry
+        if history_buffer[-1] == "":
+            history_buffer.pop()
+        # if entry is already in the history buffer, remove the old one
+        else:
+            # Remove last one so we don't remove it
+            last = history_buffer.pop()
+            try:
+                # Remove existing entry if it exists, there should only be one or none
+                history_buffer.remove(last)
+            except ValueError:
+                pass
+            # Re-add to the end of the history buffer
+            history_buffer.append(last)
 
     UpdateCursorMode()
 
@@ -2855,7 +2935,7 @@ def HandleCommandlineModeKey(key: Key):
 
 #------------------------------------------------------------------------
 def SubmitCommandline(command):
-    global g_CommandlineResultText
+    global g_Commandline
     
     # Call user bindings
     user_result = VimUser.UserHandleCommandline(command)
@@ -2879,18 +2959,18 @@ def SubmitCommandline(command):
 
     if command == ":w" or command == ":W":
         N10X.Editor.ExecuteCommand("SaveFile")
-        g_CommandlineResultText = "Saved " + N10X.Editor.GetCurrentFilename()
-        print(g_CommandlineResultText)
+        g_Commandline.result = "Saved " + N10X.Editor.GetCurrentFilename()
+        print(g_Commandline.result)
         return True
 
     if command == ":wa":
         N10X.Editor.ExecuteCommand("SaveAll")
-        g_CommandlineResultText = "Saved file(s)"
+        g_Commandline.result = "Saved file(s)"
         return True
 
     if command == ":wq":
         N10X.Editor.ExecuteCommand("SaveFile")
-        g_CommandlineResultText = "Saved " + N10X.Editor.GetCurrentFilename()
+        g_Commandline.result = "Saved " + N10X.Editor.GetCurrentFilename()
         N10X.Editor.ExecuteCommand("CloseFile")
         return True
 
@@ -2915,17 +2995,22 @@ def HandleCommandlineModeChar(char):
     global g_ReverseSearch
     global g_LastJumpPoint
     global g_CommandlineText
-    global g_CommandlineTextCursorPos
+    global g_Commandline
 
     # Insert char at cursor pos
-    g_CommandlineText = g_CommandlineText[:g_CommandlineTextCursorPos] + char + g_CommandlineText[g_CommandlineTextCursorPos:]
-    g_CommandlineTextCursorPos += 1
+    g_Commandline.text = g_Commandline.text[:g_Commandline.cursorPos] + char + g_Commandline.text[g_Commandline.cursorPos:]
+    g_Commandline.cursorPos += 1
+
+    # Update last history buffer entry
+    history_buffer = GetHistoryBuffer() 
+    history_buffer[-1] = g_Commandline.text[1:]
+    g_Commandline.historyIndex = len(history_buffer)-1 
 
     UpdateCursorMode()
    
     # searching
-    if IsSearching() and len(g_CommandlineText) > 1:
-        UpdateSearchText(g_CommandlineText[1:])
+    if IsSearching() and len(g_Commandline.text) > 1:
+        UpdateSearchText(g_Commandline.text[1:])
 
     return True
 
@@ -3343,11 +3428,11 @@ def UpdateCursorMode():
             N10X.Editor.SetCursorVisible(0, False)
         N10X.Editor.SetCursorMode("Block")
         # Insert cursor char into commandline text
-        text = g_CommandlineText[:g_CommandlineTextCursorPos] + g_CommandlineCursorChar + g_CommandlineText[g_CommandlineTextCursorPos:]
+        text = g_Commandline.text[:g_Commandline.cursorPos] + g_Commandline.cursorChar + g_Commandline.text[g_Commandline.cursorPos:]
         N10X.Editor.SetStatusBarText(text)
-    elif g_CommandlineResultText:
+    elif g_Commandline.result:
         N10X.Editor.SetCursorVisible(0, True)
-        N10X.Editor.SetStatusBarText(g_CommandlineResultText)
+        N10X.Editor.SetStatusBarText(g_Commandline.result)
         N10X.Editor.SetCursorMode("Block")
     else:
         N10X.Editor.SetCursorVisible(0, True)
@@ -3487,6 +3572,7 @@ def EnableVim():
     global g_SneakEnabled
     global g_VimExitInsertModeCharSequence;
     global g_SmartCaseEnabled
+    global g_UseFilteredCommandlineHistory
 
     if N10X.Editor.GetSetting("VimExitInsertModeCharSequence"):
         g_VimExitInsertModeCharSequence = N10X.Editor.GetSetting("VimExitInsertModeCharSequence")
@@ -3495,11 +3581,12 @@ def EnableVim():
             print("Couldn't set VimExitInsertModeCharSequence, must be 2 or 3 characters in length only") 
 
     # Settings
-    enable_vim           = GetSettingBool("Vim",                    default_value="false")
-    g_SneakEnabled       = GetSettingBool("VimSneakEnabled",        default_value="false")
-    g_SmartCaseEnabled   = GetSettingBool("VimSmartCaseEnabled",    default_value="true") 
-    g_Use10xCommandPanel = GetSettingBool("VimUse10xCommandPanel",  default_value="false")
-    g_Use10xFindPanel    = GetSettingBool("VimUse10xFindPanel",     default_value="false")
+    enable_vim                      = GetSettingBool("Vim",                                 default_value="false")
+    g_SneakEnabled                  = GetSettingBool("VimSneakEnabled",                     default_value="false")
+    g_SmartCaseEnabled              = GetSettingBool("VimSmartCaseEnabled",                 default_value="true") 
+    g_Use10xCommandPanel            = GetSettingBool("VimUse10xCommandPanel",               default_value="false")
+    g_Use10xFindPanel               = GetSettingBool("VimUse10xFindPanel",                  default_value="false")
+    g_UseFilteredCommandlineHistory = GetSettingBool("VimCommandlineFilteredHistory",       default_value="true")
 
     if g_VimEnabled != enable_vim:
         g_VimEnabled = enable_vim
