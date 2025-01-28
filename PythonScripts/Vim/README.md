@@ -23,6 +23,7 @@ VimExitInsertModeCharSequence   |2 or 3 chars |Char sequence to exit insert mode
 VimUse10xCommandPanel           |bool         |Use 10x command panel for commandline mode, i.e. when typing `:`
 VimUse10xFindPanel              |bool         |Use 10x find panel for searching, i.e. when typing `/`
 VimSneakEnabled                 |bool         |Enable vim-sneak motion with `s` and `S`
+VimCommandlineFilteredHistory   |bool         |When navigating through commandline history, the history is filtered based on what is already typed. True by default.
 
 ## Customizing vim 
 
