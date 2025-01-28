@@ -15,7 +15,7 @@ g_VimEnabled = False
 
 # Commandline mode uses 10x's command panel for commands. 
 # E.g. :w :q 
-# Enable in settings with VimUse10xCommandlineMode.  
+# Enable in settings with VimUse10xCommandPanel.  
 g_Use10xCommandPanel = False
 
 # Search with '/' uses 10x's find panel
@@ -2706,6 +2706,7 @@ def HandleCommandModeKey(key: Key):
         N10X.Editor.ExecuteCommand("Redo")
 
     elif key == Key("P", control=True):
+        SubmitVisualModeSelection()
         N10X.Editor.ExecuteCommand("Search")
 
     elif key == Key("U", control=True):
