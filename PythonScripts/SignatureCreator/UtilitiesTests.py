@@ -46,7 +46,7 @@ def _TestSourceCodeLine():
                  "FVector a = (4.f 2.f) int b = 42")
 
 
-def RunTests():
+def _RunSignatureCreatorTests():
     _TestSourceCodeLine()
 
 # Run tests on startup may fail it we test N10X specific editor functionality
