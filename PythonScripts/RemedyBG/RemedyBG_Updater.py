@@ -9,9 +9,9 @@ Setup and Initialization:
         - BeautifulSoup4
         
         To install these modules in 10x's python use the pip command with python3 and set  
-        the target to be 10x's installation directory
-            Example:    python3 -m pip install --target="C:\Program Files\PureDevSoftware\10x" requests
-                        python3 -m pip install --target="C:\Program Files\PureDevSoftware\10x" BeautifulSoup4
+        the target to be 10x's installation directory.  You may need to run cmd/ps as admin
+            Example:    python3 -m pip install --target="C:\Program Files\PureDevSoftware\10x\Lib\site-packages" requests
+                        python3 -m pip install --target="C:\Program Files\PureDevSoftware\10x\Lib\site-packages" BeautifulSoup4
     
     These are also required, but should already be part of 10x      
           - os
@@ -61,6 +61,9 @@ Commands:
     - RDBG_update_latest:   Updates to the latest version
 
 History:
+  0.1.2
+    - Update to handle new forum layout for version scanning
+    - getting settings values will include quotes around strings.  Ensure those quotes arent included
   0.1.1
     - Removed os calls that 10x had permission problems with
     - utilize tempfile instead of C:/tmp
@@ -140,9 +143,9 @@ class VersionChecker:
         self.portal_url = "https://remedybg.itch.io/remedybg/download/{portal_token}" # link to the RemedyBG itch.io download page
         self.download_url = "https://remedybg.itch.io/remedybg/file/{file_id}?source=game_download&key={portal_token}"
         
-        self.portal_url_token   = Editor.GetSetting("RemedyBG_Updater.PortalToken")
-        self.itch_io            = Editor.GetSetting("RemedyBG_Updater.ItchLoginCookie")
-        self.itch_io_token      = Editor.GetSetting("RemedyBG_Updater.ItchLoginToken")
+        self.portal_url_token   = Editor.GetSetting("RemedyBG_Updater.PortalToken").strip('"').strip("'")
+        self.itch_io            = Editor.GetSetting("RemedyBG_Updater.ItchLoginCookie").strip('"').strip("'")
+        self.itch_io_token      = Editor.GetSetting("RemedyBG_Updater.ItchLoginToken").strip('"').strip("'")
         
         # forum-scrape settings
         self.page_start = int(Editor.GetSetting("RemedyBG_Updater.StartPage"))
@@ -178,15 +181,15 @@ class VersionChecker:
             debug_log("[ForumScrape] url: {url}".format(url=cur_url))
             
             soup = BeautifulSoup(page_raw.text, 'html.parser')
-            forum_posts = soup.find_all("div", {"class": "thread-list-item"})
+            forum_posts = soup.find_all("div", {"class": "title nowrap truncate"})
             for forum_post in forum_posts:
-                title_obj = forum_post.find("div", {"class": "title"})
-                title_split = title_obj.text.split(" ")
+            
+                title_split = forum_post.text.split(" ")
                 if title_split[0] == "RemedyBG":
                     title = title_split[0]
                     version = title_split[1].split(".")
                     if len(version) == 4:
-                        url = title_obj.find("a").attrs['href']
+                        url = forum_post.find("a").attrs['href']
                         post_text = self.get_post_text(url)
                         debug_log("[ForumScrape] {title}".format(title=title_split))
                         post = {
@@ -195,6 +198,7 @@ class VersionChecker:
                             'post_url': url,
                             'post_content': post_text
                         }
+
                         self.forum_data.append(post)
                         if len(self.forum_data) >= self.versions_to_find:
                             break
@@ -235,11 +239,12 @@ class VersionChecker:
         }
         download_portal_url = self.portal_url.format(portal_token=self.portal_url_token)
         page_raw = requests.get(download_portal_url, cookies=cookies)
-        
+                
         soup = BeautifulSoup(page_raw.text, 'html.parser')        
         downloadable_objs = soup.find_all("div", {"class": "upload"})
         for downloadable in downloadable_objs:
             file_name = downloadable.find("div", {"class": "upload_name"}).find("strong", {"class": "name"}).text
+
             file_id = downloadable.find("a", {"class": "button download_btn"}).attrs['data-upload_id']
             debug_log("[ItchDownloader] Found File: {download_id} - {filename}".format(download_id = file_id, filename=file_name))
             
