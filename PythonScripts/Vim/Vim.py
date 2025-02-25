@@ -1665,10 +1665,10 @@ def HandleCommandModeChar(char):
 
     elif c == "db":
         N10X.Editor.PushUndoGroup()
-        start = N10X.Editor.GetCursorPos()
+        end = N10X.Editor.GetCursorPos()
         for _ in range(repeat_count):
             MoveToWordStart()
-        end = N10X.Editor.GetCursorPos()
+        start = N10X.Editor.GetCursorPos()
         if start != end:
             end = (max(0, end[0] - 1), end[1])
             SetSelection(start, end)
@@ -1678,10 +1678,10 @@ def HandleCommandModeChar(char):
 
     elif c == "dB":
         N10X.Editor.PushUndoGroup()
-        start = N10X.Editor.GetCursorPos()
+        end = N10X.Editor.GetCursorPos()
         for _ in range(repeat_count):
             MoveToTokenStart()
-        end = N10X.Editor.GetCursorPos()
+        start = N10X.Editor.GetCursorPos()
         if start != end:
             end = (max(0, end[0] - 1), end[1])
             SetSelection(start, end)
@@ -2156,11 +2156,11 @@ def HandleCommandModeChar(char):
 
     elif c == "cb":
         N10X.Editor.PushUndoGroup()
-        start = N10X.Editor.GetCursorPos()
-        MoveToWordStart()
         end = N10X.Editor.GetCursorPos()
+        MoveToWordStart()
+        start = N10X.Editor.GetCursorPos()
         if start != end:
-            end = (max(0, end[0]), end[1])
+            end = (max(0, end[0] - 1), end[1])
             SetSelection(start, end)
             N10X.Editor.ExecuteCommand("Cut")
         N10X.Editor.PopUndoGroup()
@@ -2169,11 +2169,11 @@ def HandleCommandModeChar(char):
 
     elif c == "cB":
         N10X.Editor.PushUndoGroup()
-        start = N10X.Editor.GetCursorPos()
-        MoveToTokenStart()
         end = N10X.Editor.GetCursorPos()
+        MoveToTokenStart()
+        start = N10X.Editor.GetCursorPos()
         if start != end:
-            end = (max(0, end[0]), end[1])
+            end = (max(0, end[0] - 1), end[1])
             SetSelection(start, end)
             N10X.Editor.ExecuteCommand("Cut")
         N10X.Editor.PopUndoGroup()
