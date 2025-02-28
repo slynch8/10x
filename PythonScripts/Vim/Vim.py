@@ -1431,6 +1431,21 @@ def HandleCommandModeChar(char):
       elif char == "K":
           N10X.Editor.ExecuteCommand("MovePanelUp")
 
+      elif char == "n":
+        x, y = N10X.Editor.GetCursorPos()
+        N10X.Editor.ExecuteCommand("DuplicatePanel")
+        N10X.Editor.ExecuteCommand("MovePanelDown")
+        SetCursorPos(x,y)
+    
+      elif char == "v":
+        x, y = N10X.Editor.GetCursorPos()
+        N10X.Editor.ExecuteCommand("DuplicatePanelRight")
+        SetCursorPos(x,y)
+    
+      elif char == "q" or char == "c":
+        # TODO: This should close the pane not the file
+        N10X.Editor.ExecuteCommand("CloseFile")
+
       g_PaneSwap = False
 
     elif c == ".":
