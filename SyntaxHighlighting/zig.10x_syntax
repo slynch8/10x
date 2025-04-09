@@ -1,0 +1,134 @@
+# Format: <SettingName>: <Settingvalue>
+# Setting name must appear at start of line and there must be whitespace after the colon.
+# Multiple values can be comma separated or on subsequent lines.
+#
+# Valid settings for colour rules:
+# REGEX()   A regular expression. Colours entire match or first group.
+# WORD()	Matches a word (case sensitive)
+# WORDI()   Matches a word (case insensitive)
+# TEXT()	Match any text in the line (case sensitive)
+# TEXTI()	Match any text in the line (case insensitive)
+
+#----------------------------------------------
+# settings
+
+Extensions:					.zig
+
+#----------------------------------------------
+# colour rules
+
+Language.Comment:
+REGEX(//.*)
+
+Language.String:
+REGEX(L?"[^"\\]*(?:\\.[^"\\]*)*")
+REGEX(L?'[^'\\]*(?:\\.[^'\\]*)*')
+
+Language.Preprocessor:
+WORD(@import)
+
+Language.Number:
+REGEX((0[xX][a-zA-Z0-9]+))
+REGEX((0[bB][0-9]+))
+REGEX([0-9]+[fd]*[uUlLzZfFdD]*)
+REGEX([0-9]+\.[0-9]*[fd]*[fFdD]*)
+REGEX([0-9]*\.[0-9]+[fd]*[fFdD]*)
+
+Language.Brace:
+TEXT({)
+TEXT(})
+
+Language.Bracket:
+TEXT(()
+TEXT())
+
+Language.SquareBracket:
+TEXT([)
+TEXT(])
+
+Language.SemiColon:
+TEXT(;)
+
+Language.Comma:
+TEXT(,)
+
+Language.Keyword:
+WORD(pub)
+WORD(fn)
+WORD(var)
+WORD(const)
+WORD(if)
+WORD(for)
+WORD(switch)
+WORD(try)
+WORD(void)
+WORD(i8)
+WORD(u8)
+WORD(i16)
+WORD(u16)
+WORD(i32)
+WORD(u32)
+WORD(i64)
+WORD(u64)
+WORD(i128)
+WORD(u128)
+WORD(isize)
+WORD(usize)
+WORD(c_short)
+WORD(c_ushort)
+WORD(c_int)
+WORD(c_uint)
+WORD(c_long)
+WORD(c_ulong)
+WORD(c_longlong)
+WORD(c_ulonglong)
+WORD(c_longdouble)
+WORD(f16)
+WORD(f32)
+WORD(f64)
+WORD(f80)
+WORD(f128)
+WORD(bool)
+WORD(anyopaque)
+WORD(void)
+WORD(noreturn)
+WORD(type)
+WORD(anyerror)
+WORD(comptime_int)
+WORD(comptime_float)
+
+Language.Operator:
+TEXT(.)
+TEXT(:)
+TEXT(-)
+TEXT(>)
+TEXT(=)
+TEXT(+)
+TEXT(-)
+TEXT(*)
+TEXT(/)
+TEXT(%)
+TEXT(<)
+TEXT(>)
+TEXT(.)
+TEXT(!)
+TEXT(|)
+TEXT(&)
+TEXT(:)
+TEXT(~)
+TEXT(?)
+TEXT(^)
+
+Language.MemberFunction:
+REGEX(fn ([a-zA-Z_]+\w*))
+REGEX([a-zA-Z_]+\w*.([a-zA-Z_]+\w*)\()
+
+Language.Function:
+REGEX(\b([a-zA-Z_]+\w*)\()
+
+Language.Class:
+REGEX(([a-zA-Z_]+\w*)\.)
+
+Language.Variable:
+REGEX(\b[a-zA-Z_]+\w*\b)
+

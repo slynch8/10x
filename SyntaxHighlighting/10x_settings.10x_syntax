@@ -1,0 +1,52 @@
+# Format: <SettingName>: <Settingvalue>
+# Setting name must appear at start of line and there must be whitespace after the colon.
+# Multiple values can be comma separated or on subsequent lines.
+#
+# Valid settings for colour rules:
+# REGEX()   A regular expression. Colours entire match or first group.
+# WORD()	Matches a word (case sensitive)
+# WORDI()   Matches a word (case insensitive)
+# TEXT()	Match any text in the line (case sensitive)
+# TEXTI()	Match any text in the line (case insensitive)
+
+#----------------------------------------------
+# settings
+
+Extensions: .10x_settings,.10x_syntax
+
+#----------------------------------------------
+# colour rules
+
+Language.Comment:
+REGEX(#.*)
+
+Language.String:
+REGEX(REGEX\((.*)\))
+REGEX(WORD\((.*)\))
+REGEX(WORDI\((.*)\))
+REGEX(TEXT\((.*)\))
+REGEX(TEXTI\((.*)\))
+
+10x.Setting.Keyword:
+WORD(REGEX)
+WORD(TEXT)
+WORD(TEXTI)
+WORD(WORD)
+WORD(WORDI)
+
+10x.Setting.Name:
+REGEX(^.+:(?:\s|$))
+
+Language.Operator:
+TEXT(:)
+
+Language.Bracket:
+TEXT(()
+TEXT())
+
+10x.Setting.True:
+TEXT(true)
+
+10x.Setting.False:
+TEXT(false)
+

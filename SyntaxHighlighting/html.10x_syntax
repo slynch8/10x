@@ -1,0 +1,38 @@
+# Format: <SettingName>: <Settingvalue>
+# Setting name must appear at start of line and there must be whitespace after the colon.
+# Multiple values can be comma separated or on subsequent lines.
+#
+# Valid settings for colour rules:
+# REGEX()   A regular expression. Colours entire match or first group.
+# WORD()	Matches a word (case sensitive)
+# WORDI()   Matches a word (case insensitive)
+# TEXT()	Match any text in the line (case sensitive)
+# TEXTI()	Match any text in the line (case insensitive)
+
+#----------------------------------------------
+# settings
+
+Extensions:					.html,.htm
+
+BlockCommentStart:			<!--
+
+BlockCommentEnd:			-->
+
+#----------------------------------------------
+# colour rules
+
+Html.ElementName:
+REGEX(<(/?\s*[a-zA-Z0-9\-]+)[\s>])
+
+Html.String:
+REGEX([a-zA-Z0-9]+\s*=\s*(".*?"))
+REGEX([a-zA-Z0-9]+\s*=\s*('.*?'))
+
+Html.AttributeName:
+REGEX(([a-zA-Z0-9\-:]+)\s*=\s*["'])
+TEXT(<!DOCTYPE)
+
+Html.Operator:
+TEXT(<)
+TEXT(>)
+TEXT(=)

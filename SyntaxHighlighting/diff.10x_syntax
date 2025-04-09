@@ -1,0 +1,50 @@
+# Format: <SettingName>: <Settingvalue>
+# Setting name must appear at start of line and there must be whitespace after the colon.
+#
+# Valid settings for colour rules:
+# REGEX()   A regular expression. Colours entire match or first group.
+# WORD()	Matches a word (case sensitive)
+# WORDI()   Matches a word (case insensitive)
+# TEXT()	Match any text in the line (case sensitive)
+# TEXTI()	Match any text in the line (case insensitive)
+
+#----------------------------------------------
+# settings
+
+Extensions:					.diff
+
+#----------------------------------------------
+# colour rules
+
+Language.Custom2:
+REGEX(^-.*)
+REGEX(^<.*)
+REGEX(^>.*)
+REGEX(^! .*)
+
+Language.Custom4:
+REGEX(^\+.*)
+REGEX(^\<\d\+\>.*)
+REGEX(^\*\*\*\*.*)
+REGEX(^---$)
+
+# Some versions of diff have lines like "#c#" and "#d#" (where # is a number)
+Language.Custom5:
+REGEX( @@..*)
+REGEX(^@.*)
+REGEX(^\d\+\(,\d\+\)\=[cda]\d\+\>.*)
+
+Language.Custom7:
+REGEX(^diff\>.*)
+REGEX(^+++ .*)
+REGEX(^Index: .*)
+REGEX(^==== .*)
+REGEX(^\*\*\* .*)
+REGEX(^--- .*)
+
+# Used by git
+Language.Custom1:
+REGEX(^index \x\x\x\x.*)
+
+Language.Custom6:
+REGEX(^#.*)

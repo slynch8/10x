@@ -1,0 +1,133 @@
+# Format: <SettingName>: <Settingvalue>
+# Setting name must appear at start of line and there must be whitespace after the colon.
+# Multiple values can be comma separated or on subsequent lines.
+#
+# Valid settings for colour rules:
+# REGEX()   A regular expression. Colours entire match or first group.
+# WORD()	Matches a word (case sensitive)
+# WORDI()   Matches a word (case insensitive)
+# TEXT()	Match any text in the line (case sensitive)
+# TEXTI()	Match any text in the line (case insensitive)
+
+#----------------------------------------------
+# settings
+
+Extensions:					*.jai
+
+BlockCommentStart:			/*
+BlockCommentEnd:			*/
+
+#----------------------------------------------
+# colour rules
+
+Language.Comment:
+REGEX(//.*)
+
+Language.String:
+REGEX(L?"[^"\\]*(?:\\.[^"\\]*)*")
+REGEX(L?'[^'\\]*(?:\\.[^'\\]*)*')
+
+Language.Preprocessor:
+REGEX(\s*#\s*[a-zA-Z_]+\w*)
+
+Language.Function:
+REGEX(\b([a-zA-Z_].*)::.*\()
+REGEX(\b([a-zA-Z_]+\w*)\()
+
+Language.Variable:
+REGEX(\b([a-zA-Z_].*)::.*;)
+# https://github.com/RobinWragg/JaiTools/blob/92c840d9525aeca0be456c6b17d3231d7e289b8d/Jai.sublime-syntax#L21C33-L21C33
+REGEX((?:\b|\$+)[a-zA-Z_]\w*)
+
+Language.MemberVariable:
+REGEX((?:\.)([a-zA-Z_]+\w*))
+
+Language.MemberFunction:
+REGEX((?:\.)([a-zA-Z_]+\w*)\()
+
+Language.Brace:
+TEXT({)
+TEXT(})
+
+Language.Bracket:
+TEXT(()
+TEXT())
+
+Language.SquareBracket:
+TEXT([)
+TEXT(])
+
+Language.SemiColon:
+TEXT(;)
+
+Language.Comma:
+TEXT(,)
+
+Language.Keyword:
+WORD(bool)
+WORD(int)
+WORD(u8)
+WORD(u16)
+WORD(u32)
+WORD(u64)
+WORD(s8)
+WORD(s16)
+WORD(s32)
+WORD(s64)
+WORD(float32)
+WORD(float64)
+WORD(f32) # Should hopefully get added soon?
+WORD(f64) # Should hopefully get added soon?
+WORD(string)
+WORD(struct)
+WORD(then)
+WORD(if)
+WORD(else)
+WORD(ifx)
+WORD(switch)
+WORD(case)
+WORD(using)
+WORD(null)
+WORD(is_constant)
+WORD(union)
+WORD(interface)
+WORD(code_of)
+WORD(defer)
+WORD(inline)
+WORD(no_inline)
+WORD(return)
+WORD(true)
+WORD(false)
+WORD(push_context)
+WORD(enum_flags)
+WORD(while)
+WORD(struct)
+WORD(break)
+WORD(continue)
+WORD(size_of)
+WORD(type_of)
+WORD(for)
+WORD(xx)
+
+Language.Operator:
+TEXT(.)
+TEXT(:)
+TEXT(-)
+TEXT(>)
+TEXT(=)
+TEXT(+)
+TEXT(-)
+TEXT(*)
+TEXT(<<)
+TEXT(/)
+TEXT(%)
+TEXT(<)
+TEXT(>)
+TEXT(.)
+TEXT($)
+TEXT(\)
+TEXT(!)
+TEXT(|)
+TEXT(:)
+TEXT(~)
+TEXT(?)

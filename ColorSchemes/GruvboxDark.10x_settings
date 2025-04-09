@@ -377,3 +377,17 @@ Editor.BraceDepth5:                 default
 Editor.BraceDepth6:                 default
 
 
+# Debugger step line
+Editor.DebuggerStepLine:            default
+
+
+# Status bar line colour while debugging
+Editor.DebuggingStatusBarColour:    default
+
+
+# Status bar colour
+Editor.StatusBarColour:             default
+
+
+# Status bar text colour
+Editor.StatusBarTextColour:         251, 241, 199
