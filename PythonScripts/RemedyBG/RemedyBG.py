@@ -1,7 +1,7 @@
 '''
 RemedyBG debugger integration for 10x (10xeditor.com) 
 RemedyBG: https://remedybg.handmade.network/ (should be above 0.3.8)
-Version: 0.12.0
+Version: 0.12.1
 Original Script author: septag@discord / septag@pm.me
 
 To get started go to Settings.10x_settings, and enable the hook, by adding this line:
@@ -49,6 +49,9 @@ RemedyBG sessions:
     and it will load that next time instead of starting a new session
 
 History:
+  0.12.1 
+    - Output a debug message to indicate we are retrying a debugger connection 
+    
   0.12.0
     - Added 10x CommandLineArgSelector support with immediate changes to RemedyBG session. Needs RemedyBG v0.4.0.4 and higher.
     
@@ -769,10 +772,11 @@ class RDBG_Session:
             # we have to keep trying for some time, because depending on the machine, it might take a while until remedybg creates pipes
             pipe_success:bool = False
             wait_time:float = 0.1
-            for retry in range(0, 5):
+            for retry in range(0, 6):
                 try:
                     self.cmd_pipe = win32file.CreateFile(name, win32file.GENERIC_READ|win32file.GENERIC_WRITE, 0, None, win32file.OPEN_EXISTING, 0, None)
                 except pywintypes.error:
+                    print("RDBG: Retrying debugger connection (%d tries) ..." % (retry+1))
                     time.sleep(wait_time)
                     wait_time = wait_time*2.0
                     continue
