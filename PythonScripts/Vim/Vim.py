@@ -230,8 +230,20 @@ def SetCursorPos(x=None, y=None, max_offset=1, override_horizontal_target=True):
     N10X.Editor.SetCursorPos((x, y))
     g_PrevCursorX, g_PrevCursorY = N10X.Editor.GetCursorPos()
 
+    if N10X.Editor.GetSetting("HideMouseCursorWhileTyping"):
+        N10X.Editor.HideMouseCursor()
+
 #------------------------------------------------------------------------
 def MoveCursorPos(x_delta=0, y_delta=0, max_offset=1, override_horizontal_target=True):
+
+    if not x_delta:
+        if y_delta == -1:
+            N10X.Editor.ExecuteCommand("MoveCursorUp")
+            return
+        elif y_delta == 1:
+            N10X.Editor.ExecuteCommand("MoveCursorDown")
+            return
+
     x, y = N10X.Editor.GetCursorPos()
     x += x_delta
     y += y_delta
