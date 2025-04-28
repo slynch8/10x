@@ -8,6 +8,7 @@ To use these scripts copy them to the %appdata%\10x\PythonScripts folder.
 |Script name                        |Description|
 |---                                |:---:      |
 AddInclude.py                       |Adds include path for current symbol
+AutoDarkMode.py                     |Track active windows theme and sets appropriate color scheme
 ClangFormat.py                      |clang-format plugin for 10x
 CMakeIntegration.py                 |Builds cmake projects using cmake commandline
 CompileDbCmd.py                     |Single file compile command for projects with compile commands database
