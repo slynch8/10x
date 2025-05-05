@@ -1,7 +1,7 @@
 '''
 RemedyBG debugger integration for 10x (10xeditor.com) 
 RemedyBG: https://remedybg.handmade.network/ (should be above 0.3.8)
-Version: 0.12.1
+Version: 0.12.2
 Original Script author: septag@discord / septag@pm.me
 
 To get started go to Settings.10x_settings, and enable the hook, by adding this line:
@@ -16,7 +16,6 @@ RDBG_Options:
     - RemedyBG.Hook: (default=False) Hook RemedyBg into default Start/Stop/Restart debugging commands instead of the msvc debugger integration
     - RemedyBG.Path: Path to remedybg.exe. If not set, the script will assume remedybg.exe is in PATH or current dir
     - RemedyBG.OutputDebugText: (default=True) receives and output debug text to 10x output
-    - RemedyBG.WorkDir: Path that remedy will use as a working directory, if not specified it will use the 'Run Working Directory' of the workspace settings.
     - RemedyBG.KeepSessionOnActiveChange: (default=False) when active project or config is changed, it leaves the previously opened RemedyBG session
                                            This is useful when you want to debug multiple binaries within a project like client/server apps
     - RemedyBG.StartProcessExtraCommand: Extra 10x command that will be executed after process is started in RemedyBG. Several commands can be separated by semicolon.
@@ -49,6 +48,9 @@ RemedyBG sessions:
     and it will load that next time instead of starting a new session
 
 History:
+  0.12.2
+    - Improvements and minor fixes for Debug commands and Debug arguments 
+
   0.12.1 
     - Output a debug message to indicate we are retrying a debugger connection 
     
@@ -638,23 +640,6 @@ class RDBG_Session:
 
         return 1
     
-    def get_work_dir(self)->str:
-        debug_cwd = Editor.GetDebugCommandCwd().strip()
-        work_dir = Editor.GetSetting("RemedyBG.WorkDir")
-        if not work_dir:
-            work_dir = os.path.dirname(os.path.abspath(Editor.GetWorkspaceFilename()))
-            if debug_cwd:
-                # if debug_cwd not a valid directory. cwd might be relative path. so try appending debug_cwd to the end of workspace_dir and use that instead 
-                # otherwise it's an absolute path, so just use debug_cwd instead
-                if not os.path.isdir(debug_cwd):
-                    potential_work_dir = os.path.join(work_dir, debug_cwd)
-                    if os.path.isdir(potential_work_dir):
-                        work_dir = potential_work_dir
-                else:
-                    work_dir = debug_cwd
-                    
-        return os.path.abspath(work_dir)
-
     def save_session_ref(self):
         workspace_path:str = Editor.GetAppDataWorkspacePath()
         if os.path.isdir(workspace_path):
@@ -744,25 +729,38 @@ class RDBG_Session:
                         session_filepath = None
                         self.save_session_ref()
                     break
+        
+            debug_cmd = Editor.GetDebugCommand().strip()
+            debug_args = Editor.GetDebugCommandArgs().strip()
+            debug_cwd = Editor.GetDebugCommandCwd().strip()
+            # If "WorkingDirectory" is not set, use debug command's directory if it's absolute path, otherwise use workspace's directory
+            if not debug_cwd:
+                if os.path.isabs(debug_cmd):
+                    debug_cwd = os.path.dirname(debug_cmd)
+                else:
+                    debug_cwd = os.path.dirname(os.path.abspath(Editor.GetWorkspaceFilename()))
+            if not os.path.isdir(debug_cwd):
+                Editor.ShowMessageBox(RDBG_TITLE, 'Debugger working directory is invalid: "{}"'.format(debug_cwd))
+                return False
 
             if session_filepath and os.path.isfile(session_filepath):
                 args = gOptions.executable + ' --servername ' + self.name + ' "' + session_filepath + '"'
-                work_dir = self.get_work_dir()
             else:
-                debug_cmd = Editor.GetDebugCommand().strip()
-                debug_args = Editor.GetDebugCommandArgs().strip()
-
                 if debug_cmd == '':
                     Editor.ShowMessageBox(RDBG_TITLE, 'Debug command is empty. Perhaps active project is not set in workspace tree?')
+                    return False                
+
+                orig_cwd = os.getcwd()
+                os.chdir(debug_cwd)
+                executable_exists = os.path.isfile(debug_cmd)
+                os.chdir(orig_cwd)
+                if not executable_exists:
+                    Editor.ShowMessageBox(RDBG_TITLE, 'Debugger executable does not exist: "{}" (cwd: "{}")'.format(debug_cmd, debug_cwd))
                     return False
 
-                work_dir = self.get_work_dir()
                 args = gOptions.executable + ' --servername ' + self.name + ' "' + debug_cmd + '"' + (' ' if debug_args!='' else '') + debug_args
 
-            if work_dir != '' and not os.path.isdir(work_dir):
-                Editor.ShowMessageBox(RDBG_TITLE, 'Debugger working directory is invalid: ' + work_dir)
-
-            self.process = subprocess.Popen(args, cwd=work_dir)
+            self.process = subprocess.Popen(args, cwd=debug_cwd)
             time.sleep(0.1)
 
             assert self.cmd_pipe == None
