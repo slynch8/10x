@@ -1574,6 +1574,15 @@ def HandleCommandModeChar(char):
     elif c == "g":
         return
 
+    elif c == "H":
+        scroll_line = N10X.Editor.GetScrollLine()
+        SetCursorPos(y=scroll_line+1)
+
+    elif c == "L":
+        scroll_line = N10X.Editor.GetScrollLine()
+        visible_line_count = N10X.Editor.GetVisibleLineCount()
+        SetCursorPos(y=scroll_line + visible_line_count-2)
+
     elif c == "M":
         scroll_line = N10X.Editor.GetScrollLine()
         visible_line_count = N10X.Editor.GetVisibleLineCount()
@@ -1958,6 +1967,14 @@ def HandleCommandModeChar(char):
         N10X.Editor.ExecuteCommand("Cut")
         N10X.Editor.PopUndoGroup()
         should_save = True
+
+    elif c == "X":
+        x, y = N10X.Editor.GetCursorPos()
+        x -= 1
+        N10X.Editor.PushUndoGroup()
+        SetSelection((x - repeat_count +1, y), (x , y))
+        N10X.Editor.ExecuteCommand("Delete")
+        N10X.Editor.PopUndoGroup()
 
     elif not g_SneakEnabled and c == "s":
         x, y = N10X.Editor.GetCursorPos()
@@ -2392,6 +2409,26 @@ def HandleCommandModeChar(char):
         N10X.Editor.PopUndoGroup()
         should_save = True
 
+    elif c == ">j":
+        N10X.Editor.PushUndoGroup()
+        x, y = N10X.Editor.GetCursorPos()
+        SetLineSelection(y, y + repeat_count)
+        N10X.Editor.ExecuteCommand("IndentLine")
+        N10X.Editor.ClearSelection()
+        SetCursorPos(x, y)
+        N10X.Editor.PopUndoGroup()
+        should_save = True
+
+    elif c == ">k":
+        N10X.Editor.PushUndoGroup()
+        x, y = N10X.Editor.GetCursorPos()
+        SetLineSelection(y, y - repeat_count)
+        N10X.Editor.ExecuteCommand("IndentLine")
+        N10X.Editor.ClearSelection()
+        SetCursorPos(x, y)
+        N10X.Editor.PopUndoGroup()
+        should_save = True
+
     elif c == "<":
         return
 
@@ -2405,6 +2442,25 @@ def HandleCommandModeChar(char):
         N10X.Editor.PopUndoGroup()
         should_save = True
 
+    elif c == "<j":
+        N10X.Editor.PushUndoGroup()
+        x, y = N10X.Editor.GetCursorPos()
+        SetLineSelection(y, y + repeat_count)
+        N10X.Editor.ExecuteCommand("UnindentLine")
+        N10X.Editor.ClearSelection()
+        SetCursorPos(x, y)
+        N10X.Editor.PopUndoGroup()
+        should_save = True
+
+    elif c == "<k":
+        N10X.Editor.PushUndoGroup()
+        x, y = N10X.Editor.GetCursorPos()
+        SetLineSelection(y, y - repeat_count)
+        N10X.Editor.ExecuteCommand("UnindentLine")
+        N10X.Editor.ClearSelection()
+        SetCursorPos(x, y)
+        N10X.Editor.PopUndoGroup()
+        should_save = True
     # Undo/Redo
 
     elif c == "u":
