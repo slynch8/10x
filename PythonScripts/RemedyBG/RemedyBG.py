@@ -1,7 +1,7 @@
 '''
 RemedyBG debugger integration for 10x (10xeditor.com) 
 RemedyBG: https://remedybg.handmade.network/ (should be above 0.3.8)
-Version: 0.12.2
+Version: 0.12.3
 Original Script author: septag@discord / septag@pm.me
 
 To get started go to Settings.10x_settings, and enable the hook, by adding this line:
@@ -48,6 +48,9 @@ RemedyBG sessions:
     and it will load that next time instead of starting a new session
 
 History:
+  0.12.3
+    - Fixed a bug while setting debug arguments from Args selector introduced in the last build
+
   0.12.2
     - Improvements and minor fixes for Debug commands and Debug arguments 
 
@@ -376,6 +379,7 @@ class RDBG_Session:
         self.session_refs = []  # contains remedybg session filepath for each project config (see active_project formatting)
         self.rdbg_current_session_filepath = None
         self.first_start = True
+        self.cwd_dir:str = ""
 
         workspace_name:str = os.path.basename(Editor.GetWorkspaceFilename())
         self.update_active_project()
@@ -792,6 +796,7 @@ class RDBG_Session:
 
             assert self.event_pipe == None
             name = name + '-events'
+            self.cwd_dir = os.path.abspath(debug_cwd)
             self.event_pipe = win32file.CreateFile(name, win32file.GENERIC_READ|256, 0, None, win32file.OPEN_EXISTING, 0, None)
             win32pipe.SetNamedPipeHandleState(self.event_pipe, win32pipe.PIPE_READMODE_MESSAGE, None, None)
 
@@ -1236,9 +1241,9 @@ def _RDBG_DebugCommandLineChanged():
         configs = gSession.send_command(RDBG_Command.GET_SESSION_CONFIGS)
         for config in configs:
             if config['id'] == config_id:
-                config['command'] = Editor.GetDebugCommand()
+                config['command'] = os.path.abspath(Editor.GetDebugCommand())
                 config['command_args'] = Editor.GetDebugCommandArgs()
-                config['working_dir'] = gSession.get_work_dir()
+                config['working_dir'] = gSession.cwd_dir
                 gSession.send_command(RDBG_Command.MODIFY_SESSION_CONFIG, 
                                       config_id=config_id,
                                       command = config['command'],
