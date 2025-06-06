@@ -128,15 +128,21 @@ class Key:
     """
     def __init__(self, key, shift=False, control=False, alt=False):
         self.key = key
-        self.shift = shift
-        self.control = control
-        self.alt = alt
+        self.shift = bool(shift)
+        # In 10x AltGr will come through with the following set 
+        self.alt_gr = bool(key == "Alt" and control and alt)
+        # We need to make sure we mask these out if alt_gr is True
+        self.control = bool(control) and not self.alt_gr
+        self.alt = bool(alt) and not self.alt_gr 
 
     def __eq__(self, rhs):
         return self.key == rhs.key and self.shift == rhs.shift and self.control == rhs.control and self.alt == rhs.alt 
 
     def __ne__(self, rhs):
         return not self.__eq__(rhs)
+
+    def __str__(self):
+        return f"Key: Key={self.key} Shift={self.shift} Control={self.control} Alt={self.alt} AltGr={self.alt_gr}"
 
 class RecordedKey:
     KEY = 0
@@ -2874,9 +2880,11 @@ def HandleCommandModeKey(key: Key):
     else:
         handled = False
 
+        # Note: Only pass through for control and alt when combinations are used, i.e. not when control or alt has been pressed by itself. This fixes issues where non ISO/ANSI keyboards need to use these keys for accessing other characters that ISO/ANSI use for shift.
+            
         pass_through = \
-            key.control or \
-            key.alt or \
+            (key.control and key.key != "Control") or \
+            (key.alt and key.key != "Alt") or \
             key.key == "Backspace" or \
             key.key == "Up" or \
             key.key == "Down" or \
