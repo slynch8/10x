@@ -128,15 +128,21 @@ class Key:
     """
     def __init__(self, key, shift=False, control=False, alt=False):
         self.key = key
-        self.shift = shift
-        self.control = control
-        self.alt = alt
+        self.shift = bool(shift)
+        # In 10x AltGr will come through with the following set 
+        self.alt_gr = bool(key == "Alt" and control and alt)
+        # We need to make sure we mask these out if alt_gr is True
+        self.control = bool(control) and not self.alt_gr
+        self.alt = bool(alt) and not self.alt_gr 
 
     def __eq__(self, rhs):
         return self.key == rhs.key and self.shift == rhs.shift and self.control == rhs.control and self.alt == rhs.alt 
 
     def __ne__(self, rhs):
         return not self.__eq__(rhs)
+
+    def __str__(self):
+        return f"Key: Key={self.key} Shift={self.shift} Control={self.control} Alt={self.alt} AltGr={self.alt_gr}"
 
 class RecordedKey:
     KEY = 0
@@ -1202,7 +1208,7 @@ def SelectOrMoveInsideBlock(c, count=1, insert_after_move=False):
     return False 
 
 #------------------------------------------------------------------------
-def GetAroundWordSelection(start, wrap=True):
+def GetAroundWordSelection(start):
     x, y = start
 
     start_x = x
@@ -1211,7 +1217,6 @@ def GetAroundWordSelection(start, wrap=True):
     line = GetLine(y)
 
     character_class = GetCharacterClass(line[end_x])
-    alt_class = CharacterClass.WHITESPACE if character_class == CharacterClass.WORD else CharacterClass.WORD            
 
     line_len = len(line)
 
@@ -1247,6 +1252,65 @@ def GetInsideWordSelection(start):
     while start_x > 0 and GetCharacterClass(line[start_x - 1]) == character_class:
         start_x -= 1
 
+    return (start_x, y), (end_x, y)
+
+#------------------------------------------------------------------------
+def GetAroundWordSelectionWithPunctuation(start):
+    x, y = start
+
+    start_x = x
+    end_x = x
+
+    line = GetLine(y)
+
+    line_len = len(line)
+
+    is_start_whitespace = GetCharacterClass(line[end_x]) == CharacterClass.WHITESPACE
+
+    while end_x < line_len - 1:
+        curr_class = GetCharacterClass(line[end_x + 1])
+        if end_x < line_len - 2:
+            next_class = GetCharacterClass(line[end_x + 2])
+            if is_start_whitespace:
+                if curr_class != CharacterClass.WHITESPACE and next_class == CharacterClass.WHITESPACE:
+                    end_x += 1
+                    break
+            else:
+                if curr_class == CharacterClass.WHITESPACE and next_class != CharacterClass.WHITESPACE:
+                    end_x += 1
+                    break
+        end_x += 1
+
+    while start_x > 0 and     (is_start_whitespace and GetCharacterClass(line[start_x - 1]) == CharacterClass.WHITESPACE) or \
+                          (not is_start_whitespace and GetCharacterClass(line[start_x - 1]) != CharacterClass.WHITESPACE):
+        start_x -= 1
+
+    return (start_x, y), (end_x, y)
+
+
+#------------------------------------------------------------------------
+def GetInsideWordSelectionWithPunctuation(start):
+    x, y = start
+    x = min(GetLineLength(y) - 1, x)
+
+    start_x = x
+    end_x = x
+
+    line = GetLine(y)
+
+    character_class = GetCharacterClass(line[end_x])
+    if character_class != CharacterClass.WHITESPACE:
+        while end_x < len(line) - 1 and GetCharacterClass(line[end_x + 1]) != CharacterClass.WHITESPACE:
+            end_x += 1
+
+        while start_x > 0 and GetCharacterClass(line[start_x - 1]) != CharacterClass.WHITESPACE:
+            start_x -= 1
+    else:
+        while end_x < len(line) - 1 and GetCharacterClass(line[end_x + 1]) == CharacterClass.WHITESPACE:
+            end_x += 1
+
+        while start_x > 0 and GetCharacterClass(line[start_x - 1]) == CharacterClass.WHITESPACE:
+            start_x -= 1
     return (start_x, y), (end_x, y)
 
 #------------------------------------------------------------------------
@@ -1734,9 +1798,27 @@ def HandleCommandModeChar(char):
         N10X.Editor.PopUndoGroup()
         should_save = True
 
+    elif c == "diW":
+        N10X.Editor.PushUndoGroup()
+        start, end = GetInsideWordSelectionWithPunctuation(N10X.Editor.GetCursorPos())
+        SetSelection(start, end)
+        N10X.Editor.ExecuteCommand("Cut")
+        SetCursorPos(start[0], start[1])
+        N10X.Editor.PopUndoGroup()
+        should_save = True
+
     elif c == "daw":
         N10X.Editor.PushUndoGroup()
         start, end = GetAroundWordSelection(N10X.Editor.GetCursorPos())
+        SetSelection(start, end)
+        N10X.Editor.ExecuteCommand("Cut")
+        SetCursorPos(start[0], start[1])
+        N10X.Editor.PopUndoGroup()
+        should_save = True
+
+    elif c == "daW":
+        N10X.Editor.PushUndoGroup()
+        start, end = GetAroundWordSelectionWithPunctuation(N10X.Editor.GetCursorPos())
         SetSelection(start, end)
         N10X.Editor.ExecuteCommand("Cut")
         SetCursorPos(start[0], start[1])
@@ -2231,8 +2313,22 @@ def HandleCommandModeChar(char):
         EnterInsertMode()
         should_save = True
 
+    elif c == "ciW":
+        start, end = GetInsideWordSelectionWithPunctuation(N10X.Editor.GetCursorPos())
+        SetSelection(start, end)
+        N10X.Editor.ExecuteCommand("Cut")
+        EnterInsertMode()
+        should_save = True
+
     elif c == "caw":
         start, end = GetAroundWordSelection(N10X.Editor.GetCursorPos())
+        SetSelection(start, end)
+        N10X.Editor.ExecuteCommand("Cut")
+        EnterInsertMode()
+        should_save = True
+
+    elif c == "caW":
+        start, end = GetAroundWordSelectionWithPunctuation(N10X.Editor.GetCursorPos())
         SetSelection(start, end)
         N10X.Editor.ExecuteCommand("Cut")
         EnterInsertMode()
@@ -2510,8 +2606,20 @@ def HandleCommandModeChar(char):
         N10X.Editor.ExecuteCommand("Copy")
         SetCursorPos(start[0], start[1])
 
+    elif c == "yiW":
+        start, end = GetInsideWordSelectionWithPunctuation(N10X.Editor.GetCursorPos())
+        SetSelection(start, end)
+        N10X.Editor.ExecuteCommand("Copy")
+        SetCursorPos(start[0], start[1])
+
     elif c == "yaw":
         start, end = GetAroundWordSelection(N10X.Editor.GetCursorPos())
+        SetSelection(start, end)
+        N10X.Editor.ExecuteCommand("Copy")
+        SetCursorPos(start[0], start[1])
+
+    elif c == "yaW":
+        start, end = GetAroundWordSelectionWithPunctuation(N10X.Editor.GetCursorPos())
         SetSelection(start, end)
         N10X.Editor.ExecuteCommand("Copy")
         SetCursorPos(start[0], start[1])
@@ -2874,9 +2982,11 @@ def HandleCommandModeKey(key: Key):
     else:
         handled = False
 
+        # Note: Only pass through for control and alt when combinations are used, i.e. not when control or alt has been pressed by itself. This fixes issues where non ISO/ANSI keyboards need to use these keys for accessing other characters that ISO/ANSI access by pressing shift, .e.g { on German keyboards.
+            
         pass_through = \
-            key.control or \
-            key.alt or \
+            (key.control and key.key != "Control") or \
+            (key.alt and key.key != "Alt") or \
             key.key == "Backspace" or \
             key.key == "Up" or \
             key.key == "Down" or \
@@ -3409,9 +3519,19 @@ def HandleVisualModeChar(char):
         start, end = GetInsideWordSelection(N10X.Editor.GetCursorPos())
         AddVisualModeSelection(start, end)
 
+    elif c == "iW":
+        g_Mode = Mode.VISUAL
+        start, end = GetInsideWordSelectionWithPunctuation(N10X.Editor.GetCursorPos())
+        AddVisualModeSelection(start, end)
+
     elif c == "aw":
         g_Mode = Mode.VISUAL
         start, end = GetAroundWordSelection(N10X.Editor.GetCursorPos())
+        AddVisualModeSelection(start, end)
+
+    elif c == "aW":
+        g_Mode = Mode.VISUAL
+        start, end = GetAroundWordSelectionWithPunctuation(N10X.Editor.GetCursorPos())
         AddVisualModeSelection(start, end)
 
     elif (m := re.match("i" + g_BlockMatch, c)):
