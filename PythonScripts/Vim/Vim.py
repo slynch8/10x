@@ -1272,7 +1272,12 @@ def GetInsideWordSelectionWithPunctuation(start):
 
         while start_x > 0 and GetCharacterClass(line[start_x - 1]) != CharacterClass.WHITESPACE:
             start_x -= 1
+    else:
+        while end_x < len(line) - 1 and GetCharacterClass(line[end_x + 1]) == CharacterClass.WHITESPACE:
+            end_x += 1
 
+        while start_x > 0 and GetCharacterClass(line[start_x - 1]) == CharacterClass.WHITESPACE:
+            start_x -= 1
     return (start_x, y), (end_x, y)
 
 #------------------------------------------------------------------------
