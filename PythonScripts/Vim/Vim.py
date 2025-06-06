@@ -1256,6 +1256,26 @@ def GetInsideWordSelection(start):
     return (start_x, y), (end_x, y)
 
 #------------------------------------------------------------------------
+def GetInsideWordSelectionWithPunctuation(start):
+    x, y = start
+    x = min(GetLineLength(y) - 1, x)
+
+    start_x = x
+    end_x = x
+
+    line = GetLine(y)
+
+    character_class = GetCharacterClass(line[end_x])
+    if character_class != CharacterClass.WHITESPACE:
+        while end_x < len(line) - 1 and GetCharacterClass(line[end_x + 1]) != CharacterClass.WHITESPACE:
+            end_x += 1
+
+        while start_x > 0 and GetCharacterClass(line[start_x - 1]) != CharacterClass.WHITESPACE:
+            start_x -= 1
+
+    return (start_x, y), (end_x, y)
+
+#------------------------------------------------------------------------
 def GetQuoteSelection(c, start, whitespace=True):
     x, y = start
 
@@ -1734,6 +1754,15 @@ def HandleCommandModeChar(char):
     elif c == "diw":
         N10X.Editor.PushUndoGroup() 
         start, end = GetInsideWordSelection(N10X.Editor.GetCursorPos())
+        SetSelection(start, end)
+        N10X.Editor.ExecuteCommand("Cut")
+        SetCursorPos(start[0], start[1])
+        N10X.Editor.PopUndoGroup()
+        should_save = True
+
+    elif c == "diW":
+        N10X.Editor.PushUndoGroup()
+        start, end = GetInsideWordSelectionWithPunctuation(N10X.Editor.GetCursorPos())
         SetSelection(start, end)
         N10X.Editor.ExecuteCommand("Cut")
         SetCursorPos(start[0], start[1])
@@ -2237,6 +2266,13 @@ def HandleCommandModeChar(char):
         EnterInsertMode()
         should_save = True
 
+    elif c == "ciW":
+        start, end = GetInsideWordSelectionWithPunctuation(N10X.Editor.GetCursorPos())
+        SetSelection(start, end)
+        N10X.Editor.ExecuteCommand("Cut")
+        EnterInsertMode()
+        should_save = True
+
     elif c == "caw":
         start, end = GetAroundWordSelection(N10X.Editor.GetCursorPos())
         SetSelection(start, end)
@@ -2512,6 +2548,12 @@ def HandleCommandModeChar(char):
 
     elif c == "yiw":
         start, end = GetInsideWordSelection(N10X.Editor.GetCursorPos())
+        SetSelection(start, end)
+        N10X.Editor.ExecuteCommand("Copy")
+        SetCursorPos(start[0], start[1])
+
+    elif c == "yiW":
+        start, end = GetInsideWordSelectionWithPunctuation(N10X.Editor.GetCursorPos())
         SetSelection(start, end)
         N10X.Editor.ExecuteCommand("Copy")
         SetCursorPos(start[0], start[1])
@@ -3415,6 +3457,11 @@ def HandleVisualModeChar(char):
     elif c == "iw":
         g_Mode = Mode.VISUAL
         start, end = GetInsideWordSelection(N10X.Editor.GetCursorPos())
+        AddVisualModeSelection(start, end)
+
+    elif c == "iW":
+        g_Mode = Mode.VISUAL
+        start, end = GetInsideWordSelectionWithPunctuation(N10X.Editor.GetCursorPos())
         AddVisualModeSelection(start, end)
 
     elif c == "aw":
