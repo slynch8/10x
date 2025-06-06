@@ -2880,7 +2880,7 @@ def HandleCommandModeKey(key: Key):
     else:
         handled = False
 
-        # Note: Only pass through for control and alt when combinations are used, i.e. not when control or alt has been pressed by itself. This fixes issues where non ISO/ANSI keyboards need to use these keys for accessing other characters that ISO/ANSI use for shift.
+        # Note: Only pass through for control and alt when combinations are used, i.e. not when control or alt has been pressed by itself. This fixes issues where non ISO/ANSI keyboards need to use these keys for accessing other characters that ISO/ANSI access by pressing shift, .e.g { on German keyboards.
             
         pass_through = \
             (key.control and key.key != "Control") or \
