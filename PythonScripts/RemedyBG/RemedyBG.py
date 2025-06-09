@@ -762,7 +762,7 @@ class RDBG_Session:
                     Editor.ShowMessageBox(RDBG_TITLE, 'Debugger executable does not exist: "{}" (cwd: "{}")'.format(debug_cmd, debug_cwd))
                     return False
 
-                args = gOptions.executable + ' --servername ' + self.name + ' "' + debug_cmd + '"' + (' ' if debug_args!='' else '') + debug_args
+                args = gOptions.executable + ' --servername "' + self.name + '" "' + debug_cmd + '"' + (' ' if debug_args!='' else '') + debug_args
 
             self.process = subprocess.Popen(args, cwd=debug_cwd)
             time.sleep(0.1)
