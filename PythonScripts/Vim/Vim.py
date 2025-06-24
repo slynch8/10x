@@ -2228,7 +2228,7 @@ def HandleCommandModeChar(char):
         N10X.Editor.PopUndoGroup()
         should_save = True
 
-     elif c == "ce":
+    elif c == "ce":
         N10X.Editor.PushUndoGroup()
         start = N10X.Editor.GetCursorPos()
         for i in range(repeat_count):
@@ -2254,7 +2254,7 @@ def HandleCommandModeChar(char):
         N10X.Editor.PopUndoGroup()
         should_save = True
 
-      elif c == "cw":
+    elif c == "cw":
         N10X.Editor.PushUndoGroup()
         start = N10X.Editor.GetCursorPos()
         for i in range(repeat_count):
@@ -2279,8 +2279,8 @@ def HandleCommandModeChar(char):
         EnterInsertMode()
         N10X.Editor.PopUndoGroup()
         should_save = True
-
- elif c == "cb": 
+    
+    elif c == "cb": 
         N10X.Editor.PushUndoGroup()
         start = N10X.Editor.GetCursorPos()
         for i in range(repeat_count):
