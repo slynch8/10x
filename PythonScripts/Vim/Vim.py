@@ -2280,7 +2280,7 @@ def HandleCommandModeChar(char):
         N10X.Editor.PopUndoGroup()
         should_save = True
 
- elif c == "cb":
+ elif c == "cb": 
         N10X.Editor.PushUndoGroup()
         start = N10X.Editor.GetCursorPos()
         for i in range(repeat_count):
