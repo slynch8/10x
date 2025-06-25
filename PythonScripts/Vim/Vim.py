@@ -2231,79 +2231,81 @@ def HandleCommandModeChar(char):
     elif c == "ce":
         N10X.Editor.PushUndoGroup()
         start = N10X.Editor.GetCursorPos()
-        MoveToWordEnd()
+        for i in range(repeat_count):
+            MoveToWordEnd()
         end = N10X.Editor.GetCursorPos()
-        if start != end:
-            end = (max(0, end[0]), end[1])
-            SetSelection(start, end)
-            N10X.Editor.ExecuteCommand("Cut")
-        N10X.Editor.PopUndoGroup()
+        SetSelection(start, end)
+        N10X.Editor.ExecuteCommand("Cut")
+        SetCursorPos(start[0], start[1], max_offset=0)
         EnterInsertMode()
+        N10X.Editor.PopUndoGroup()
         should_save = True
 
     elif c == "cE":
         N10X.Editor.PushUndoGroup()
         start = N10X.Editor.GetCursorPos()
-        MoveToTokenEnd()
+        for i in range(repeat_count):
+            MoveToTokenEnd()
         end = N10X.Editor.GetCursorPos()
-        if start != end:
-            end = (max(0, end[0]), end[1])
-            SetSelection(start, end)
-            N10X.Editor.ExecuteCommand("Cut")
-        N10X.Editor.PopUndoGroup()
+        SetSelection(start, end)
+        N10X.Editor.ExecuteCommand("Cut")
+        SetCursorPos(start[0], start[1], max_offset=0)
         EnterInsertMode()
+        N10X.Editor.PopUndoGroup()
         should_save = True
 
     elif c == "cw":
-        x, y = N10X.Editor.GetCursorPos()
-        x = min(GetLineLength(y) - 1, x)
-        end_x = x
-        line = GetLine(y)
-        character_class = GetCharacterClass(line[end_x])
-        while end_x < len(line) - 1 and GetCharacterClass(line[end_x + 1]) == character_class:
-            end_x += 1
-        SetSelection((x, y), (end_x, y))
+        N10X.Editor.PushUndoGroup()
+        start = N10X.Editor.GetCursorPos()
+        for i in range(repeat_count):
+            MoveToWordEnd()
+        end = N10X.Editor.GetCursorPos()
+        SetSelection(start, end)
         N10X.Editor.ExecuteCommand("Cut")
+        SetCursorPos(start[0], start[1], max_offset=0)
         EnterInsertMode()
+        N10X.Editor.PopUndoGroup()
         should_save = True
 
     elif c == "cW":
         N10X.Editor.PushUndoGroup()
         start = N10X.Editor.GetCursorPos()
-        MoveToNextTokenStart()
+        for i in range(repeat_count):
+            MoveToTokenEnd()
         end = N10X.Editor.GetCursorPos()
-        if start != end:
-            end = (max(0, end[0]), end[1])
-            SetSelection(start, end)
-            N10X.Editor.ExecuteCommand("Cut")
-        N10X.Editor.PopUndoGroup()
+        SetSelection(start, end)
+        N10X.Editor.ExecuteCommand("Cut")
+        SetCursorPos(start[0], start[1], max_offset=0)
         EnterInsertMode()
+        N10X.Editor.PopUndoGroup()
         should_save = True
-
-    elif c == "cb":
+    
+    elif c == "cb": 
         N10X.Editor.PushUndoGroup()
-        end = N10X.Editor.GetCursorPos()
-        MoveToWordStart()
         start = N10X.Editor.GetCursorPos()
-        if start != end:
-            end = (max(0, end[0] - 1), end[1])
-            SetSelection(start, end)
+        for i in range(repeat_count):
+            MoveToWordStart()
+        end = N10X.Editor.GetCursorPos()
+        if start[0] > 0:  
+            SetSelection(end, (start[0] - 1, start[1]))
             N10X.Editor.ExecuteCommand("Cut")
-        N10X.Editor.PopUndoGroup()
+        SetCursorPos(end[0], end[1], max_offset=0)
         EnterInsertMode()
+        N10X.Editor.PopUndoGroup()
         should_save = True
 
     elif c == "cB":
         N10X.Editor.PushUndoGroup()
-        end = N10X.Editor.GetCursorPos()
-        MoveToTokenStart()
         start = N10X.Editor.GetCursorPos()
-        if start != end:
-            end = (max(0, end[0] - 1), end[1])
-            SetSelection(start, end)
+        for i in range(repeat_count):
+            MoveToTokenStart()
+        end = N10X.Editor.GetCursorPos()
+        if start[0] > 0:  
+            SetSelection(end, (start[0] - 1, start[1]))
             N10X.Editor.ExecuteCommand("Cut")
-        N10X.Editor.PopUndoGroup()
+        SetCursorPos(end[0], end[1], max_offset=0)
         EnterInsertMode()
+        N10X.Editor.PopUndoGroup()
         should_save = True
 
     elif c == "ciw":
