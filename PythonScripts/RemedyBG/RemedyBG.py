@@ -1,7 +1,7 @@
 '''
 RemedyBG debugger integration for 10x (10xeditor.com) 
 RemedyBG: https://remedybg.handmade.network/ (should be above 0.3.8)
-Version: 0.12.3
+Version: 0.12.4
 Original Script author: septag@discord / septag@pm.me
 
 To get started go to Settings.10x_settings, and enable the hook, by adding this line:
@@ -41,6 +41,7 @@ Extras:
     - RDBG_UnbindSession: Unbinds any session files for the current Config/Platform build configuration. 
                           This is useful when you have already binded a session file to configuration before but want to clear it
     - RDBG_Reset: Saves any opened sessions in RemedyBG, quits the debugger and closes the connection.
+    - RDBG_Break: Breaks the execution of the application
 
 RemedyBG sessions:
     As of version 0.11.0, RemedyBG session support has been added to the plugin.
@@ -48,6 +49,11 @@ RemedyBG sessions:
     and it will load that next time instead of starting a new session
 
 History:
+  0.12.4
+    - Improved event receiver loop, so it gets all pending messages in one go instead of per-frame. Much better response time.
+    - Fixes and improvements to the first start of the app. For some reason, we don't received TargetStarted event when executable runs for the first time. This change fixes that.
+    - Added RDBG_Break command
+
   0.12.3
     - Fixed a bug while setting debug arguments from Args selector introduced in the last build
 
@@ -308,6 +314,7 @@ class RDBG_Command(IntEnum):
     STEP_OUT = 311
     CONTINUE_EXECUTION = 312
     RUN_TO_FILE_AT_LINE = 313
+    BREAK_EXECUTION = 314
     GET_BREAKPOINTS = 600
     ADD_BREAKPOINT_AT_FILENAME_LINE = 604
     UPDATE_BREAKPOINT_LINE = 608
@@ -521,6 +528,8 @@ class RDBG_Session:
         elif cmd == RDBG_Command.GET_SESSION_FILENAME:
             pass
         elif cmd == RDBG_Command.SAVE_SESSION:
+            pass
+        elif cmd == RDBG_Command.BREAK_EXECUTION:
             pass
         elif cmd == RDBG_Command.GET_BREAKPOINTS:
             pass
@@ -866,14 +875,16 @@ class RDBG_Session:
             state:RDBG_TargetState = self.send_command(RDBG_Command.GET_TARGET_STATE)
             if state == RDBG_TargetState.NONE:
                 r = self.send_command(RDBG_Command.START_DEBUGGING)
+                # For some reason, the first batch of events (TARGET_STARTED) isn't received after running the executable for the first time
+                # We have to check it again and set the proper states
                 if r and self.first_start:
                     self.first_start = False
-                    self.update()
-
+                    self.run()
             elif state == RDBG_TargetState.SUSPENDED:
                 self.send_command(RDBG_Command.CONTINUE_EXECUTION)
             elif state == RDBG_TargetState.EXECUTING:
-                pass
+                if self.target_state != RDBG_TargetState.EXECUTING:
+                    self.on_target_started()
             if gOptions.output_debug_text:
                 Editor.ShowOutput()
 
@@ -895,6 +906,20 @@ class RDBG_Session:
             self.active_project = active_project
             return True
         return False
+    
+    def on_target_started(self):
+        print('RDBG: Debugging started')
+        Editor.OnDebuggerStarted()
+        Editor.SetStatusBarColour((34, 66, 83))
+        self.target_state = RDBG_TargetState.EXECUTING
+
+        if gOptions.start_debug_command and gOptions.start_debug_command != '':
+            print('RDBG: Execute:', gOptions.start_debug_command)
+            cmds = gOptions.start_debug_command.split(';')
+            for cmd in cmds:
+                cmd = cmd.strip()
+                if cmd != '':
+                    Editor.ExecuteCommand(cmd)
 
     def update(self)->bool:
         global gOptions
@@ -930,124 +955,121 @@ class RDBG_Session:
             self.check_session_for_config()
             
         # Read events from event_pipe
-        if self.process is not None and self.event_pipe is not None:
-            try:
+        if self.process is None or self.event_pipe is None:
+            return True
+        
+        try:
+            while True:
                 buffer, nbytes, result = win32pipe.PeekNamedPipe(self.event_pipe, 0)
-                if nbytes:
-                    hr, data = win32file.ReadFile(self.event_pipe, nbytes, None)
-                    event_buffer = io.BytesIO(data)
-                    event_type = int.from_bytes(event_buffer.read(2), 'little')
-                    if event_type == RDBG_EventType.OUTPUT_DEBUG_STRING and gOptions.output_debug_text:
-                        text = event_buffer.read(int.from_bytes(event_buffer.read(2), 'little')).decode('utf-8')
-                        print('RDBG:', text.strip())
-                    elif event_type == RDBG_EventType.KIND_BREAKPOINT_RESOLVED:
-                        bp_id = int.from_bytes(event_buffer.read(4), 'little')
-                        if bp_id in self.breakpoints_rdbg:
-                            filename, new_line = self.get_breakpoint(bp_id)
-                            id_10x, filename_old, line = self.breakpoints_rdbg[bp_id]
+                if nbytes == 0: break
 
-                            if filename != '':
-                                self.breakpoints_rdbg[bp_id] = (id_10x, filename_old, new_line)
-                                Editor.UpdateBreakpoint(id_10x, new_line)
-                            else:
-                                self.breakpoints_rdbg.pop(bp_id)
-                                self.breakpoints.pop(id_10x)
-                                self.ignore_next_remove_breakpoint = True
-                                Editor.RemoveBreakpointById(id_10x)
-                    elif event_type == RDBG_EventType.BREAKPOINT_ADDED:
-                        bp_id = int.from_bytes(event_buffer.read(4), 'little')
-                        if bp_id not in self.breakpoints_rdbg:
-                            filename, line = self.get_breakpoint(bp_id)
-                            if filename != '':
-                                filename = filename.replace('\\', '/')
-                                id_10x:int = Editor.AddBreakpoint(filename, line)
-                                self.breakpoints_rdbg[bp_id] = (id_10x, filename, line)
-                                self.breakpoints[id_10x] = bp_id
-                    elif event_type == RDBG_EventType.BREAKPOINT_REMOVED:
-                        bp_id = int.from_bytes(event_buffer.read(4), 'little')
-                        if bp_id in self.breakpoints_rdbg:
-                            id_10x, filename, line = self.breakpoints_rdbg[bp_id]
-                            if id_10x in self.breakpoints:
-                                self.breakpoints.pop(id_10x)
+                hr, data = win32file.ReadFile(self.event_pipe, nbytes, None)
+                event_buffer = io.BytesIO(data)
+                event_type = int.from_bytes(event_buffer.read(2), 'little')
+                if event_type == RDBG_EventType.OUTPUT_DEBUG_STRING and gOptions.output_debug_text:
+                    text = event_buffer.read(int.from_bytes(event_buffer.read(2), 'little')).decode('utf-8')
+                    text = text.strip()
+                    if text != '':
+                        print('RDBG:', text)
+                elif event_type == RDBG_EventType.KIND_BREAKPOINT_RESOLVED:
+                    bp_id = int.from_bytes(event_buffer.read(4), 'little')
+                    if bp_id in self.breakpoints_rdbg:
+                        filename, new_line = self.get_breakpoint(bp_id)
+                        id_10x, filename_old, line = self.breakpoints_rdbg[bp_id]
+
+                        if filename != '':
+                            self.breakpoints_rdbg[bp_id] = (id_10x, filename_old, new_line)
+                            Editor.UpdateBreakpoint(id_10x, new_line)
+                        else:
                             self.breakpoints_rdbg.pop(bp_id)
+                            self.breakpoints.pop(id_10x)
                             self.ignore_next_remove_breakpoint = True
                             Editor.RemoveBreakpointById(id_10x)
-                    elif event_type == RDBG_EventType.SOURCE_LOCATION_CHANGED:
-                        filename:str = event_buffer.read(int.from_bytes(event_buffer.read(2), 'little')).decode('utf-8')
-                        line:int = int.from_bytes(event_buffer.read(4), 'little')
-                        reason:RDBG_SourceLocChangedReason = int.from_bytes(event_buffer.read(4), 'little')
-
-                        if reason != RDBG_SourceLocChangedReason.DRIVER:
-                            filename_win = filename
+                elif event_type == RDBG_EventType.BREAKPOINT_ADDED:
+                    bp_id = int.from_bytes(event_buffer.read(4), 'little')
+                    if bp_id not in self.breakpoints_rdbg:
+                        filename, line = self.get_breakpoint(bp_id)
+                        if filename != '':
                             filename = filename.replace('\\', '/')
-                            if reason == RDBG_SourceLocChangedReason.BREAKPOINT_HIT or \
-                               reason == RDBG_SourceLocChangedReason.EXCEPTION_HIT or \
-                               reason == RDBG_SourceLocChangedReason.STEP_OVER or \
-                               reason == RDBG_SourceLocChangedReason.STEP_IN or  \
-                               reason == RDBG_SourceLocChangedReason.STEP_OUT or \
-                               reason == RDBG_SourceLocChangedReason.NON_USER_BREAKPOINT or \
-                               reason == RDBG_SourceLocChangedReason.DEBUG_BREAK:
-                                
-                                Editor.SetDebuggerStepLine(filename_win, line-1) # convert to index-based
-                                
-                                if reason != RDBG_SourceLocChangedReason.EXCEPTION_HIT: Editor.SetStatusBarColour((202, 131, 0))
-                                else: Editor.SetStatusBarColour((145, 18, 18))
-                                
-                                self.target_state = RDBG_TargetState.SUSPENDED
-                                Editor.OnDebuggerPaused()
+                            id_10x:int = Editor.AddBreakpoint(filename, line)
+                            self.breakpoints_rdbg[bp_id] = (id_10x, filename, line)
+                            self.breakpoints[id_10x] = bp_id
+                elif event_type == RDBG_EventType.BREAKPOINT_REMOVED:
+                    bp_id = int.from_bytes(event_buffer.read(4), 'little')
+                    if bp_id in self.breakpoints_rdbg:
+                        id_10x, filename, line = self.breakpoints_rdbg[bp_id]
+                        if id_10x in self.breakpoints:
+                            self.breakpoints.pop(id_10x)
+                        self.breakpoints_rdbg.pop(bp_id)
+                        self.ignore_next_remove_breakpoint = True
+                        Editor.RemoveBreakpointById(id_10x)
+                elif event_type == RDBG_EventType.SOURCE_LOCATION_CHANGED:
+                    filename:str = event_buffer.read(int.from_bytes(event_buffer.read(2), 'little')).decode('utf-8')
+                    line:int = int.from_bytes(event_buffer.read(4), 'little')
+                    reason:RDBG_SourceLocChangedReason = int.from_bytes(event_buffer.read(4), 'little')
 
-                                # Bring to foreground only if we are not stepping
-                                if gOptions.bring_to_foreground_on_suspend and \
-                                    (reason != RDBG_SourceLocChangedReason.STEP_OVER and \
-                                     reason != RDBG_SourceLocChangedReason.STEP_IN and \
-                                     reason != RDBG_SourceLocChangedReason.STEP_OUT):
-                                    Editor.SetForegroundWindow()
-                                    self.send_command(RDBG_Command.BRING_DEBUGGER_TO_FOREGROUND)
-                            elif filename:
-                                Editor.OpenFile(filename)
-                                Editor.SetCursorPos((0, line-1)) # convert to index-based
+                    if reason != RDBG_SourceLocChangedReason.DRIVER:
+                        filename_win = filename
+                        filename = filename.replace('\\', '/')
+                        if reason == RDBG_SourceLocChangedReason.BREAKPOINT_HIT or \
+                            reason == RDBG_SourceLocChangedReason.EXCEPTION_HIT or \
+                            reason == RDBG_SourceLocChangedReason.STEP_OVER or \
+                            reason == RDBG_SourceLocChangedReason.STEP_IN or  \
+                            reason == RDBG_SourceLocChangedReason.STEP_OUT or \
+                            reason == RDBG_SourceLocChangedReason.NON_USER_BREAKPOINT or \
+                            reason == RDBG_SourceLocChangedReason.DEBUG_BREAK:
+                            
+                            Editor.SetDebuggerStepLine(filename_win, line-1) # convert to index-based
+                            
+                            if reason != RDBG_SourceLocChangedReason.EXCEPTION_HIT: Editor.SetStatusBarColour((202, 131, 0))
+                            else: Editor.SetStatusBarColour((145, 18, 18))
+                            
+                            self.target_state = RDBG_TargetState.SUSPENDED
+                            Editor.OnDebuggerPaused()
 
-                    elif event_type == RDBG_EventType.BREAKPOINT_MODIFIED:
-                        # used for enabling/disabling breakpoints, we don't have that now
-                        pass
-                    elif event_type == RDBG_EventType.EXIT_PROCESS:
-                        exit_code:int = int.from_bytes(event_buffer.read(4), 'little')
-                        print('RDBG: Debugging terminated with exit code:', exit_code)
-                        self.target_state = RDBG_TargetState.NONE
-                        Editor.OnDebuggerStopped()
-                        Editor.ClearStatusBarColour()
-                        Editor.ClearDebuggerStepLine()
+                            # Bring to foreground only if we are not stepping
+                            if gOptions.bring_to_foreground_on_suspend and \
+                                (reason != RDBG_SourceLocChangedReason.STEP_OVER and \
+                                    reason != RDBG_SourceLocChangedReason.STEP_IN and \
+                                    reason != RDBG_SourceLocChangedReason.STEP_OUT):
+                                Editor.SetForegroundWindow()
+                                self.send_command(RDBG_Command.BRING_DEBUGGER_TO_FOREGROUND)
+                        elif filename:
+                            Editor.OpenFile(filename)
+                            Editor.SetCursorPos((0, line-1)) # convert to index-based
 
-                        if gOptions.stop_debug_command and gOptions.stop_debug_command != '':
-                            print('RDBG: Execute:', gOptions.stop_debug_command)
-                            Editor.ExecuteCommand(gOptions.stop_debug_command)
-                            cmds = gOptions.stop_debug_command.split(';')
-                            for cmd in cmds:
-                                if cmd.strip() != '':
-                                    Editor.ExecuteCommand(cmd)
+                elif event_type == RDBG_EventType.BREAKPOINT_MODIFIED:
+                    # used for enabling/disabling breakpoints, we don't have that now
+                    pass
+                elif event_type == RDBG_EventType.EXIT_PROCESS:
+                    exit_code:int = int.from_bytes(event_buffer.read(4), 'little')
+                    print('RDBG: Debugging terminated with exit code:', exit_code)
+                    self.target_state = RDBG_TargetState.NONE
+                    Editor.OnDebuggerStopped()
+                    Editor.ClearStatusBarColour()
+                    Editor.ClearDebuggerStepLine()
 
-                    elif event_type == RDBG_EventType.TARGET_STARTED:
-                        print('RDBG: Debugging started')
-                        self.target_state = RDBG_TargetState.EXECUTING
-                        Editor.OnDebuggerStarted()
-                        Editor.SetStatusBarColour((202, 81, 0))
+                    if gOptions.stop_debug_command and gOptions.stop_debug_command != '':
+                        print('RDBG: Execute:', gOptions.stop_debug_command)
+                        Editor.ExecuteCommand(gOptions.stop_debug_command)
+                        cmds = gOptions.stop_debug_command.split(';')
+                        for cmd in cmds:
+                            if cmd.strip() != '':
+                                Editor.ExecuteCommand(cmd)
 
-                        if gOptions.start_debug_command and gOptions.start_debug_command != '':
-                            print('RDBG: Execute:', gOptions.start_debug_command)
-                            cmds = gOptions.start_debug_command.split(';')
-                            for cmd in cmds:
-                                if cmd.strip() != '':
-                                    Editor.ExecuteCommand(cmd)
-                    elif event_type == RDBG_EventType.TARGET_CONTINUED:
-                        Editor.ClearDebuggerStepLine()
-                        Editor.SetStatusBarColour((202, 81, 0))
-                        self.target_state = RDBG_TargetState.EXECUTING
-                        Editor.OnDebuggerResumed()
+                elif event_type == RDBG_EventType.TARGET_STARTED:
+                    if self.target_state != RDBG_TargetState.EXECUTING:
+                        self.on_target_started()
+                elif event_type == RDBG_EventType.TARGET_CONTINUED:
+                    Editor.ClearDebuggerStepLine()
+                    Editor.SetStatusBarColour((34, 66, 83))
+                    self.target_state = RDBG_TargetState.EXECUTING
+                    Editor.OnDebuggerResumed()
 
-            except win32api.error as pipe_error:
-                print('RDBG:', pipe_error)
-                self.close()
-                return False
+        except win32api.error as pipe_error:
+            print('RDBG:', pipe_error)
+            self.close()
+            return False
             
         return True
 
@@ -1144,6 +1166,10 @@ def RDBG_StepOut():
         RDBG_StartDebugging(run_after_open=False)
         RDBG_StepOver()
 
+def RDBG_Break():
+    global gSession
+    if gSession is not None:
+        gSession.send_command(RDBG_Command.BREAK_EXECUTION)
 
 def RDBG_AddSelectionToWatch():
     global gSession
