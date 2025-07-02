@@ -1,20 +1,13 @@
 '''
 RemedyBG debugger integration for 10x (10xeditor.com) 
 RemedyBG: https://remedybg.handmade.network/ (should be above 0.3.8)
-Version: 0.12.4
+Version: 0.13.0
 Original Script author: septag@discord / septag@pm.me
 
-To get started go to Settings.10x_settings, and enable the hook, by adding this line:
-    RemedyBG.Hook: true
-This will make RemedyBG hook into the editor and act as the default debugger
-	
-If RemedyBG.exe is not in your PATH env var you must also set RemedyBG.Path (see below)
-You can add other options listed below in 'RDBG_Options' as individual lines in the settings file.
-Other commands are listed below in 'Commands' and `Extras` 
+SETUP:
+    To activate and hook RemedyBG to your project. Just set `DebuggerExe` setting to remedybg.exe path. Either in Settings.10x_settings, or LocalSettings.10x_settings or your project's ProjectName.10x_settings file. If debugger path exists, this script will hook itself to the editor and act as the default debugger.
 
 RDBG_Options: 
-    - RemedyBG.Hook: (default=False) Hook RemedyBg into default Start/Stop/Restart debugging commands instead of the msvc debugger integration
-    - RemedyBG.Path: Path to remedybg.exe. If not set, the script will assume remedybg.exe is in PATH or current dir
     - RemedyBG.OutputDebugText: (default=True) receives and output debug text to 10x output
     - RemedyBG.KeepSessionOnActiveChange: (default=False) when active project or config is changed, it leaves the previously opened RemedyBG session
                                            This is useful when you want to debug multiple binaries within a project like client/server apps
@@ -49,6 +42,9 @@ RemedyBG sessions:
     and it will load that next time instead of starting a new session
 
 History:
+  0.13.0
+    - BREAKING: RemedyBG.Path and RemedyBG.Hook options has been removed. With the newer 10x editor versions, you only need to set DebuggerPath setting to remedybg.exe path and it will automatically hook itself to the project.
+
   0.12.4
     - Improved event receiver loop, so it gets all pending messages in one go instead of per-frame. Much better response time.
     - Fixes and improvements to the first start of the app. For some reason, we don't received TargetStarted event when executable runs for the first time. This change fixes that.
@@ -213,6 +209,7 @@ from optparse import Option
 import win32file, win32pipe, pywintypes, win32api, ctypes.wintypes
 import io, os, ctypes, time, typing, subprocess
 import json
+import shutil
 
 from N10X import Editor
 
@@ -226,12 +223,16 @@ class RDBG_Options():
     def __init__(self):
         global gOptionsOverride
 
-        self.executable = Editor.GetSetting("RemedyBG.Path").strip()
-        if not self.executable:
-            self.executable = 'remedybg.exe'
-        if os.path.isdir(self.executable):
-            self.executable = os.path.join(self.executable, 'remedybg.exe')
-
+        debugger_exe:str = Editor.GetSetting("DebuggerExe").strip()
+        debugger_exe_lower:str = debugger_exe.lower()
+        if debugger_exe_lower.endswith('remedybg') or debugger_exe_lower.endswith('remedybg.exe'):
+            if debugger_exe_lower.startswith('remedybg'):
+                self.executable = shutil.which(debugger_exe)    # it's not full path, search in PATH and resolve fullpath
+            else:
+                self.executable = debugger_exe
+        else:
+            self.executable = None
+        
         self.output_debug_text = True
         output_debug_text = Editor.GetSetting("RemedyBG.OutputDebugText") 
         if output_debug_text and output_debug_text == 'false':
@@ -239,12 +240,10 @@ class RDBG_Options():
         else:
             self.output_debug_text = True
 
-        hook_calls = Editor.GetSetting("RemedyBG.Hook")
-        if hook_calls and hook_calls.lower() == 'true':
-            self.hook_calls = True
-        else:
-            self.hook_calls = False
-
+        self.hook_calls = self.executable and os.path.isfile(self.executable)
+        if self.hook_calls:
+            print('RDBG: Found RemedyBG debugger:', self.executable)
+            
         gOptionsOverride = True
         if self.hook_calls:
             Editor.OverrideSetting('VisualStudioSync', 'false')
@@ -755,6 +754,11 @@ class RDBG_Session:
             if not os.path.isdir(debug_cwd):
                 Editor.ShowMessageBox(RDBG_TITLE, 'Debugger working directory is invalid: "{}"'.format(debug_cwd))
                 return False
+            
+            if not gOptions.executable or not os.path.isfile(gOptions.executable):
+                Editor.ShowMessageBox(RDBG_TITLE, 'Invalid RemedyBG debugger path: {}'.format("[Empty]" if not gOptions.executable else gOptions.executable))
+                return False
+
 
             if session_filepath and os.path.isfile(session_filepath):
                 args = gOptions.executable + ' --servername ' + self.name + ' "' + session_filepath + '"'
@@ -1281,6 +1285,12 @@ def _RDBG_DebugCommandLineChanged():
                                       display_name = config['display_name'])
                 break
     
+def _RDBG_OpenCurrentFileInDebugger(filename, line)->bool:
+    if gOptions.hook_calls:
+        gSession.send_command(RDBG_Command.GOTO_FILE_AT_LINE, filename=filename, line=line[1]+1)
+        return True
+    else:
+        return False
 
 def InitialiseRemedy():
     global gOptions
@@ -1305,6 +1315,7 @@ def InitialiseRemedy():
     Editor.AddDebugStepOutFunction(_RDBG_StepOutHit)
 
     Editor.AddDebugCommandLineChangedFunction(_RDBG_DebugCommandLineChanged)
+    Editor.AddOpenCurrentFileInDebuggerFunction(_RDBG_OpenCurrentFileInDebugger)
 
 gSession:RDBG_Session = None
 gOptions:RDBG_Options = None
