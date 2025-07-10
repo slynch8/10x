@@ -44,6 +44,7 @@ RemedyBG sessions:
 History:
   0.13.0
     - BREAKING: RemedyBG.Path and RemedyBG.Hook options has been removed. With the newer 10x editor versions, you only need to set DebuggerPath setting to remedybg.exe path and it will automatically hook itself to the project.
+    - Added version checking
 
   0.12.4
     - Improved event receiver loop, so it gets all pending messages in one go instead of per-frame. Much better response time.
@@ -218,10 +219,19 @@ RDBG_HANDLE = typing.Any
 RDBG_PREFIX:str = '\\\\.\\pipe\\'
 RDBG_TITLE:str = 'RemedyBG'
 RDBG_PROCESS_POLL_INTERVAL:float = 1.0
+RDBG_MIN_10x_VERSION = "1.0.340"
 
 class RDBG_Options():
     def __init__(self):
         global gOptionsOverride
+
+        print('RDBG: Reading settings')
+        if Editor.GetSetting("RemedyBG.Path") != "" or Editor.GetSetting("RemedyBG.Hook") != "":
+            print('RDBG Path:', Editor.GetSetting("RemedyBG.Path"))
+            print('RDBG Hook:', Editor.GetSetting("RemedyBG.Hook"))
+            Editor.ShowMessageBox(RDBG_TITLE, 
+                                  '"RemedyBG.Path" and "RemedyBG.Hook" Settings has gone obsolete and would not work. '\
+                                  'To enable RemedyBG for your project, set "DebuggerExe" setting to remedybg.exe path')
 
         debugger_exe:str = Editor.GetSetting("DebuggerExe").strip()
         debugger_exe_lower:str = debugger_exe.lower()
@@ -243,6 +253,8 @@ class RDBG_Options():
         self.hook_calls = self.executable and os.path.isfile(self.executable)
         if self.hook_calls:
             print('RDBG: Found RemedyBG debugger:', self.executable)
+        else:
+            print('RDBG: RemedyBG debugging is disabled, because no valid debugger is found for "DebuggerExe" setting')
             
         gOptionsOverride = True
         if self.hook_calls:
@@ -1295,6 +1307,13 @@ def _RDBG_OpenCurrentFileInDebugger(filename, line)->bool:
 def InitialiseRemedy():
     global gOptions
     gOptions = RDBG_Options()
+
+    version = Editor.GetVersion().split('.')
+    min_version = RDBG_MIN_10x_VERSION.split('.')
+    if  (int(version[0]) < int(min_version[0])) or \
+        (int(version[1]) < int(min_version[1])) or \
+        (int(version[2]) < int(min_version[2])):
+        Editor.ShowMessageBox(RDBG_TITLE, "This version of RemedyBG plugin doesn't meet the minimum version requirement for 10x (v{})".format(RDBG_MIN_10x_VERSION))
 
     Editor.AddBreakpointAddedFunction(_RDBG_AddBreakpoint)
     Editor.AddBreakpointRemovedFunction(_RDBG_RemoveBreakpoint)
