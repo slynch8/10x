@@ -382,6 +382,7 @@ class RDBG_EventType(IntEnum):
     BREAKPOINT_MODIFIED = 603
     BREAKPOINT_REMOVED = 604
     SOURCE_LOCATION_CHANGED = 200
+    EXTERNAL_TEXT_EDITOR_LAUNCHED = 201
 
 class RDBG_Session:
     def __init__(self):
@@ -1053,7 +1054,12 @@ class RDBG_Session:
                         elif filename:
                             Editor.OpenFile(filename)
                             Editor.SetCursorPos((0, line-1)) # convert to index-based
-
+                elif event_type == RDBG_EventType.EXTERNAL_TEXT_EDITOR_LAUNCHED:
+                    filename:str = event_buffer.read(int.from_bytes(event_buffer.read(2), 'little')).decode('utf-8')
+                    line:int = int.from_bytes(event_buffer.read(4), 'little')
+                    filename = filename.replace('\\', '/')
+                    Editor.OpenFile(filename)
+                    Editor.SetCursorPos((0, line-1)) # convert to index-based
                 elif event_type == RDBG_EventType.BREAKPOINT_MODIFIED:
                     # used for enabling/disabling breakpoints, we don't have that now
                     pass
