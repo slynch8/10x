@@ -24,6 +24,7 @@ VimUse10xCommandPanel           |bool         |Use 10x command panel for command
 VimUse10xFindPanel              |bool         |Use 10x find panel for searching, i.e. when typing `/`
 VimSneakEnabled                 |bool         |Enable vim-sneak motion with `s` and `S`
 VimCommandlineFilteredHistory   |bool         |When navigating through commandline history, the history is filtered based on what is already typed. True by default.
+VimDisplayCurrentScopeName      |bool         |Toggles display of current code scope name in status bar
 
 ## Customizing vim 
 

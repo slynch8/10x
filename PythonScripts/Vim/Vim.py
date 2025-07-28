@@ -25,6 +25,9 @@ g_Use10xFindPanel = False
 # Whether the commandline history is filtered on what's currently typed - same behaviour as NeoVim.
 g_UseFilteredCommandlineHistory = True
 
+# Whether to show the current scope name in the status bar in normal/command mode
+g_DisplayCurrentScopeName = True
+
 #------------------------------------------------------------------------
 class Mode:
     INSERT       = 0
@@ -3636,6 +3639,19 @@ def HandleSuspendedModeKey(key: Key):
     return False
 
 #------------------------------------------------------------------------
+def GetCurrentScopeName():
+    return "Scope: " + (N10X.Editor.GetCurrentScopeName() or "(none)")
+
+#------------------------------------------------------------------------
+def GetCommandModeStatusBarText():
+    text = ""
+
+    if g_DisplayCurrentScopeName:
+        text += GetCurrentScopeName()
+
+    return text
+
+#------------------------------------------------------------------------
 def UpdateCursorMode():
     if g_Command or g_SingleReplace or g_MultiReplace:
         N10X.Editor.SetCursorVisible(0, True)
@@ -3678,7 +3694,7 @@ def UpdateCursorMode():
     else:
         N10X.Editor.SetCursorVisible(0, True)
         N10X.Editor.SetCursorMode("Block")
-        N10X.Editor.SetStatusBarText("")
+        N10X.Editor.SetStatusBarText(GetCommandModeStatusBarText())
 
 #------------------------------------------------------------------------
 # Recording
@@ -3814,6 +3830,7 @@ def EnableVim():
     global g_VimExitInsertModeCharSequence;
     global g_SmartCaseEnabled
     global g_UseFilteredCommandlineHistory
+    global g_DisplayCurrentScopeName
 
     if N10X.Editor.GetSetting("VimExitInsertModeCharSequence"):
         g_VimExitInsertModeCharSequence = N10X.Editor.GetSetting("VimExitInsertModeCharSequence")
@@ -3828,6 +3845,7 @@ def EnableVim():
     g_Use10xCommandPanel            = GetSettingBool("VimUse10xCommandPanel",               default_value="false")
     g_Use10xFindPanel               = GetSettingBool("VimUse10xFindPanel",                  default_value="false")
     g_UseFilteredCommandlineHistory = GetSettingBool("VimCommandlineFilteredHistory",       default_value="true")
+    g_DisplayCurrentScopeName       = GetSettingBool("VimDisplayCurrentScopeName",          default_value="true")
 
     if g_VimEnabled != enable_vim:
         g_VimEnabled = enable_vim
