@@ -479,7 +479,7 @@ def ClearCommandStr(save=False):
     g_Command = ""
 
 #------------------------------------------------------------------------
-def EnterCommandMode():
+def EnterCommandMode(pop_undo_group=True):
     global g_Mode
     global g_Command
     global g_SingleReplace
@@ -504,7 +504,8 @@ def EnterCommandMode():
         N10X.Editor.ResetCursorBlink()
 
         if not was_visual and not g_Mode == Mode.COMMANDLINE:
-            N10X.Editor.PopUndoGroup()
+            if pop_undo_group:
+                N10X.Editor.PopUndoGroup()
             MoveCursorPos(x_delta=-1, override_horizontal_target=True)
 
     g_Mode = Mode.COMMAND
@@ -3856,8 +3857,7 @@ def EnableVim():
             N10X.Editor.AddOnInterceptKeyFunction(OnInterceptKey)
             N10X.Editor.AddOnFileLosingFocusFunction(OnFileLosingFocus)
             N10X.Editor.OverrideSetting("ReverseFindSelection","true")
-            N10X.Editor.PushUndoGroup() # EnterCommandMode will do a PopUndoGroup because we were not in visual mode, so must push here
-            EnterCommandMode()
+            EnterCommandMode(False)
 
         else:
             print("[vim] Disabling Vim")
