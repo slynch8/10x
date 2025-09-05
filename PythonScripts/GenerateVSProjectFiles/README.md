@@ -1,5 +1,5 @@
 
-# Generate Visual Studio Project Files
+# Generate Visual Studio Project Files for Unreal Engine Projects
 This script can be used to generate the .sln file that 10x is using for a Visual Studio Workspace
 
 In order for this script to succeed, the following setting values need to be placed in the Settings.10x_settings file:

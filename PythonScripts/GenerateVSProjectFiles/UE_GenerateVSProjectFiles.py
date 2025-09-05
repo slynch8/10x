@@ -13,9 +13,9 @@ from datetime import datetime
 # UE.GenVSProjCommand:                dotnet "{ueInstallDir}\Engine\Binaries\DotNET\UnrealBuildTool\UnrealBuildTool.dll" -projectfiles -project="{ueProject}" -game -engine -progress -log="{logPath}"
 
 # Once these settings are in place, create a new keystroke in your key map. For example:
-# Alt Shift Control G:        GenerateVSProjectFiles()
+# Alt Shift Control G:        UE_GenerateVSProjectFiles()
 
-def GenerateVSProjectFiles():
+def UE_GenerateVSProjectFiles():
     N10X.Editor.LogTo10XOutput("\n\n[UE] Generate Visual Studio Project\n")
 
     ueProject = N10X.Editor.GetSetting("UE.Project")
