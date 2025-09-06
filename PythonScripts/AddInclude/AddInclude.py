@@ -37,13 +37,15 @@ def _IsUE5Workspace():
 def _GetIncludePaths(projFilePath):
     includePaths = []
     includeText= ""
+    rsValue = ""
 
     #parse vcxproj file to find include paths
     tree = ET.parse(projFilePath)
     root = tree.getroot()
-
+    
     #search include paths
     nodeName = _GetXMLNameSpace(root.tag) + "IncludePath"
+
     for includePath in root.iter(nodeName):
         includeText += includePath.text
 
@@ -60,6 +62,22 @@ def _GetIncludePaths(projFilePath):
             includePaths.append(child.text.replace(os.sep, '/'))
 
     return includePaths
+
+# returns the value of the RootNamespace tag. In the UE5 case, this is the name of the 
+# current module / Game 
+def _GetRootNamespace(projFilePath):
+    rsValue = ""
+
+    #parse vcxproj file to find include paths
+    tree = ET.parse(projFilePath)
+    root = tree.getroot()
+
+    rootNamespaceTag = _GetXMLNameSpace(root.tag) + "RootNamespace"
+    rs = root.find(".//" + rootNamespaceTag)
+    if rs is not None:
+        rsValue = rs.text
+
+    return rsValue
 
 # helper to extract the xml namespace
 def _GetXMLNameSpace(tag):
@@ -142,10 +160,16 @@ def AddInclude():
 
     # add the include paths from Unreal Engine plugins and engine code
     # TODO: Find a more general way to determine this kind of dependency, and make sure this works for all workspace types
+    isUE = False
     if _IsUE5Workspace():
+        isUE = True
         engineProjectFile = _GetUE5ProjectFilePath()
         engineIncludePaths = _GetIncludePaths(engineProjectFile)
         includePaths = includePaths + engineIncludePaths
+
+    #N10X.Editor.LogTo10XOutput( f"[AddInclude] Active Project: {activeProject}\n\tActive Project Dir: {os.path.dirname(activeProject)}\n\tpath: {path}\n\tcurrentPath: {currentPath}\n" )
+    # incs = '\n\t'.join(includePaths)
+    # N10X.Editor.LogTo10XOutput( f"[AddInclude] IncludePaths: \n{incs}\n")
 
     # trim the path if possible
     commonpath = os.path.commonpath((path, currentPath))
@@ -154,6 +178,21 @@ def AddInclude():
 
     # windows backslash separators are undefined behavior
     relpathStandard = relpath.replace(os.sep, '/')
+
+    # If this is a UE project, let's try and see if we can
+    # reduce the include path to just the Public and Private 
+    # include directories plus whatever subdirectory the symbol
+    # may be in
+    if os.path.isabs(relpathStandard) and isUE:
+        ns = _GetRootNamespace(activeProject)
+        wsFileName = N10X.Editor.GetWorkspaceFilename()
+        solutionDir, solutionFile = os.path.split(wsFileName)
+        publicFiles = solutionDir + '/Source/' + ns + "/Public/"
+        privateFiles = solutionDir + '/Source/' + ns + "/Private/"
+        if relpathStandard.startswith(publicFiles):
+            relpathStandard = relpathStandard[len(publicFiles):]
+        elif relpathStandard.startswith(privateFiles):
+            relpathStandard = relpathStandard[len(privateFiles):]
 
     output = f"#include \"{relpathStandard}\""
 
@@ -175,6 +214,8 @@ def AddInclude():
         if result:
             # -2 to also trim the newline char
             N10X.Editor.SetCursorPos((len(line)-2,i))
+            # Make sure the cursor is placed at the end of the line, even if there is ws
+            N10X.Editor.ExecuteCommand("MoveToLineEnd")
             N10X.Editor.PushUndoGroup()
             N10X.Editor.InsertText(f"\n{output}")
             N10X.Editor.SetCursorPos((x, y+1))
