@@ -87,8 +87,8 @@ def _GetXMLNameSpace(tag):
     return namespace
 
 # locate the shortest common path for the current active project
-def _FindShortestIncludePath(path, includePathArray):
-    activeProject = N10X.Editor.GetActiveProject()
+def _FindShortestIncludePath(path, includePathArray, activeProject):
+    #activeProject = N10X.Editor.GetActiveProject()
     activeProjectDir = os.path.dirname(activeProject)
 
     #Find the shortest relative path by looking through includePaths
@@ -96,8 +96,11 @@ def _FindShortestIncludePath(path, includePathArray):
     shortestPathLength = len(path)
     for i in includePathArray:
         #Find normalised path to remove any relative parts, and convert to forward slashes for comparison
-        possiblePrefix = os.path.normpath(activeProjectDir + "/" + i).replace(os.sep, '/')
-        #print(" Path: " + possiblePrefix)
+        if os.path.isabs( i ):
+            possiblePrefix = i.replace(os.sep, '/')
+        else:
+            possiblePrefix = os.path.normpath(activeProjectDir + "/" + i).replace(os.sep, '/')
+        #print(" Path: " + possiblePrefix + "\n")
 
         if path.startswith(possiblePrefix):
             candidate = path[len(possiblePrefix)+1:]
@@ -161,6 +164,9 @@ def AddInclude():
     # add the include paths from Unreal Engine plugins and engine code
     # TODO: Find a more general way to determine this kind of dependency, and make sure this works for all workspace types
     isUE = False
+    engineIncludePaths = []
+    engineProjectFile = ""
+
     if _IsUE5Workspace():
         isUE = True
         engineProjectFile = _GetUE5ProjectFilePath()
@@ -172,9 +178,14 @@ def AddInclude():
     # N10X.Editor.LogTo10XOutput( f"[AddInclude] IncludePaths: \n{incs}\n")
 
     # trim the path if possible
-    commonpath = os.path.commonpath((path, currentPath))
+    commonpath = path
+    try:
+        commonpath = os.path.commonpath((path, currentPath))
+    except ValueError:
+        print( "[AddInclude] Paths on seperate drives?")
+
     relpath = os.path.relpath(path, commonpath)    
-    relpath = _FindShortestIncludePath(path, includePaths)
+    relpath = _FindShortestIncludePath(path, includePaths, activeProject)
 
     # windows backslash separators are undefined behavior
     relpathStandard = relpath.replace(os.sep, '/')
@@ -193,7 +204,7 @@ def AddInclude():
             relpathStandard = relpathStandard[len(publicFiles):]
         elif relpathStandard.startswith(privateFiles):
             relpathStandard = relpathStandard[len(privateFiles):]
-
+    
     output = f"#include \"{relpathStandard}\""
 
     otherDir, otherFile = os.path.split(path)
