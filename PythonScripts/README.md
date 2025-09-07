@@ -7,6 +7,7 @@ To use these scripts copy them to the %appdata%\10x\PythonScripts folder.
 
 |Script name                        |Description|
 |---                                |:---:      |
+AddForwardDeclaration.py            |Generates a forward declation of the token the cursor is over
 AddInclude.py                       |Adds include path for current symbol
 AutoDarkMode.py                     |Track active windows theme and sets appropriate color scheme
 ClangFormat.py                      |clang-format plugin for 10x
@@ -21,5 +22,6 @@ RemedyBG.py                         |RemedyBG debugger integration
 SmoothScroll.py                     |With this script, you can add the ability to scroll faster with keyboard shortcuts. It also mimics smooth scrolling, more like mousewheel scrolling.
 SortLines.py                        |Sort the current selection of lines alphabetically
 TortoiseSVN.py                      |TortoiseSVN integration
+UE_GenerateVSProjectFiles.py        |Regenerates the Visual Studio projects files using the UnrealEngineBuild tool
 Vim.py                              |Vim style editing. To enable Vim editing set Vim to true in the 10x settings file
 SignatureCreator.py                 |Creates a signature or an implementation of a function defined in the header on the CPP file
