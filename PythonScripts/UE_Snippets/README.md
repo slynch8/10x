@@ -11,10 +11,16 @@ valid UPROPERTY values by case sensitive completion, or via up and down arrows.
 ## Usage
 
 ### Default UPROPERTY
-If all you are looking to do is insert a UPROPERTY with parameter values that you can manually change at a later time, create an entry in the 10x KeyBindings file ( I use `Control Shift U`) with a value of `InsertDefaultUPROPERTY()`. For example:
+If all you are looking to do is insert a UPROPERTY with parameter values that you can manually change at a later time, create an entry in the 10x KeyBindings file ( I use `Control Shift U`) with a value of `InsertDefaultUPROPERTY()`. 
+
+For example:
+
 `Control Shift U:       InsertDefaultUPROPERTY()`
 
-You can specifiy the value to use when inserting the default value by creating a new setting value (`UE.Default_UPROPERTY`) in the 10x Settings file. Here is an example entry:
+You can specifiy the value to use when inserting the default value by creating a new setting value (`UE.Default_UPROPERTY`) in the 10x Settings file. 
+
+Here is an example entry:
+
 `UE.Default_UPROPERTY:              UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "")`
 
 If you do not add that setting, a default property will be inserted.
@@ -32,6 +38,15 @@ The `InsertUPROPERTY_TwoParm` is the same as the `InsertUPROPERTY_OneParm`, but 
 `UPROPERTY($1, $2, Category = "")`
 
 This will allow you to code complete values in the first parameter, and then hit the TAB key to find values in the second parameter. Again, hit ESC to exit completion mode.
+
+**Example Key Bindings:**
+
+Control Shift U, 2:     InsertUPROPERTY_TwoParm()
+
+Control Shift U, 1:     InsertUPROPERTY_OneParm()
+
+Control Shift U:        InsertDefaultUPROPERTY()
+
 
 ## Settings Values
 You do not need to add any new 10x settings to make use of this script. However, if you want to provide your own defaults, the following settings can be used:
