@@ -41,11 +41,11 @@ This will allow you to code complete values in the first parameter, and then hit
 
 **Example Key Bindings:**
 
-Control Shift U, 2:     InsertUPROPERTY_TwoParm()
+`Control Shift U, 2:     InsertUPROPERTY_TwoParm()`
 
-Control Shift U, 1:     InsertUPROPERTY_OneParm()
+`Control Shift U, 1:     InsertUPROPERTY_OneParm()`
 
-Control Shift U:        InsertDefaultUPROPERTY()
+`Control Shift U:        InsertDefaultUPROPERTY()`
 
 
 ## Settings Values
