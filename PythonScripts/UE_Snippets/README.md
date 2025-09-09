@@ -59,8 +59,8 @@ You do not need to add any new 10x settings to make use of this script. However,
 
 **Example settings values:**
 
-UE.Default_UPROPERTY:               UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "")
+`UE.Default_UPROPERTY:               UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "")`
 
-UE.OneParm_UPROPERTY:               UPROPERTY($1, BlueprintReadOnly, Category = "")
+`UE.OneParm_UPROPERTY:               UPROPERTY($1, BlueprintReadOnly, Category = "")`
 
-UE.TwoParm_UPROPERTY:               UPROPERTY($1, $2, Category = "")
+`UE.TwoParm_UPROPERTY:               UPROPERTY($1, $2, Category = "")`
