@@ -14,3 +14,28 @@ Once these settings are in place, create a new keystroke in your key map. For ex
 Alt Shift Control G:        GenerateVSProjectFiles()
 
 You will need to save your workspace prior to running this script.
+
+Also, I highly recommend turning OFF Intellisense generation ( as we are using 10X after all! ) for your projects.
+
+You can do this by modifying the BuildConfiguration.xml file found in `<dir of your .sln file>/Saved/UnrealBuildTool/BuildConfiguration.xml`.
+
+By default, that file will look like this:
+
+`<?xml version="1.0" encoding="utf-8" ?>
+<Configuration xmlns="https://www.unrealengine.com/BuildConfiguration">
+</Configuration>`
+
+Add the following between those `Configuration` tags:
+
+`<ProjectFileGenerator>
+    <bGenerateIntelliSenseData>false</bGenerateIntelliSenseData>
+</ProjectFileGenerator>`
+
+so the default BuildConfiguration.xml file after the addition of the new tags should look like this:
+
+`<?xml version="1.0" encoding="utf-8" ?>
+<Configuration xmlns="https://www.unrealengine.com/BuildConfiguration">
+    <ProjectFileGenerator>
+        <bGenerateIntelliSenseData>false</bGenerateIntelliSenseData>
+    </ProjectFileGenerator>
+</Configuration>`
