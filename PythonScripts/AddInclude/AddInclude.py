@@ -35,23 +35,30 @@ def _IsUE5Workspace():
 
 # returns an array of include paths (forward single slash) for the given project file
 def _GetIncludePaths(projFilePath):
+
     includePaths = []
     includeText= ""
     rsValue = ""
+
+    # Set the current working directory to resolve relative paths found
+    os.chdir( os.path.dirname(projFilePath))
 
     #parse vcxproj file to find include paths
     tree = ET.parse(projFilePath)
     root = tree.getroot()
     
-    #search include paths
-    nodeName = _GetXMLNameSpace(root.tag) + "IncludePath"
+    #search include paths, but use the ClInclude tag, which will 
+    # work regardless of whether or not intellisense data is being
+    # generated or not
+    nodeName =  _GetXMLNameSpace(root.tag) + "ClInclude"
 
     for includePath in root.iter(nodeName):
-        includeText += includePath.text
-
-    #split include paths by semi colon and put in array
-    for includeText in includeText.split(";"):
-        includePaths.append(includeText.replace(os.sep, '/'))
+        filePath = includePath.attrib["Include"]
+        if os.path.isabs(filePath):
+            includePaths.append(os.path.dirname(filePath).replace(os.sep, '/'))
+        else:
+            fullPath = os.path.abspath( filePath )
+            includePaths.append(os.path.dirname(fullPath).replace(os.sep, '/'))
 
     #remove any empty entry in includePaths
     includePaths = list(filter(None, includePaths))
@@ -174,8 +181,8 @@ def AddInclude():
         includePaths = includePaths + engineIncludePaths
 
     #N10X.Editor.LogTo10XOutput( f"[AddInclude] Active Project: {activeProject}\n\tActive Project Dir: {os.path.dirname(activeProject)}\n\tpath: {path}\n\tcurrentPath: {currentPath}\n" )
-    # incs = '\n\t'.join(includePaths)
-    # N10X.Editor.LogTo10XOutput( f"[AddInclude] IncludePaths: \n{incs}\n")
+    #incs = '\n\t'.join(includePaths)
+    #N10X.Editor.LogTo10XOutput( f"[AddInclude] IncludePaths: \n{incs}\n")
 
     # trim the path if possible
     commonpath = path
@@ -222,6 +229,12 @@ def AddInclude():
     for i in range(N10X.Editor.GetLineCount() - 1, 0, -1):
         line = N10X.Editor.GetLine(i)
         result = re.search("#include", line)
+
+        if isUE:
+            # make sure we're not putting the include after a generated header, otherwise
+            # won't compile
+            if re.search(".generated.h", line ):
+                result = None
         if result:
             # -2 to also trim the newline char
             N10X.Editor.SetCursorPos((len(line)-2,i))
