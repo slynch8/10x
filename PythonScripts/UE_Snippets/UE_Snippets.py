@@ -1,15 +1,135 @@
 import N10X
 import time
 import os
+from enum import Enum
 
 global g_state
 
-class CompletionState:
-    _defaultProperty = "UPROPERTY(VisibleDefaultsOnly, BlueprintReadOnly, Category = \"\")"
-    _oneParm = "UPROPERTY($1, BlueprintReadOnly, Category = \"\")"
-    _twoParm = "UPROPERTY($1, $2, Category = \"\")"
+class CompletionType(Enum):
+    UPROPERTY = 1,
+    UFUNCTION = 2,
+    UCLASS = 3,
+    UINTERFACE = 4,
+    UDELEGATE = 5,
+    USTRUCT = 6
 
-    # These are the current values as of Sept 2025 found in ObjectMacros.h
+class CompletionState:
+
+    _prefix = "[UESnippet Completion Active] "
+
+    def __init__(self) -> None:
+        self._currentText = ""
+        self._origPos = ()
+        self._currentTab = 1
+
+
+    def GetCurrentCompletion(self) -> str:
+        return self._currentText
+
+    def SetCurrentCompletion(self, comp : str):
+        self._currentText = comp
+
+    def GetOriginalPos(self) -> tuple:
+        return self._origPos
+
+    def SetOriginalPos(self, pos : tuple):
+        self._origPos = pos
+
+    def GetMatchIndex(self, match : str) -> int:
+        index : int = -1
+        try:
+            index = self.GetReplacements().index(match)
+        except(ValueError):
+            pass
+        return index
+
+    def GetMatchByIndex(self, index : int ) -> str:
+        result = ""
+        try:
+            result = self.GetReplacements()[index]
+        except(IndexError):
+            pass
+        return result
+
+    @staticmethod
+    def SetStatusBarText(text):
+        N10X.Editor.SetStatusBarText( CompletionState._prefix + text)
+
+    def GetReplacements(self) -> list:
+        return []
+
+    def FindReplacement(self, curText):
+        found = False
+        pos = self.GetOriginalPos()
+
+        replacements = self.GetReplacements()
+
+        for rep in replacements:
+            if rep.startswith(curText):
+                N10X.Editor.ExecuteCommand("Delete")
+                N10X.Editor.InsertText(rep)
+                N10X.Editor.SetSelection(pos, (pos[0]+len(rep), pos[1]))
+                found = True
+                break
+
+        return found
+
+    def SetCurrentTabNum(self, num : int ):
+        self._currentTab = num;
+
+    def GetCurrentTabNum(self) -> int:
+        return self._currentTab
+
+    def GetCurrentReplacementParm(self) -> str:
+        return "$" + str(self.GetCurrentTabNum())
+
+    def GetNextReplacementParm(self) -> str:
+        return "$" + str(self.GetCurrentTabNum() + 1)
+
+    def IncrementReplacementParm(self) -> str:
+        self._currentTab = self._currentTab + 1
+        return self.GetCurrentReplacementParm()
+
+    def GetCompletionTypeName(self) -> str:
+        return ""
+
+    def GetDefault(self) -> str:
+        return ""
+
+    def GetOneParm(self) -> str:
+        return ""
+
+
+    def GetTwoParm(self) -> str:
+        return ""
+
+
+    def RemoveDefault(self)-> bool:
+        found = False
+        pos = N10X.Editor.GetCursorPos()
+        line = N10X.Editor.GetLine(pos[1])
+
+        prop = self.GetDefault()
+        
+        if line.lstrip().rstrip() == prop:
+
+            x = line.find(self.GetCompletionTypeName())
+            N10X.Editor.SetSelection((x, pos[1]), (x+len(prop), pos[1]))
+            N10X.Editor.ExecuteCommand("Delete")
+            found = True
+
+        return found
+
+
+class UPROPERTYCompletionState(CompletionState):
+    # UPROPERTY support
+    # Default UPROPERTY values if no Setting values established. Use UE.Default_UPROPERTY
+    # to allow user to set the Default UPROPERTY in the 10x settings file
+    _defaultProperty = "UPROPERTY(VisibleDefaultsOnly, BlueprintReadOnly, Category = \"\")"
+    _oneUPROPParm = "UPROPERTY($1, BlueprintReadOnly, Category = \"\")"
+    _twoUPROPParm = "UPROPERTY($1, $2, Category = \"\")"
+
+    # These are the current values for UPROPERTY macros as of Sept 2025 found in ObjectMacros.h
     _replacements = ["Const", 
                     "Config",
                     "GlobalConfig",
@@ -51,117 +171,272 @@ class CompletionState:
                     "HideSelfPin", 
                     "FieldNotify" ]
     _replacements.sort()
-    _prefix = "[UEProperty Completion Active] "
 
     def __init__(self) -> None:
-        self._currentText = ""
-        self._origPos = ()
-        self._currentTab = 1
+        super().__init__()
+    
+    def GetReplacements(self) -> list:
+        return self._replacements
 
-    def GetCurrentCompletion(self) -> str:
-        return self._currentText
+    def GetCompletionTypeName(self) -> str:
+        return "UPROPERTY"
 
-    def SetCurrentCompletion(self, comp : str):
-        self._currentText = comp
-
-    def GetOriginalPos(self) -> tuple:
-        return self._origPos
-
-    def SetOriginalPos(self, pos : tuple):
-        self._origPos = pos
-
-    def GetMatchIndex(self, match : str) -> int:
-        index : int = -1
-        try:
-            index = CompletionState._replacements.index(match)
-        except(ValueError):
-            pass
-        return index
-
-    def GetMatchByIndex(self, index : int ) -> str:
-        result : str = N10X.Editor.GetSelection()
-        try:
-            result = CompletionState._replacements[index]
-        except(IndexError):
-            pass
-        return result
-
-    @staticmethod
-    def SetStatusBarText(text):
-        N10X.Editor.SetStatusBarText( CompletionState._prefix + text)
-
-    # def SetStatusBarText(self, text):
-    #     CompletionState.SetN10XStatusBarText(text)
-
-    def FindReplacement(self, curText):
-        found = False
-        pos = self.GetOriginalPos()
-
-        for rep in CompletionState._replacements:
-            if rep.startswith(curText):
-                N10X.Editor.ExecuteCommand("Delete")
-                N10X.Editor.InsertText(rep)
-                N10X.Editor.SetSelection(pos, (pos[0]+len(rep), pos[1]))
-                found = True
-                break
-
-        return found
-
-    def SetCurrentTabNum(self, num : int ):
-        self._currentTab = num;
-
-    def GetCurrentTabNum(self) -> int:
-        return self._currentTab
-
-    def GetCurrentReplacementParm(self) -> str:
-        return "$" + str(self.GetCurrentTabNum())
-
-    def GetNextReplacementParm(self) -> str:
-        return "$" + str(self.GetCurrentTabNum() + 1)
-
-    def IncrementReplacementParm(self) -> str:
-        self._currentTab = self._currentTab + 1
-        return self.GetCurrentReplacementParm()
-
-    @staticmethod
-    def GetDefaultProperty() -> str:
+    def GetDefault(self) -> str:
         val = N10X.Editor.GetSetting("UE.Default_UPROPERTY")
 
         if len(val) == 0:
-            return CompletionState._defaultProperty
+            return self._defaultProperty
         return val;
 
-    @staticmethod
-    def GetOneParmProperty() -> str:
+    def GetOneParm(self) -> str:
         val = N10X.Editor.GetSetting("UE.OneParm_UPROPERTY")
 
         if len(val) == 0:
-            return CompletionState._oneParm
+            return self._oneUPROPParm
         return val
 
-    @staticmethod
-    def GetTwoParmProperty() -> str:
+    def GetTwoParm(self) -> str:
         val = N10X.Editor.GetSetting("UE.TwoParm_UPROPERTY")
 
         if len(val) == 0:
-            return CompletionState._twoParm
+            return self._twoUPROPParm
         return val
 
-    @staticmethod
-    def RemoveDefaultUPROPERTY()-> bool:
-        found = False
-        pos = N10X.Editor.GetCursorPos()
-        line = N10X.Editor.GetLine(pos[1])
+class UFUNCTIONCompletionState(CompletionState):
+    # UFUNCTION support
+    _defaultFunction = "UFUNCTION(BlueprintCallable, Category = \"\")"
+    _oneUFUNCParm = "UFUNCTION($1, Category = \"\")"
 
-        prop = CompletionState.GetDefaultProperty()
+    _replacements = [
+                    "BlueprintImplementableEvent",
+                    "BlueprintNativeEvent",
+                    "SealedEvent",
+                    "Exec",
+                    "Server",
+                    "Client",
+                    "NetMulticast",
+                    "Reliable",
+                    "Unreliable",
+                    "BlueprintPure",
+                    "BlueprintCallable",
+                    "BlueprintGetter",
+                    "BlueprintSetter",
+                    "BlueprintAuthorityOnly",
+                    "BlueprintCosmetic",
+                    "BlueprintInternalUseOnly",
+                    "CallInEditor",
+                    "CustomThunk",
+                    "Category",
+                    "FieldNotify",
+                    "WithValidation",
+                    "ServiceRequest",
+                    "ServiceResponse",
+                    "Variadic",
+                    "ReturnDisplayName", 
+                    "InternalUseParam", 
+                    "ForceAsFunction", 
+                    "IgnoreTypePromotion" ]
+    _replacements.sort()
 
-        if line.lstrip().rstrip() == prop:
-            x = line.find("UPROPERTY")
-            N10X.Editor.SetSelection((x, pos[1]), (x+len(prop), pos[1]))
-            N10X.Editor.ExecuteCommand("Delete")
-            found = True
+    def __init__(self) -> None:
+        super().__init__()
+    
+    def GetReplacements(self) -> list:
+        return self._replacements
 
-        return found
+    def GetCompletionTypeName(self) -> str:
+        return "UFUNCTION"
+
+    def GetDefault(self) -> str:
+        val = N10X.Editor.GetSetting("UE.Default_UFUNCTION")
+
+        if len(val) == 0:
+            return self._defaultFunction
+        return val;
+
+    def GetOneParm(self) -> str:
+        val = N10X.Editor.GetSetting("UE.OneParm_UFUNCTION")
+
+        if len(val) == 0:
+            return self._oneUFUNCParm
+        return val
+
+class UDELEGATECompletionState(UFUNCTIONCompletionState):
+    # UDELEGATE support
+    _default = "UDELEGATE(BlueprintCallable, Category = \"\")"
+    _oneParm = "UDELEGATE($1, Category = \"\")"
+
+    def __init__(self) -> None:
+        super().__init__()
+
+    def GetCompletionTypeName(self) -> str:
+        return "UDELEGATE"
+
+    def GetDefault(self) -> str:
+        val = N10X.Editor.GetSetting("UE.Default_UDELEGATE")
+
+        if len(val) == 0:
+            return self._default
+        return val;
+
+    def GetOneParm(self) -> str:
+        val = N10X.Editor.GetSetting("UE.OneParm_UDELEGATE")
+
+        if len(val) == 0:
+            return self._oneParm
+        return val
+
+class UCLASSCompletionState(CompletionState):
+    # UCLASS support
+    _default = "UCLASS(BlueprintType)"
+    _oneParm = "UCLASS($1)"
+
+    _replacements = [
+                    "classGroup",
+                    "Within", 
+                    "BlueprintType",
+                    "NotBlueprintType",
+                    "Blueprintable",
+                    "NotBlueprintable",
+                    "MinimalAPI",
+                    "customConstructor",
+                    "CustomFieldNotify",
+                    "Intrinsic",
+                    "noexport",
+                    "placeable",
+                    "notplaceable",
+                    "DefaultToInstanced",
+                    "Const",
+                    "Abstract",
+                    "deprecated",
+                    "Transient",
+                    "nonTransient",
+                    "Optional",
+                    "config",
+                    "perObjectConfig",
+                    "configdonotcheckdefaults",
+                    "defaultconfig",
+                    "EditorConfig",
+                    "editinlinenew",
+                    "noteditinlinenew",
+                    "hidedropdown",
+                    "showCategories",
+                    "hideCategories",
+                    "ComponentWrapperClass",
+                    "showFunctions",
+                    "hideFunctions",
+                    "autoExpandCategories",
+                    "autoCollapseCategories",
+                    "dontAutoCollapseCategories",
+                    "collapseCategories",
+                    "dontCollapseCategories",
+                    "prioritizeCategories",
+                    "AdvancedClassDisplay",
+                    "ConversionRoot",
+                    "Experimental",
+                    "EarlyAccessPreview",
+                    "SparseClassDataType",
+                    "CustomThunkTemplates"
+                     ]
+    _replacements.sort()
+
+    def __init__(self) -> None:
+        super().__init__()
+    
+    def GetReplacements(self) -> list:
+        return self._replacements
+
+    def GetCompletionTypeName(self) -> str:
+        return "UCLASS"
+
+    def GetDefault(self) -> str:
+        val = N10X.Editor.GetSetting("UE.Default_UCLASS")
+
+        if len(val) == 0:
+            return self._default
+        return val;
+
+    def GetOneParm(self) -> str:
+        val = N10X.Editor.GetSetting("UE.OneParm_UCLASS")
+
+        if len(val) == 0:
+            return self._oneParm
+        return val
+
+class UINTERFACEfaceCompletionState(CompletionState):
+    # UCLASS support
+    _default = "UINTERFACE(Blueprintable)"
+    _oneParm = "UINTERFACE($1)"
+
+    _replacements = [
+                    "MinimalAPI",
+                    "Blueprintable",
+                    "NotBlueprintable",
+                    "ConversionRoot"
+                     ]
+    _replacements.sort()
+
+    def __init__(self) -> None:
+        super().__init__()
+    
+    def GetReplacements(self) -> list:
+        return self._replacements
+
+    def GetCompletionTypeName(self) -> str:
+        return "UINTERFACE"
+
+    def GetDefault(self) -> str:
+        val = N10X.Editor.GetSetting("UE.Default_UINTERFACE")
+
+        if len(val) == 0:
+            return self._default
+        return val;
+
+    def GetOneParm(self) -> str:
+        val = N10X.Editor.GetSetting("UE.OneParm_UINTERFACE")
+
+        if len(val) == 0:
+            return self._oneParm
+        return val
+
+
+class USTRUCTCompletionState(CompletionState):
+    # USTRUCT support
+    _default = "USTRUCT(BlueprintCallable, Category = \"\")"
+    _oneParm = "USTRUCT($1, Category = \"\")"
+
+    _replacements = [
+                    "NoExport",
+                    "Atomic",
+                    "Immutable",
+                    "BlueprintType",
+                    "BlueprintInternalUseOnly",
+                    "BlueprintInternalUseOnlyHierarchical"
+                    ]
+    _replacements.sort()
+
+    def __init__(self) -> None:
+        super().__init__()
+    
+    def GetReplacements(self) -> list:
+        return self._replacements
+
+    def GetCompletionTypeName(self) -> str:
+        return "USTRUCT"
+
+    def GetDefault(self) -> str:
+        val = N10X.Editor.GetSetting("UE.Default_USTRUCT")
+
+        if len(val) == 0:
+            return self._default
+        return val;
+
+    def GetOneParm(self) -> str:
+        val = N10X.Editor.GetSetting("UE.OneParm_USTRUCT")
+
+        if len(val) == 0:
+            return self._oneParm
+        return val
 
 
 def _HandleKeyStroke( key ):
@@ -225,6 +500,11 @@ def _HandleCompletion(key, shift, control, alt):
             inc = 1 if key == "Down" else -1
             match = g_state.GetMatchByIndex(index+inc)
             g_state.FindReplacement( match )
+        else:
+            # Allow for scrubbing through values without
+            # having to make a first match
+            match = g_state.GetMatchByIndex(0)
+            g_state.FindReplacement( match )
 
         handled = True
         g_state.SetStatusBarText( g_state.GetCurrentCompletion() )
@@ -243,14 +523,31 @@ def _HandleCompletion(key, shift, control, alt):
 
     return handled
 
-def _InstallHook( prop ):
+
+def _InstallCompletionState(completionType : CompletionType = CompletionType.UPROPERTY ):
     global g_state
-    g_state = CompletionState()
+
+    match completionType:
+        case CompletionType.UPROPERTY:
+            g_state = UPROPERTYCompletionState()
+        case CompletionType.UFUNCTION:
+            g_state = UFUNCTIONCompletionState()
+        case CompletionType.UCLASS:
+            g_state = UCLASSCompletionState()
+        case CompletionType.UINTERFACE:
+            g_state = UINTERFACEfaceCompletionState()
+        case CompletionType.UDELEGATE:
+            g_state = UDELEGATECompletionState()
+        case CompletionType.USTRUCT:
+            g_state = USTRUCTCompletionState()
+
+def _InstallHook( prop, completionType : CompletionType = CompletionType.UPROPERTY ):
+    global g_state
 
     pos = N10X.Editor.GetCursorPos()
     line = N10X.Editor.GetLine(pos[1])
 
-    CompletionState.RemoveDefaultUPROPERTY()
+    g_state.RemoveDefault()
     N10X.Editor.InsertText(prop)
 
     pos = N10X.Editor.GetCursorPos()
@@ -276,7 +573,9 @@ def InsertUPROPERTY_OneParm():
     Use the UE.OneParm_UPROPERTY setting to establish the default in the 10X
     settings file. If UE.DefaultProperty is not found, a default is inserted
     """
-    _InstallHook(CompletionState.GetOneParmProperty())
+    global g_state
+    _InstallCompletionState()
+    _InstallHook(g_state.GetOneParm())
 
 def InsertUPROPERTY_TwoParm():
     """
@@ -291,10 +590,12 @@ def InsertUPROPERTY_TwoParm():
     
     Hit the ESCAPE key to end UPROPERTY selection mode.
 
-    Use the UE.OneParm_UPROPERTY setting to establish the default in the 10X
-    settings file. If UE.DefaultProperty is not found, a default is inserted
+    Use the UE.TwoParm_UPROPERTY setting to establish the default in the 10X
+    settings file. If UE.TwoParm_UPROPERTY is not found, a default is inserted
     """
-    _InstallHook(CompletionState.GetTwoParmProperty())    
+    global g_state
+    _InstallCompletionState()
+    _InstallHook(g_state.GetTwoParm())    
     
 def InsertDefaultUPROPERTY():
     """
@@ -302,4 +603,148 @@ def InsertDefaultUPROPERTY():
     Use the UE.DefaultProperty setting to establish the default in the 10X
     settings file. If UE.DefaultProperty is not found, a default is inserted
     """
-    N10X.Editor.InsertText(CompletionState.GetDefaultProperty())
+
+    global g_state
+    _InstallCompletionState()
+    N10X.Editor.InsertText(g_state.GetDefault())
+
+def InsertUFUNCTION_OneParm():
+    """
+    Call this script to insert a default UFUNCTION at the cursor location that 
+    has a $1 parameter as the first parameter to the macro. This allows you to use
+    case sensitive completion to select a value property value. You can also use up and
+    down arrows to explore valid completions.
+
+    Hit the ESCAPE key to end UFUNCTION selection mode.
+
+    Use the UE.OneParm_UFUNCTION setting to establish the default in the 10X
+    settings file. If UE.OneParm_UFUNCTION is not found, a default is inserted
+    """
+    global g_state
+    _InstallCompletionState( CompletionType.UFUNCTION )
+
+    _InstallHook(g_state.GetOneParm())
+
+def InsertDefaultUFUNCTION():
+    """
+    Call this script to insert a default UFUNCTION at the cursor location.
+    Use the UE.DefaultFunction setting to establish the default in the 10X
+    settings file. If UE.DefaultFunction is not found, a default is inserted
+    """
+    global g_state
+    _InstallCompletionState( CompletionType.UFUNCTION )
+
+    N10X.Editor.InsertText( g_state.GetDefault() )
+
+def InsertUCLASS_OneParm():
+    """
+    Call this script to insert a default UCLASS at the cursor location that 
+    has a $1 parameter as the first parameter to the macro. This allows you to use
+    case sensitive completion to select a value property value. You can also use up and
+    down arrows to explore valid completions.
+
+    Hit the ESCAPE key to end UCLASS selection mode.
+
+    Use the UE.OneParm_UCLASS setting to establish the default in the 10X
+    settings file. If UE.OneParm_UCLASS is not found, a default is inserted
+    """
+    global g_state
+    _InstallCompletionState( CompletionType.UCLASS )
+
+    _InstallHook(g_state.GetOneParm())
+
+def InsertDefaultUCLASS():
+    """
+    Call this script to insert a default UCLASS at the cursor location.
+    Use the UE.DefaultFunction setting to establish the default in the 10X
+    settings file. If UE.DefaultClass is not found, a default is inserted
+    """
+    global g_state
+    _InstallCompletionState( CompletionType.UCLASS )
+
+    N10X.Editor.InsertText( g_state.GetDefault() )
+
+def InsertUINTERFACE_OneParm():
+    """
+    Call this script to insert a default UINTERFACE at the cursor location that 
+    has a $1 parameter as the first parameter to the macro. This allows you to use
+    case sensitive completion to select a value property value. You can also use up and
+    down arrows to explore valid completions.
+
+    Hit the ESCAPE key to end UINTERFACE selection mode.
+
+    Use the UE.OneParm_UINTERFACE setting to establish the default in the 10X
+    settings file. If UE.OneParm_UINTERFACE is not found, a default is inserted
+    """
+    global g_state
+    _InstallCompletionState( CompletionType.UINTERFACE )
+
+    _InstallHook(g_state.GetOneParm())
+
+def InsertDefaultUINTERFACE():
+    """
+    Call this script to insert a default UINTERFACE at the cursor location.
+    Use the UE.DefaultFunction setting to establish the default in the 10X
+    settings file. If UE.DefaultClass is not found, a default is inserted
+    """
+    global g_state
+    _InstallCompletionState( CompletionType.UINTERFACE )
+
+    N10X.Editor.InsertText( g_state.GetDefault() )
+
+def InsertUDELEGATE_OneParm():
+    """
+    Call this script to insert a default UDELEGATE at the cursor location that 
+    has a $1 parameter as the first parameter to the macro. This allows you to use
+    case sensitive completion to select a value property value. You can also use up and
+    down arrows to explore valid completions.
+
+    Hit the ESCAPE key to end UDELEGATE selection mode.
+
+    Use the UE.OneParm_UDELEGATE setting to establish the default in the 10X
+    settings file. If UE.OneParm_UDELEGATE is not found, a default is inserted
+    """
+    global g_state
+    _InstallCompletionState( CompletionType.UDELEGATE )
+
+    _InstallHook(g_state.GetOneParm())
+
+def InsertDefaultUDELEGATE():
+    """
+    Call this script to insert a default UDELEGATE at the cursor location.
+    Use the UE.DefaultFunction setting to establish the default in the 10X
+    settings file. If UE.DefaultClass is not found, a default is inserted
+    """
+    global g_state
+    _InstallCompletionState( CompletionType.UDELEGATE )
+
+    N10X.Editor.InsertText( g_state.GetDefault() )
+
+
+def InsertUSTRUCT_OneParm():
+    """
+    Call this script to insert a default USTRUCT at the cursor location that 
+    has a $1 parameter as the first parameter to the macro. This allows you to use
+    case sensitive completion to select a value property value. You can also use up and
+    down arrows to explore valid completions.
+
+    Hit the ESCAPE key to end USTRUCT selection mode.
+
+    Use the UE.OneParm_USTRUCT setting to establish the default in the 10X
+    settings file. If UE.OneParm_USTRUCT is not found, a default is inserted
+    """
+    global g_state
+    _InstallCompletionState( CompletionType.USTRUCT )
+
+    _InstallHook(g_state.GetOneParm())
+
+def InsertDefaultUSTRUCT():
+    """
+    Call this script to insert a default USTRUCT at the cursor location.
+    Use the UE.DefaultFunction setting to establish the default in the 10X
+    settings file. If UE.DefaultClass is not found, a default is inserted
+    """
+    global g_state
+    _InstallCompletionState( CompletionType.USTRUCT )
+
+    N10X.Editor.InsertText( g_state.GetDefault() )
