@@ -47,18 +47,43 @@ def _GetIncludePaths(projFilePath):
     tree = ET.parse(projFilePath)
     root = tree.getroot()
     
+    ###################
+    #
+    # NOTE:
+    #
+    # 9/11/2025 Had to revert to using IncludePath tag which requires
+    # the following configuration flag in BuildConfiguration.xml to be set to true:
+    # <ProjectFileGenerator>
+    #    <bGenerateIntelliSenseData>true</bGenerateIntelliSenseData>
+    # </ProjectFileGenerator>
+    #
+    # This unfortunately causes the UE_GenerateVSProjectFiles script to slow down by 2x,
+    # but without that flag, the include files required for proper header file inclusion
+    # will not work correctly. 
+    #
+    # I'm considering some work around and still researching, but until I find a solution,
+    # will revert back to generating Intellisense data
+    #
+    ####################
+
     #search include paths, but use the ClInclude tag, which will 
     # work regardless of whether or not intellisense data is being
     # generated or not
-    nodeName =  _GetXMLNameSpace(root.tag) + "ClInclude"
+    #nodeName =  _GetXMLNameSpace(root.tag) + "ClInclude"
+    nodeName =  _GetXMLNameSpace(root.tag) + "IncludePath"
 
     for includePath in root.iter(nodeName):
-        filePath = includePath.attrib["Include"]
-        if os.path.isabs(filePath):
-            includePaths.append(os.path.dirname(filePath).replace(os.sep, '/'))
-        else:
-            fullPath = os.path.abspath( filePath )
-            includePaths.append(os.path.dirname(fullPath).replace(os.sep, '/'))
+        #filePath = includePath.attrib["Include"]
+        includes = includePath.text
+        print(f"Includes: {includes}")
+        includes.replace(os.sep, '/')
+        includePaths = includes.split(';')
+
+        # if os.path.isabs(filePath):
+        #     includePaths.add(os.path.dirname(filePath).replace(os.sep, '/'))
+        # else:
+        #     fullPath = os.path.abspath( filePath )
+        #     includePaths.add(os.path.dirname(fullPath).replace(os.sep, '/'))
 
     #remove any empty entry in includePaths
     includePaths = list(filter(None, includePaths))
@@ -107,7 +132,7 @@ def _FindShortestIncludePath(path, includePathArray, activeProject):
             possiblePrefix = i.replace(os.sep, '/')
         else:
             possiblePrefix = os.path.normpath(activeProjectDir + "/" + i).replace(os.sep, '/')
-        #print(" Path: " + possiblePrefix + "\n")
+        #print(" _FindShortestIncludePath::  Path: " + possiblePrefix + "\n")
 
         if path.startswith(possiblePrefix):
             candidate = path[len(possiblePrefix)+1:]
@@ -168,6 +193,9 @@ def AddInclude():
     activeProject = N10X.Editor.GetActiveProject() 
     includePaths = _GetIncludePaths(activeProject)
 
+    #projectIncs = '\n\t'.join(includePaths)
+    #N10X.Editor.LogTo10XOutput( f"[AddInclude] Project IncludePaths: \n{projectIncs}\n")
+
     # add the include paths from Unreal Engine plugins and engine code
     # TODO: Find a more general way to determine this kind of dependency, and make sure this works for all workspace types
     isUE = False
@@ -180,7 +208,7 @@ def AddInclude():
         engineIncludePaths = _GetIncludePaths(engineProjectFile)
         includePaths = includePaths + engineIncludePaths
 
-    #N10X.Editor.LogTo10XOutput( f"[AddInclude] Active Project: {activeProject}\n\tActive Project Dir: {os.path.dirname(activeProject)}\n\tpath: {path}\n\tcurrentPath: {currentPath}\n" )
+    N10X.Editor.LogTo10XOutput( f"[AddInclude] Active Project: {activeProject}\n\tActive Project Dir: {os.path.dirname(activeProject)}\n\tpath: {path}\n\tcurrentPath: {currentPath}\n" )
     #incs = '\n\t'.join(includePaths)
     #N10X.Editor.LogTo10XOutput( f"[AddInclude] IncludePaths: \n{incs}\n")
 
@@ -191,11 +219,14 @@ def AddInclude():
     except ValueError:
         print( "[AddInclude] Paths on seperate drives?")
 
-    relpath = os.path.relpath(path, commonpath)    
+    relpath = os.path.relpath(path, commonpath)   
+    #print( f"relPath {relpath}, commonpath {commonpath}") 
     relpath = _FindShortestIncludePath(path, includePaths, activeProject)
 
     # windows backslash separators are undefined behavior
     relpathStandard = relpath.replace(os.sep, '/')
+
+    print(f"relpathStandard {relpathStandard}")
 
     # If this is a UE project, let's try and see if we can
     # reduce the include path to just the Public and Private 

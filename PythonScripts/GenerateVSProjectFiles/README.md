@@ -15,6 +15,17 @@ Alt Shift Control G:        GenerateVSProjectFiles()
 
 You will need to save your workspace prior to running this script.
 
+## Do NOT turn of Intellisense generation
+
+I want to leave these instructions here so that at a later time it will be possible to turn off the generation of intellisense data, but unfortunately, as of 9/11/2025,
+generating Intellisense data has a side effect which generates the IncludePath tags in the project files, which is used by the AddInclude.py script to properly
+add header files for types under the cursor.
+
+Until I find a solution to this problem, reverting back to REQUIRING the bGenerateIntelliSenseData to `true`
+
+
+## REFRAIN FROM THE FOLLOWING FOR NOW ( see note above )
+
 Also, I highly recommend turning OFF Intellisense generation ( as we are using 10X after all! ) for your projects.
 
 You can do this by modifying the BuildConfiguration.xml file found in `<dir of your .sln file>/Saved/UnrealBuildTool/BuildConfiguration.xml`.
