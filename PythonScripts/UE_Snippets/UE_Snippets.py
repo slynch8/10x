@@ -469,7 +469,7 @@ def _HandleCompletion(key, shift, control, alt):
         N10X.Editor.RemoveOnInterceptKeyFunction( _HandleCompletion )
         N10X.Editor.RemoveOnInterceptCharKeyFunction( _HandleKeyStroke )
         
-        N10X.Editor.SetCursorPos( g_state.GetOriginalPos())
+        N10X.Editor.SetCursorPos(N10X.Editor.GetSelectionEnd())
         g_state = CompletionState()
         handled = False
         g_state.SetStatusBarText("Deactivated")
