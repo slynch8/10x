@@ -1,32 +1,42 @@
 from N10X import Editor as Editor
 import re
 
-def _GetForwardDeclInsertionPos(startPos, endPos, symName):
+def _GetForwardDeclInsertionPos(startPos, endPos, symName, symType):
 
     #Editor.SetSelection(startPos, endPos)
 
     lineToInsert = -1
     column = 0
+    prefix = symType
+    firstBlankLinePos = -1
+    existingDeclsFound = False
 
     for i in range(startPos[1], endPos[1], 1):
         line = Editor.GetLine(i)
         #print(f"LINE: {i} Value: `{line.lstrip().rstrip()}`")
         if len(line.lstrip().rstrip()) == 0 and lineToInsert == -1:
             lineToInsert = i
+            firstBlankLinePos = i
         else:
-            result = re.search(".*class.*(\\w);", line)
+            result = re.search(".*\\bclass\\b.*(\\w);", line) if symType == "class" else re.search(".*\\bstruct\\b.*(\\w);", line)
+            
             if result:
-                className = result.group().lstrip().removeprefix("class")
-                if className.lstrip().removesuffix(";") == symName:
-                    # Forward Declaration already present
-                    column = -1;
-                    break;
-                else:
-                    lineToInsert = i+1
+                declName = result.group().lstrip().removeprefix(prefix)
+                #print(f"declName {declName}")
+                if declName.rstrip()[-1] == ";":
+                    if declName.lstrip().removesuffix(";") == symName:
+                        # Forward Declaration already present
+                        column = -1;
+                        break;
+                    else:
+                        # Found another decl, so let's keep looking to place
+                        # new decl after the last forward declaration
+                        existingDeclsFound = True
+                        lineToInsert = i+1
 
         #print(f"\tLine To Insert: {lineToInsert}")
 
-    if lineToInsert == -1:
+    if existingDeclsFound == False or lineToInsert == -1:
         lineToInsert = startPos[1]+1
         
     return (column,lineToInsert)
@@ -50,9 +60,9 @@ def _GetEndOfIncludesPos():
 
     return (0,0)
 
-def _FindInsertionPoint( currentScopePos, symName ):
+def _FindInsertionPoint( currentScopePos, symName, symType ):
     includePos = _GetEndOfIncludesPos()
-    insertPos = _GetForwardDeclInsertionPos(includePos, currentScopePos, symName )
+    insertPos = _GetForwardDeclInsertionPos(includePos, currentScopePos, symName, symType )
 
     return insertPos
 
@@ -63,16 +73,17 @@ def AddForwardDeclaration():
     
     Editor.ExecuteCommand("SelectCurrentWord")
     symName = Editor.GetSelection()
+    symType = Editor.GetSymbolType(origPos).lower()
     Editor.ExecuteCommand("SelectCurrentScope")
     currentScopePos = Editor.GetSelectionStart()
 
-    insertPos = _FindInsertionPoint( currentScopePos, symName )
+    insertPos = _FindInsertionPoint( currentScopePos, symName, symType )
 
     if insertPos[0] != -1:
 
         #print(f"Insert POS: {insertPos}")
 
-        output = "class " + symName + ";\n"
+        output = f"{symType} {symName};\n"
 
         Editor.BeginTextUpdate()
         Editor.SetCursorPos(insertPos)
