@@ -67,7 +67,7 @@ class CompletionState:
     def GetMatchByIndex(self, index : int ) -> str:
         result = ""
         try:
-            print( f"Replacements: {self.GetReplacements()} INDEX: {index}")
+            # print( f"Replacements: {self.GetReplacements()} INDEX: {index}")
             result = self.GetReplacements()[index]
         except(IndexError):
             pass
@@ -513,14 +513,14 @@ class MetaCompletionState(CompletionState):
         return {}
 
     def IncrementReplacementParm(self) -> str:
-        print( f"Current Replacement: {self.GetCurrentReplacementText()}")
+        #print( f"Current Replacement: {self.GetCurrentReplacementText()}")
         curRep = self.GetCurrentReplacementText()
 
         if curRep in self.GetSubReplacements():
             self.SetSubReplacement( self.GetSubReplacements()[curRep])
             if len(self.GetSubReplacement()) == 0:
                 N10X.Editor.ExecuteCommand("Delete")
-                print( "END IT")
+                #print( "END IT")
                 _EndCompletionState()
                 return ""
         else:
@@ -902,7 +902,7 @@ def _HandleCompletion(key, shift, control, alt):
         pos = N10X.Editor.GetCursorPos()
         line = N10X.Editor.GetLine(pos[1])
 
-        print(f"Current Completion: {g_state.GetCurrentCompletion()}")
+        #print(f"Current Completion: {g_state.GetCurrentCompletion()}")
         x = line.find(g_state.GetNextReplacementParm())
 
         if x != -1:
@@ -987,7 +987,6 @@ def _GetUEMacroScope() -> CompletionType :
     prefix = curLine[: curLine.find('(') ]
     prefix = prefix.lstrip().rstrip()
 
-    print(f"prefix {prefix}")
     if prefix in CompletionType.GetNames():
         return CompletionType[prefix]
 
@@ -1002,7 +1001,6 @@ def _LookForCodeComplete(key, shift, control, alt):
         if type is not None:
             _InstallCompletionState( type, True )
             _InstallHook( g_state.GetReplacements()[0], type)
-            print( f"Code complete called and inside MACRO {type.name}")
             handled = True
 
     return handled
