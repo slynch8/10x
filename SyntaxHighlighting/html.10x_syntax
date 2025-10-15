@@ -12,7 +12,7 @@
 #----------------------------------------------
 # settings
 
-Extensions:					.html,.htm
+Extensions:					.html,.htm,.svelte
 
 BlockCommentStart:			<!--
 
