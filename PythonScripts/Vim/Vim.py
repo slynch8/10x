@@ -2043,6 +2043,16 @@ def HandleCommandModeChar(char):
         N10X.Editor.PopUndoGroup()
         should_save = True
 
+    elif (m:= re.match("d'([a-zA-Z])", c)):
+        if m.group(1) in g_JumpMap:
+            jump = g_JumpMap[m.group(1)]
+            N10X.Editor.PushUndoGroup()
+            x, y = N10X.Editor.GetCursorPos()
+            SetSelection((x, y), jump)
+            N10X.Editor.ExecuteCommand("Cut")
+            N10X.Editor.PopUndoGroup()
+            should_save = True
+
     elif (m := re.match("d" + g_RepeatMatch, c)) or c == "dg":
         return
 
