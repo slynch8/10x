@@ -3092,6 +3092,22 @@ def HandleCommandlineModeKey(key: Key):
             g_Commandline.historyIndex = len(history_buffer)-1 
             if is_search:
                 UpdateSearchText(g_Commandline.text[1:])
+
+    # Paste
+    elif key == Key("V", control=True):
+        clipboard_text = GetClipboardValue()
+        # Truncate if too big
+        max_paste_length = 60 # characters
+        clipboard_text = clipboard_text[:max_paste_length-len(clipboard_text)]
+        # Append clipboard
+        g_Commandline.text += clipboard_text
+        g_Commandline.cursorPos = len(g_Commandline.text)
+        # Update history buffer
+        history_buffer[-1] = g_Commandline.text[1:]
+        # Update search text if searching
+        if IsSearching() and len(g_Commandline.text) > 1:
+            UpdateSearchText(g_Commandline.text[1:])
+
     # Navigation
 
     elif key == Key("Left"):
