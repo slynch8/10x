@@ -2043,6 +2043,16 @@ def HandleCommandModeChar(char):
         N10X.Editor.PopUndoGroup()
         should_save = True
 
+    elif (m:= re.match("d'([a-zA-Z])", c)):
+        if m.group(1) in g_JumpMap:
+            jump = g_JumpMap[m.group(1)]
+            N10X.Editor.PushUndoGroup()
+            x, y = N10X.Editor.GetCursorPos()
+            SetSelection((x, y), jump)
+            N10X.Editor.ExecuteCommand("Cut")
+            N10X.Editor.PopUndoGroup()
+            should_save = True
+
     elif (m := re.match("d" + g_RepeatMatch, c)) or c == "dg":
         return
 
@@ -3082,6 +3092,22 @@ def HandleCommandlineModeKey(key: Key):
             g_Commandline.historyIndex = len(history_buffer)-1 
             if is_search:
                 UpdateSearchText(g_Commandline.text[1:])
+
+    # Paste
+    elif key == Key("V", control=True):
+        clipboard_text = GetClipboardValue().strip()
+        # Truncate if too big
+        max_paste_length = 512 # characters
+        clipboard_text = clipboard_text[:max_paste_length-len(clipboard_text)]
+        # Insert clipboard at cursor pos
+        g_Commandline.text = g_Commandline.text[:g_Commandline.cursorPos] + clipboard_text + g_Commandline.text[g_Commandline.cursorPos:]
+        g_Commandline.cursorPos += len(clipboard_text)
+        # Update history buffer
+        history_buffer[-1] = g_Commandline.text[1:]               
+        # Update search text if searching
+        if IsSearching() and len(g_Commandline.text) > 1:
+            UpdateSearchText(g_Commandline.text[1:])
+
     # Navigation
 
     elif key == Key("Left"):
