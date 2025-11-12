@@ -82,6 +82,17 @@ def _FindLineNumber(LineToFind: str, Text: str):
 
     return -1, None
 
+def _IsInsideNamespaceDeclaration():
+    fileText: str = N10X.Editor.GetFileText()
+    lines = fileText.split('\n')
+
+    line = 1;
+    for line in lines:
+        if line.find("namespace") == 0:
+            return True
+
+    return False
+
 
 def _Define(bToggleSourceHeader: bool):
     if not _IsCurrentLineFunctionDeclaration():
@@ -91,7 +102,10 @@ def _Define(bToggleSourceHeader: bool):
     Signature = _MakeImplementationSignature()
     SourceToPaste = Signature + "\n{\n\n}"
 
+    inNamespaceDeclaration = False
+
     if bToggleSourceHeader:
+        inNamespaceDeclaration = _IsInsideNamespaceDeclaration()
         N10X.Editor.ExecuteCommand("CppParser.ToggleSourceHeader")
 
     PageText: str = N10X.Editor.GetFileText()
@@ -120,12 +134,25 @@ def _Define(bToggleSourceHeader: bool):
         SearchPageTextSlice = SearchPageTextSlice[SignatureIndex:]
 
     # TODO: Function must be pasted between previous and next function, so order is maintained
-    PageText += "\n\n" + SourceToPaste
+    if inNamespaceDeclaration :
+        index = PageText.rfind("}")
+        if index != -1:
+
+            PageText = PageText[:index] + "\n\n" + SourceToPaste + "\n" + PageText[index:]
+            #N10X.Editor.InsertText( SourceToPaste)
+    else:
+        PageText += "\n\n" + SourceToPaste
+
     N10X.Editor.SetFileText(PageText)
 
     LineNum, Line = _FindLineNumber(Signature, PageText)
     # Set position to be in the curly brackets, so we can start typing right away
     N10X.Editor.SetCursorPos((4, LineNum + 2))
+
+    if inNamespaceDeclaration:
+        N10X.Editor.SetSelection((1, LineNum), (1, LineNum+4))
+        N10X.Editor.ExecuteCommand("FormatSelection")
+        N10X.Editor.ClearSelection()
 
 
 def Define():
