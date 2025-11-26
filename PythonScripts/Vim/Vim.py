@@ -3166,53 +3166,50 @@ def SubmitCommandline(command):
     elif user_result == UserHandledResult.PASS_TO_10X:
         return False
 
-    if command == ":sp":
+    elif command == ":sp":
         x, y = N10X.Editor.GetCursorPos()
         N10X.Editor.ExecuteCommand("DuplicatePanel")
         N10X.Editor.ExecuteCommand("MovePanelDown")
         SetCursorPos(x,y)
-        return True
     
-    if command == ":vsp":
+    elif command == ":vsp":
         x, y = N10X.Editor.GetCursorPos()
         N10X.Editor.ExecuteCommand("DuplicatePanelRight")
         SetCursorPos(x,y)
-        return True
 
-    if command == ":w" or command == ":W":
+    elif command == ":w" or command == ":W":
         N10X.Editor.ExecuteCommand("SaveFile")
         g_Commandline.result = "Saved " + N10X.Editor.GetCurrentFilename()
         print(g_Commandline.result)
-        return True
 
-    if command == ":wa":
+    elif command == ":wa":
         N10X.Editor.ExecuteCommand("SaveAll")
         g_Commandline.result = "Saved file(s)"
-        return True
 
-    if command == ":wq":
+    elif command == ":wq":
         N10X.Editor.ExecuteCommand("SaveFile")
         g_Commandline.result = "Saved " + N10X.Editor.GetCurrentFilename()
         N10X.Editor.ExecuteCommand("CloseFile")
-        return True
 
-    if command == ":q" or command == ":Q" or command == ":x" or command == ":X":
+    elif command == ":q" or command == ":Q" or command == ":x" or command == ":X":
         N10X.Editor.ExecuteCommand("CloseFile")
-        return True
 
-    if command == ":q!" or command == ":x!":
+    elif command == ":q!" or command == ":x!":
         N10X.Editor.DiscardUnsavedChanges()
         N10X.Editor.ExecuteCommand("CloseFile")
-        return True
     
-    split = command.split(":")
-    if len(split) == 2 and split[1].isdecimal(): 
-        SetCursorPos(y=int(split[1]) - 1)
-        return True
-
-    if command == ":ShowCommandPanel":
+    elif command == ":ShowCommandPanel":
         N10X.Editor.ExecuteCommand(command[1:])
-        return True
+
+    elif command == ":noh":
+        N10X.Editor.SetFindText("")
+
+    else:
+        split = command.split(":")
+        if len(split) == 2 and split[1].isdecimal(): 
+            SetCursorPos(y=int(split[1]) - 1)
+
+    return True
 
 
 
