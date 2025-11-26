@@ -181,10 +181,6 @@ def InVisualMode():
     return g_Mode == Mode.VISUAL or g_Mode == Mode.VISUAL_LINE or g_Mode == Mode.VISUAL_BLOCK
 
 #------------------------------------------------------------------------
-def SetFindText(text, case=False, word=False, regex=False, start_pos=(-1,-1)):
-    N10X.Editor.SetFindText(text, case, word, regex, start_pos)
-
-#------------------------------------------------------------------------
 def Clamp(min_val, max_val, n):
    return max(min(n, max_val), min_val)
 
@@ -2086,6 +2082,7 @@ def HandleCommandModeChar(char):
 
     elif c == "*":
         for _ in range(repeat_count):
+            g_ReverseSearch = False
             cached_find_by_word = N10X.Editor.GetFindByWord()
             cached_case = N10X.Editor.GetFindByCase()
             cached_regex = N10X.Editor.GetFindByRegex()
@@ -2101,6 +2098,7 @@ def HandleCommandModeChar(char):
 
     elif c == "#":
         for _ in range(repeat_count):
+            g_ReverseSearch = True
             cached_find_by_word = N10X.Editor.GetFindByWord()
             cached_case = N10X.Editor.GetFindByCase()
             cached_regex = N10X.Editor.GetFindByRegex()
@@ -3109,7 +3107,6 @@ def HandleCommandlineModeKey(key: Key):
             UpdateSearchText(g_Commandline.text[1:])
 
     # Navigation
-
     elif key == Key("Left"):
         # max with 1 is intentional here as you can't move before the starting char
         g_Commandline.cursorPos = max(1, g_Commandline.cursorPos - 1)
@@ -3212,6 +3209,11 @@ def SubmitCommandline(command):
     if len(split) == 2 and split[1].isdecimal(): 
         SetCursorPos(y=int(split[1]) - 1)
         return True
+
+    if command == ":ShowCommandPanel":
+        N10X.Editor.ExecuteCommand(command[1:])
+        return True
+
 
 
 #------------------------------------------------------------------------
@@ -3337,6 +3339,7 @@ def HandleInsertModeChar(char):
 def HandleVisualModeChar(char):
     global g_Mode
     global g_Command
+    global g_ReverseSearch
 
     g_Command += char
 
@@ -3611,6 +3614,27 @@ def HandleVisualModeChar(char):
         SetCursorPos(start[0], start[1])
         EnterCommandMode()
         should_save = True
+
+    elif c == "*":
+        for _ in range(repeat_count):
+            SubmitVisualModeSelection()
+            text = N10X.Editor.GetSelection()
+            N10X.Editor.ClearSelection()
+            g_ReverseSearch = False
+            N10X.Editor.SetFindText(text, False, False, False, False)
+            EnterCommandMode()
+
+    elif c == "#":
+        for _ in range(repeat_count):
+            SubmitVisualModeSelection()
+            text = N10X.Editor.GetSelection()
+            N10X.Editor.ClearSelection()
+            cursor_pos = list(N10X.Editor.GetCursorPos())
+            # Need to move cursor back one so reverse search doesn't find the current word
+            cursor_pos[0] -= 1
+            g_ReverseSearch = True
+            N10X.Editor.SetFindText(text, False, False, False, True, cursor_pos)
+            EnterCommandMode()
 
     elif c == "z":
         return
