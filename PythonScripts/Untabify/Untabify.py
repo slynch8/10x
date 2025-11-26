@@ -45,4 +45,4 @@ def UntabifyLines(fn):
 
 #------------------------------------------------------------------------
 # uncomment this line to replace all tabs with 'TabWidth' spaces on save
-N10X.Editor.AddPreFileSaveFunction(UntabifyLines)
+#N10X.Editor.AddPreFileSaveFunction(UntabifyLines)
