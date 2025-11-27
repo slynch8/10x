@@ -1453,24 +1453,42 @@ def IsSubstituting():
     return g_Commandline.text[:3] == ":s/"
 
 #------------------------------------------------------------------------
-def GetSubsitution(text):
-    substitute_items = text.split('/')
+def ParseSubstitutionText(text):
+    
+    # indices of each '/'
+    delimiters = []
+    # enumerate text and find delimimeters checking for escaped '/'
+    is_escaped = False
+    for idx, c in enumerate(text):
+        if len(delimiters) == 2:
+            break
+        if c == '\\' and not is_escaped:
+            is_escaped = True
+        else:
+            if c == '/' and not is_escaped:
+                delimiters.append(idx)
+            is_escaped = False
 
-    find = substitute_items[0] if len(substitute_items) > 0 else None
-    replace = substitute_items[1] if len(substitute_items) > 1 else None
-    replace_all = False if len(substitute_items) > 2 and 'g' in substitute_items[2] else False
-    repeat_count = 1
+    find = None
+    replace = None
+    flags_and_count = None
 
-    # parse flags and count
-    if len(substitute_items) > 2:
-        if (m := re.match("([a-zA-Z]*).*", substitute_items[2])):
-            replace_all = True if 'g' in m.group(1) else False 
-
-        if (m := re.match("[a-zA-Z]*\\s*([0-9]*)", substitute_items[2])):
-            repeat_count = int(m.group(1)) if m.group(1).isnumeric() else 1 
-
-    #print(f"find = {find} replace = {replace} replace_all = {replace_all} repeat = {repeat_count}")
-    return find, replace, replace_all, repeat_count
+    dc = len(delimiters)
+    if dc == 0:
+        find = text 
+    else:
+        find = text[:delimiters[0]]
+        if dc == 1:
+            replace = text[delimiters[0]+1:]
+        elif dc == 2:
+            replace = text[delimiters[0]+1:delimiters[1]]
+            flags_and_count = text[delimiters[1]+1:]
+            
+    # replace any escape characters
+    find = find.replace('\\', '') if find != None else None
+    replace = replace.replace('\\', '') if replace != None else None
+   
+    return find, replace, flags_and_count
 
 #------------------------------------------------------------------------
 def UpdateSubstitution(text):
@@ -1478,8 +1496,8 @@ def UpdateSubstitution(text):
         return
 
     # TODO: Update cursor/highlighting
-    text = text[3:] # trim ':s/' 
-    GetSubsitution(text)
+    #text = text[3:] # trim ':s/' 
+    #ParseSubstitutionText(text)
 
 #------------------------------------------------------------------------
 def SubmitSubstitution(text):
@@ -1487,7 +1505,18 @@ def SubmitSubstitution(text):
         return
 
     text = text[3:] # trim ':s/' 
-    find, replace, replace_all, repeat_count = GetSubsitution(text) 
+
+    find, replace, flags_and_count = ParseSubstitutionText(text)
+
+    # parse flags and count
+    replace_all = False
+    repeat_count = 1
+    if flags_and_count != None:
+        if (m := re.match("([a-zA-Z]*).*", flags_and_count)):
+            replace_all = True if 'g' in m.group(1) else False 
+
+        if (m := re.match("[a-zA-Z]*\\s*([0-9]*)", flags_and_count)):
+            repeat_count = int(m.group(1)) if m.group(1).isnumeric() else 1 
 
     if find != None and find != "" and replace != None:
         # Replace text line by line
