@@ -1,8 +1,11 @@
+# Odin Programming Language Syntax Highlighting for 10x Editor
+# Based on: https://odin-lang.org/docs/overview/
+# RE2 regex engine
+#
 # Note (Wassimulator): this is a work in progress, it contains mistakes
 # but covers quite a bit. I'm not that experienced in using regex or making
 # these, so if someone finds obvious mistakes and better suggestions
 # please update it!
-# https://github.com/slynch8/10x/new/main/SyntaxHighlighting
 #
 #----------------------------------------------
 # settings
@@ -12,10 +15,43 @@ Extensions:                  *.odin
 BlockCommentStart:           /*
 BlockCommentEnd:             */
 
+#----------------------------------------------
+# colour rules
+
+# Comments (must be early to take precedence)
 Language.Comment:
 REGEX(//.*)
 
+# Strings - double quoted, single quoted (runes), and raw strings (backticks)
+Language.String:
+REGEX("[^"\\]*(?:\\.[^"\\]*)*")
+REGEX('[^'\\]*(?:\\.[^'\\]*)*')
+REGEX(`[^`]*`)
+
+# Numbers - hex, binary, octal, decimal, float with optional suffixes
+Language.Number:
+REGEX(\b0[xX][a-fA-F0-9_]+\b)
+REGEX(\b0[bB][01_]+\b)
+REGEX(\b0[oO][0-7_]+\b)
+REGEX(\b[0-9][0-9_]*\.[0-9_]*(?:[eE][+-]?[0-9_]+)?[i]?\b)
+REGEX(\b[0-9][0-9_]*[eE][+-]?[0-9_]+[i]?\b)
+REGEX(\b[0-9][0-9_]*[i]?\b)
+
+# Directives (Odin's #directive syntax) - treat as preprocessor
+Language.Preprocessor:
+REGEX(#[a-zA-Z_][a-zA-Z0-9_]*)
+
+# Attributes @(...) - treat as preprocessor
+Language.Preprocessor:
+REGEX(@\([^)]*\))
+REGEX(@[a-zA-Z_][a-zA-Z0-9_]*)
+
+# Build tags #+
+Language.Preprocessor:
+REGEX(#\+[a-zA-Z_][a-zA-Z0-9_]*)
+
 #----------------------------------------------
+# Punctuation
 
 Language.Brace:
 TEXT({)
@@ -35,147 +71,337 @@ TEXT(;)
 Language.Comma:
 TEXT(,)
 
-Language.Keyword:
-WORD(import)
-WORD(package)
-WORD(proc)
-WORD(return)
-WORD(break)
-WORD(continue)
-WORD(if)
-WORD(else)
-WORD(when)
-WORD(for)
-WORD(in)
-WORD(switch)
-WORD(case)
-WORD(fallthrough)
-WORD(defer)
-WORD(using)
-WORD(struct)
-WORD(union)
-WORD(enum)
-WORD(distinct)
-WORD(typeid)
-WORD(cast)
-WORD(transmute)
-WORD(auto_cast)
-WORD(asm)
-WORD(foreign)
-WORD(map)
-WORD(matrix)
-WORD(bit_set)
-WORD(do)
-WORD(dynamic)
-WORD(not_in)
-WORD(or_else)
-WORD(or_return)
-WORD(context)
-WORD(where)
-# Built-in types
+#----------------------------------------------
+# Built-in Types (MUST come before Keywords)
+
+Language.Type:
+# Boolean types
 WORD(bool)
 WORD(b8)
 WORD(b16)
 WORD(b32)
 WORD(b64)
+# Signed integers
+WORD(int)
 WORD(i8)
 WORD(i16)
 WORD(i32)
 WORD(i64)
 WORD(i128)
+# Unsigned integers
+WORD(uint)
 WORD(u8)
 WORD(u16)
 WORD(u32)
 WORD(u64)
 WORD(u128)
-WORD(int)
-WORD(uint)
 WORD(uintptr)
+# Endian-specific signed integers
+WORD(i16le)
+WORD(i32le)
+WORD(i64le)
+WORD(i128le)
+WORD(i16be)
+WORD(i32be)
+WORD(i64be)
+WORD(i128be)
+# Endian-specific unsigned integers
+WORD(u16le)
+WORD(u32le)
+WORD(u64le)
+WORD(u128le)
+WORD(u16be)
+WORD(u32be)
+WORD(u64be)
+WORD(u128be)
+# Floating point
 WORD(f16)
 WORD(f32)
 WORD(f64)
-WORD(rawptr)
-WORD(string)
-WORD(rune)
-WORD(byte)
-WORD(any)
+# Endian-specific floats
+WORD(f16le)
+WORD(f32le)
+WORD(f64le)
+WORD(f16be)
+WORD(f32be)
+WORD(f64be)
+# Complex numbers
+WORD(complex32)
 WORD(complex64)
 WORD(complex128)
+# Quaternions
+WORD(quaternion64)
 WORD(quaternion128)
 WORD(quaternion256)
-# Literals / constants
+# String/character types
+WORD(string)
+WORD(cstring)
+WORD(rune)
+WORD(byte)
+# Pointer/any/typeid types
+WORD(rawptr)
+WORD(any)
+WORD(typeid)
+
+#----------------------------------------------
+# Polymorphic type parameters: $T, $Name, $Value_Type
+
+Language.Type:
+REGEX(\$[A-Za-z_][A-Za-z0-9_]*)
+
+#----------------------------------------------
+# Keywords
+
+Language.Keyword:
+# Package/Import
+WORD(package)
+WORD(import)
+WORD(foreign)
+# Control flow
+WORD(if)
+WORD(else)
+WORD(when)
+WORD(for)
+WORD(switch)
+WORD(case)
+WORD(do)
+WORD(break)
+WORD(continue)
+WORD(fallthrough)
+WORD(return)
+WORD(defer)
+# Error handling operators
+WORD(or_else)
+WORD(or_return)
+WORD(or_break)
+WORD(or_continue)
+# Type definitions
+WORD(struct)
+WORD(union)
+WORD(enum)
+WORD(bit_set)
+WORD(bit_field)
+WORD(proc)
+WORD(map)
+WORD(matrix)
+WORD(dynamic)
+WORD(distinct)
+# Type qualifiers
+WORD(using)
+WORD(where)
+WORD(context)
+# Cast operators
+WORD(cast)
+WORD(transmute)
+WORD(auto_cast)
+# Membership
+WORD(in)
+WORD(not_in)
+# Assembly
+WORD(asm)
+
+#----------------------------------------------
+# Built-in Constants/Values
+
+Language.Keyword:
 WORD(nil)
 WORD(true)
 WORD(false)
 
+#----------------------------------------------
+# Built-in Procedures (highlight as functions)
+
+Language.Function:
+WORD(len)
+WORD(cap)
+WORD(make)
+WORD(new)
+WORD(new_clone)
+WORD(free)
+WORD(free_all)
+WORD(delete)
+WORD(append)
+WORD(append_elem)
+WORD(append_elems)
+WORD(append_soa)
+WORD(append_soa_elem)
+WORD(append_string)
+WORD(pop)
+WORD(pop_front)
+WORD(pop_safe)
+WORD(pop_front_safe)
+WORD(clear)
+WORD(reserve)
+WORD(resize)
+WORD(shrink)
+WORD(inject_at)
+WORD(assign_at)
+WORD(ordered_remove)
+WORD(unordered_remove)
+WORD(delete_key)
+WORD(card)
+WORD(size_of)
+WORD(align_of)
+WORD(offset_of)
+WORD(offset_of_member)
+WORD(offset_of_by_string)
+WORD(type_of)
+WORD(type_info_of)
+WORD(typeid_of)
+WORD(swizzle)
+WORD(complex)
+WORD(quaternion)
+WORD(real)
+WORD(imag)
+WORD(jmag)
+WORD(kmag)
+WORD(conj)
+WORD(expand_values)
+WORD(min)
+WORD(max)
+WORD(abs)
+WORD(clamp)
+WORD(assert)
+WORD(panic)
+WORD(unreachable)
+WORD(raw_data)
+WORD(soa_zip)
+WORD(soa_unzip)
+WORD(transpose)
+WORD(outer_product)
+WORD(hadamard_product)
+WORD(matrix_flatten)
+WORD(copy)
+WORD(copy_from_string)
+
+#----------------------------------------------
+# Type patterns - detect type usage
+
+# User-defined types (PascalCase) after colon: x: Type, x: ^Type, x: []Type
+Language.Class:
+REGEX(:\s*(?:\^|\[\^?\]|\[dynamic\]|\[[^\]]*\])*([A-Z][A-Za-z0-9_]*))
+
+# Type in cast/transmute: cast(Type), transmute(Type)
+Language.Class:
+REGEX((?:cast|transmute)\s*\(\s*(?:\^|\[\^?\])?([A-Z][A-Za-z0-9_]*))
+
+# Struct/union/enum definition: Foo :: struct/union/enum
+Language.Class:
+REGEX(([A-Z][A-Za-z0-9_]*)\s*::\s*(?:struct|union|enum|bit_set|bit_field|distinct))
+
+# Enum field access: .Field (PascalCase)
+Language.Enum:
+REGEX(\.([A-Z][A-Za-z0-9_]*)\b)
+
+#----------------------------------------------
+# Functions
+
+# Procedure definition: foo :: proc
+Language.Function:
+REGEX(([a-zA-Z_][a-zA-Z0-9_]*)\s*::\s*(?:#force_inline\s+|#force_no_inline\s+)?proc)
+
+# Procedure type: foo :: #type proc
+Language.Function:
+REGEX(([a-zA-Z_][a-zA-Z0-9_]*)\s*::\s*#type\s+proc)
+
+# Function call: foo(
+Language.Function:
+REGEX(\b([a-zA-Z_][a-zA-Z0-9_]*)\s*\()
+
+#----------------------------------------------
+# Member access
+
+# Member function call: .foo(
+Language.MemberFunction:
+REGEX(\.([a-zA-Z_][a-zA-Z0-9_]*)\s*\()
+
+# Member variable: .foo (lowercase, not .Enum which is uppercase)
+Language.MemberVariable:
+REGEX(\.([a-z_][a-zA-Z0-9_]*)\b)
+
+# Selector call expression: ->foo(
+Language.MemberFunction:
+REGEX(->([a-zA-Z_][a-zA-Z0-9_]*)\s*\()
+
+#----------------------------------------------
+# Operators (order matters - longer operators first)
+
 Language.Operator:
-TEXT(=)
+# Assignment operators
+TEXT(::)
+TEXT(:=)
+TEXT(+=)
+TEXT(-=)
+TEXT(*=)
+TEXT(/=)
+TEXT(%=)
+TEXT(%%=)
+TEXT(&=)
+TEXT(|=)
+TEXT(~=)
+TEXT(&~=)
+TEXT(<<=)
+TEXT(>>=)
+TEXT(&&=)
+TEXT(||=)
+# Comparison operators
+TEXT(==)
+TEXT(!=)
+TEXT(<=)
+TEXT(>=)
+# Logical operators
+TEXT(&&)
+TEXT(||)
+# Shift operators
+TEXT(<<)
+TEXT(>>)
+# Range operators
+TEXT(..=)
+TEXT(..<)
+TEXT(..)
+# Bitwise operators
+TEXT(&~)
+# Ternary
+TEXT(?)
+# Selector call
 TEXT(->)
-TEXT(.)
+# Single character operators
+TEXT(:)
+TEXT(=)
 TEXT(+)
 TEXT(-)
 TEXT(*)
 TEXT(/)
 TEXT(%)
-TEXT(^)
 TEXT(&)
 TEXT(|)
 TEXT(~)
-TEXT(<<)
-TEXT(>>)
+TEXT(^)
 TEXT(<)
 TEXT(>)
 TEXT(!)
-TEXT(?)
-TEXT(..)
+TEXT(.)
 
 #----------------------------------------------
-Language.Class:
-REGEX(:[^\S\r\n]*(?:\[[^\]]*\]|\^|\s+)([A-Za-z0-9_.]+))
-
-Language.Keyword:
-WORD(import)
-WORD(package)
-WORD(proc)
-
-Language.Function:
-# foo :: proc(...) { ... }
-REGEX(^(\w+)\b\s*::\sproc)
-# call site highlight: foo(...)
-REGEX(\b([A-Za-z_]\w*)\()
+# Variables (catch-all, should be last)
 
 Language.Variable:
-REGEX(([a-zA-Z_]+\w*))
-
-Language.Number:
-REGEX((0[xX][a-zA-Z0-9]+))
-REGEX((0[bB][0-9]+))
-REGEX([0-9]+[fd]*[uUlLzZfFdD]*)
-REGEX([0-9]+\.[0-9]*[fd]*[fFdD]*)
-REGEX([0-9]*\.[0-9]+[fd]*[fFdD]*)
-
-Language.Preprocessor:
-REGEX(\s*#\s*[a-zA-Z_]+\w*)
-
-# Language.Function:
-# REGEX(\b([a-zA-Z_].*)::.*\()
-# REGEX(\b([a-zA-Z_]+\w*)\()
+REGEX(\b[a-zA-Z_][a-zA-Z0-9_]*\b)
 
 #----------------------------------------------
+# Custom markers
 
-Language.String:
-REGEX(L?"[^"\\]*(?:\\.[^"\\]*)*")
-REGEX(L?'[^'\\]*(?:\\.[^'\\]*)*')
+custom_todo:
+TEXT(TODO)
+custom_note:
+TEXT(NOTE)
+custom_cave:
+TEXT(CAVE)
+custom_fixme:
+TEXT(FIXME)
+custom_hack:
+TEXT(HACK)
+custom_info:
+TEXT(INFO)
 
-Language.MemberVariable:
-REGEX(\.([A-Za-z_]\w*))
-
-Language.MemberFunction:
-REGEX(\.([A-Za-z_]\w*)\()
-
-#----------------------------------------------
-
-Language.Operator:
-TEXT(::)
-TEXT(:=)
 TEXT(:)
