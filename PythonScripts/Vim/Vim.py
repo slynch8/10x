@@ -3270,58 +3270,71 @@ def HandleCommandlineModeKey(key: Key):
 #------------------------------------------------------------------------
 def SubmitCommandline(command):
     global g_Commandline
-    
+
+    handled = False
+
     # Call user bindings
     user_result = VimUser.UserHandleCommandline(command)
     if user_result == UserHandledResult.HANDLED:
-        return True
+        handled = True
+
     elif user_result == UserHandledResult.PASS_TO_10X:
-        return False
+        handled = False
 
     elif command == ":sp":
         x, y = N10X.Editor.GetCursorPos()
         N10X.Editor.ExecuteCommand("DuplicatePanel")
         N10X.Editor.ExecuteCommand("MovePanelDown")
         SetCursorPos(x,y)
-    
+        handled = True
+
     elif command == ":vsp":
         x, y = N10X.Editor.GetCursorPos()
         N10X.Editor.ExecuteCommand("DuplicatePanelRight")
         SetCursorPos(x,y)
+        handled = True
 
     elif command == ":w" or command == ":W":
         N10X.Editor.ExecuteCommand("SaveFile")
         g_Commandline.result = "Saved " + N10X.Editor.GetCurrentFilename()
         print(g_Commandline.result)
+        handled = True
 
     elif command == ":wa":
         N10X.Editor.ExecuteCommand("SaveAll")
         g_Commandline.result = "Saved file(s)"
+        handled = True
 
     elif command == ":wq":
         N10X.Editor.ExecuteCommand("SaveFile")
         g_Commandline.result = "Saved " + N10X.Editor.GetCurrentFilename()
         N10X.Editor.ExecuteCommand("CloseFile")
+        handled = True
 
     elif command == ":q" or command == ":Q" or command == ":x" or command == ":X":
         N10X.Editor.ExecuteCommand("CloseFile")
+        handled = True
 
     elif command == ":q!" or command == ":x!":
         N10X.Editor.DiscardUnsavedChanges()
         N10X.Editor.ExecuteCommand("CloseFile")
-    
+        handled = True
+
     elif command == ":ShowCommandPanel":
         N10X.Editor.ExecuteCommand(command[1:])
+        handled = True
 
     elif command == ":noh":
         N10X.Editor.SetFindText("")
+        handled = True
 
     else:
         split = command.split(":")
         if len(split) == 2 and split[1].isdecimal(): 
             SetCursorPos(y=int(split[1]) - 1)
+            handled = True
 
-    return True
+    return handled
 
 
 
