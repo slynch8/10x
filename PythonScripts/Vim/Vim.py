@@ -181,10 +181,6 @@ def InVisualMode():
     return g_Mode == Mode.VISUAL or g_Mode == Mode.VISUAL_LINE or g_Mode == Mode.VISUAL_BLOCK
 
 #------------------------------------------------------------------------
-def SetFindText(text, case=False, word=False, regex=False, start_pos=(-1,-1)):
-    N10X.Editor.SetFindText(text, case, word, regex, start_pos)
-
-#------------------------------------------------------------------------
 def Clamp(min_val, max_val, n):
    return max(min(n, max_val), min_val)
 
@@ -1408,6 +1404,7 @@ def UpdateSearchText(search_text):
     if g_Mode != Mode.COMMANDLINE:
         return
    
+    search_text = search_text[1:] # trim / or ?
     case_sensitive = False
 
     # When smart case is enabled, case-sensitive search is turned on
@@ -1447,6 +1444,108 @@ def GetFilteredHistoryBuffer():
         filter = history_buffer[-1]
         history_buffer = [elem for elem in history_buffer if elem.startswith(filter)]
     return history_buffer
+
+#------------------------------------------------------------------------
+def IsSubstituting():
+    if g_Mode != Mode.COMMANDLINE:
+        return False
+
+    return g_Commandline.text[:3] == ":s/"
+
+#------------------------------------------------------------------------
+def ParseSubstitutionText(text):
+    
+    # indices of each '/'
+    delimiters = []
+    # enumerate text and find delimimeters checking for escaped '/'
+    is_escaped = False
+    for idx, c in enumerate(text):
+        if len(delimiters) == 2:
+            break
+        if c == '\\' and not is_escaped:
+            is_escaped = True
+        else:
+            if c == '/' and not is_escaped:
+                delimiters.append(idx)
+            is_escaped = False
+
+    find = None
+    replace = None
+    flags_and_count = None
+
+    dc = len(delimiters)
+    if dc == 0:
+        find = text 
+    else:
+        find = text[:delimiters[0]]
+        if dc == 1:
+            replace = text[delimiters[0]+1:]
+        elif dc == 2:
+            replace = text[delimiters[0]+1:delimiters[1]]
+            flags_and_count = text[delimiters[1]+1:]
+            
+    # replace any escape characters
+    find = find.replace('\\', '') if find != None else None
+    replace = replace.replace('\\', '') if replace != None else None
+   
+    return find, replace, flags_and_count
+
+#------------------------------------------------------------------------
+def UpdateSubstitution(text):
+    if g_Mode != Mode.COMMANDLINE:
+        return
+
+    # TODO: Update cursor/highlighting
+    #text = text[3:] # trim ':s/' 
+    #ParseSubstitutionText(text)
+
+#------------------------------------------------------------------------
+def SubmitSubstitution(text):
+    if g_Mode != Mode.COMMANDLINE:
+        return
+
+    text = text[3:] # trim ':s/' 
+
+    find, replace, flags_and_count = ParseSubstitutionText(text)
+
+    # parse flags and count
+    replace_all = False
+    repeat_count = 1
+    if flags_and_count != None:
+        if (m := re.match("([a-zA-Z]*).*", flags_and_count)):
+            replace_all = True if 'g' in m.group(1) else False 
+
+        if (m := re.match("[a-zA-Z]*\\s*([0-9]*)", flags_and_count)):
+            repeat_count = int(m.group(1)) if m.group(1).isnumeric() else 1 
+
+    if find != None and find != "" and replace != None:
+        # Replace text line by line
+        line_idx = N10X.Editor.GetSelectionStart()[1]
+        line_count = N10X.Editor.GetSelectionEnd()[1] - line_idx
+
+        # Ignore repeat count if multiple lines are selected 
+        if line_count <= 1:
+            line_count = repeat_count
+
+        N10X.Editor.PushUndoGroup()
+        N10X.Editor.BeginTextUpdate()
+
+        # for each iteration process each line down from the cursor
+        for _ in range(line_count):
+            # check file limit
+            if line_idx + 1 >= N10X.Editor.GetLineCount():
+                break
+            line_text = N10X.Editor.GetLine(line_idx) 
+            if replace_all == True:
+                line_text = line_text.replace(find, replace)
+            else:
+                line_text = line_text.replace(find, replace, 1)
+            N10X.Editor.SetLine(line_idx, line_text)
+            line_idx +=1
+
+        N10X.Editor.EndTextUpdate()
+        N10X.Editor.PopUndoGroup()
+
 
 #------------------------------------------------------------------------
 # Key Intercepting
@@ -2086,6 +2185,7 @@ def HandleCommandModeChar(char):
 
     elif c == "*":
         for _ in range(repeat_count):
+            g_ReverseSearch = False
             cached_find_by_word = N10X.Editor.GetFindByWord()
             cached_case = N10X.Editor.GetFindByCase()
             cached_regex = N10X.Editor.GetFindByRegex()
@@ -2101,6 +2201,7 @@ def HandleCommandModeChar(char):
 
     elif c == "#":
         for _ in range(repeat_count):
+            g_ReverseSearch = True
             cached_find_by_word = N10X.Editor.GetFindByWord()
             cached_case = N10X.Editor.GetFindByCase()
             cached_regex = N10X.Editor.GetFindByRegex()
@@ -3044,6 +3145,7 @@ def HandleCommandlineModeKey(key: Key):
 
     is_command = g_Commandline.text[0] == ':'
     is_search  = IsSearching() 
+    is_subsitute = IsSubstituting() 
     history_buffer = GetHistoryBuffer() 
     filtered_history_buffer = GetFilteredHistoryBuffer() 
     g_Commandline.historyIndex = Clamp(0, len(filtered_history_buffer)-1, g_Commandline.historyIndex) 
@@ -3057,7 +3159,9 @@ def HandleCommandlineModeKey(key: Key):
     
     # Submit command
     elif key == Key("Enter"):
-        if is_command:
+        if is_subsitute:
+            SubmitSubstitution(g_Commandline.text)
+        elif is_command:
             # TODO: Strip spaces between ':' and next alphanumeric character from g_Commandline.text
             valid_command = SubmitCommandline(g_Commandline.text)
             if not valid_command:
@@ -3082,7 +3186,9 @@ def HandleCommandlineModeKey(key: Key):
             if len(g_Commandline.text) == 0:
                 EnterCommandMode()
             elif is_search:
-                UpdateSearchText(g_Commandline.text[1:])
+                UpdateSearchText(g_Commandline.text)
+            elif is_subsitute:
+                UpdateSubstitution(g_Commandline.text)
 
     elif key == Key("Delete"):
             next_cursor_pos = min(len(g_Commandline.text), g_Commandline.cursorPos + 1)
@@ -3091,7 +3197,9 @@ def HandleCommandlineModeKey(key: Key):
             history_buffer[-1] = g_Commandline.text[1:]
             g_Commandline.historyIndex = len(history_buffer)-1 
             if is_search:
-                UpdateSearchText(g_Commandline.text[1:])
+                UpdateSearchText(g_Commandline.text)
+            elif is_subsitute:
+                UpdateSubstitution(g_Commandline.text)
 
     # Paste
     elif key == Key("V", control=True):
@@ -3106,10 +3214,11 @@ def HandleCommandlineModeKey(key: Key):
         history_buffer[-1] = g_Commandline.text[1:]               
         # Update search text if searching
         if IsSearching() and len(g_Commandline.text) > 1:
-            UpdateSearchText(g_Commandline.text[1:])
+            UpdateSearchText(g_Commandline.text)
+        elif IsSubstituting():
+            UpdateSubstitution(g_Commandline.text)
 
     # Navigation
-
     elif key == Key("Left"):
         # max with 1 is intentional here as you can't move before the starting char
         g_Commandline.cursorPos = max(1, g_Commandline.cursorPos - 1)
@@ -3161,57 +3270,72 @@ def HandleCommandlineModeKey(key: Key):
 #------------------------------------------------------------------------
 def SubmitCommandline(command):
     global g_Commandline
-    
+
+    handled = False
+
     # Call user bindings
     user_result = VimUser.UserHandleCommandline(command)
     if user_result == UserHandledResult.HANDLED:
-        return True
-    elif user_result == UserHandledResult.PASS_TO_10X:
-        return False
+        handled = True
 
-    if command == ":sp":
+    elif user_result == UserHandledResult.PASS_TO_10X:
+        handled = False
+
+    elif command == ":sp":
         x, y = N10X.Editor.GetCursorPos()
         N10X.Editor.ExecuteCommand("DuplicatePanel")
         N10X.Editor.ExecuteCommand("MovePanelDown")
         SetCursorPos(x,y)
-        return True
-    
-    if command == ":vsp":
+        handled = True
+
+    elif command == ":vsp":
         x, y = N10X.Editor.GetCursorPos()
         N10X.Editor.ExecuteCommand("DuplicatePanelRight")
         SetCursorPos(x,y)
-        return True
+        handled = True
 
-    if command == ":w" or command == ":W":
+    elif command == ":w" or command == ":W":
         N10X.Editor.ExecuteCommand("SaveFile")
         g_Commandline.result = "Saved " + N10X.Editor.GetCurrentFilename()
         print(g_Commandline.result)
-        return True
+        handled = True
 
-    if command == ":wa":
+    elif command == ":wa":
         N10X.Editor.ExecuteCommand("SaveAll")
         g_Commandline.result = "Saved file(s)"
-        return True
+        handled = True
 
-    if command == ":wq":
+    elif command == ":wq":
         N10X.Editor.ExecuteCommand("SaveFile")
         g_Commandline.result = "Saved " + N10X.Editor.GetCurrentFilename()
         N10X.Editor.ExecuteCommand("CloseFile")
-        return True
+        handled = True
 
-    if command == ":q" or command == ":Q" or command == ":x" or command == ":X":
+    elif command == ":q" or command == ":Q" or command == ":x" or command == ":X":
         N10X.Editor.ExecuteCommand("CloseFile")
-        return True
+        handled = True
 
-    if command == ":q!" or command == ":x!":
+    elif command == ":q!" or command == ":x!":
         N10X.Editor.DiscardUnsavedChanges()
         N10X.Editor.ExecuteCommand("CloseFile")
-        return True
-    
-    split = command.split(":")
-    if len(split) == 2 and split[1].isdecimal(): 
-        SetCursorPos(y=int(split[1]) - 1)
-        return True
+        handled = True
+
+    elif command == ":ShowCommandPanel":
+        N10X.Editor.ExecuteCommand(command[1:])
+        handled = True
+
+    elif command == ":noh":
+        N10X.Editor.SetFindText("")
+        handled = True
+
+    else:
+        split = command.split(":")
+        if len(split) == 2 and split[1].isdecimal(): 
+            SetCursorPos(y=int(split[1]) - 1)
+            handled = True
+
+    return handled
+
 
 
 #------------------------------------------------------------------------
@@ -3235,7 +3359,9 @@ def HandleCommandlineModeChar(char):
    
     # searching
     if IsSearching() and len(g_Commandline.text) > 1:
-        UpdateSearchText(g_Commandline.text[1:])
+        UpdateSearchText(g_Commandline.text)
+    elif IsSubstituting():
+        UpdateSubstitution(g_Commandline.text)
 
     return True
 
@@ -3337,6 +3463,7 @@ def HandleInsertModeChar(char):
 def HandleVisualModeChar(char):
     global g_Mode
     global g_Command
+    global g_ReverseSearch
 
     g_Command += char
 
@@ -3362,6 +3489,12 @@ def HandleVisualModeChar(char):
             EnterCommandMode()
         else:
             g_Mode = Mode.VISUAL_LINE
+
+    elif c == ":":
+        # Ignore multi-cursor as it complicates things
+        if g_Mode != Mode.VISUAL_BLOCK:
+            SubmitVisualModeSelection()
+        EnterCommandlineMode(c)
 
     elif c == "y" or c == "Y":
         start, _ = SubmitVisualModeSelection()
@@ -3612,6 +3745,27 @@ def HandleVisualModeChar(char):
         EnterCommandMode()
         should_save = True
 
+    elif c == "*":
+        for _ in range(repeat_count):
+            SubmitVisualModeSelection()
+            text = N10X.Editor.GetSelection()
+            N10X.Editor.ClearSelection()
+            g_ReverseSearch = False
+            N10X.Editor.SetFindText(text, False, False, False, False)
+            EnterCommandMode()
+
+    elif c == "#":
+        for _ in range(repeat_count):
+            SubmitVisualModeSelection()
+            text = N10X.Editor.GetSelection()
+            N10X.Editor.ClearSelection()
+            cursor_pos = list(N10X.Editor.GetCursorPos())
+            # Need to move cursor back one so reverse search doesn't find the current word
+            cursor_pos[0] -= 1
+            g_ReverseSearch = True
+            N10X.Editor.SetFindText(text, False, False, False, True, cursor_pos)
+            EnterCommandMode()
+
     elif c == "z":
         return
 
@@ -3706,7 +3860,7 @@ def UpdateCursorMode():
         N10X.Editor.SetStatusBarText("-- VIM DISABLED --")
     elif g_Mode == Mode.COMMANDLINE:
         # Don't hide cursor when searching 
-        if IsSearching():
+        if IsSearching() or IsSubstituting():
             N10X.Editor.SetCursorVisible(0, True)
         else:
             N10X.Editor.SetCursorVisible(0, False)
