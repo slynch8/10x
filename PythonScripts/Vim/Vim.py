@@ -94,7 +94,7 @@ g_ReverseSearch = False
 g_RepeatMatch = "([1-9][0-9]*)?"
 
 # regex for getting the block tag
-g_BlockMatch = "([{}[\]<>\(\)])"
+g_BlockMatch = r"([{}[\]<>\(\)])"
 
 # 'Ctrl+w` motions
 g_PaneSwap = False
@@ -301,6 +301,8 @@ def FindNextOccurrenceBackward2(c):
             if index >= 0:
                     return index, y
         y -= 1
+        if y < 0:
+            break
         line = N10X.Editor.GetLine(y)
         x = len(line) - 1
     return None, None
@@ -347,6 +349,7 @@ def MoveToLineText(action, search):
         return False
 
     if len(search) == 1:
+        x = None
         if action == 'f':
             x = FindNextOccurrenceForward(search)
             if x != None:
@@ -369,10 +372,14 @@ def MoveToLineText(action, search):
             g_ReverseCharSearch = True
         else:
            return False
-    
+
+        if x is None:
+            return False
+
         g_LastCharSearch = action + search
         return True
     elif len(search) == 2 and g_SneakEnabled:
+        x = None
         if action == 's':
             x,y = FindNextOccurrenceForward2(search)
             if x != None:
@@ -383,7 +390,10 @@ def MoveToLineText(action, search):
                 SetCursorPos(x=x, y=y)
         else:
             return False
- 
+
+        if x is None:
+            return False
+
         g_LastCharSearch = action + search
         return True
     else:
@@ -401,9 +411,10 @@ def GetClipboardValue():
             win32clipboard.CloseClipboard()
             break
         except Exception as ex:
-            if ex.winerror == 5:  # access denied
+            winerror = getattr(ex, 'winerror', None)
+            if winerror == 5:  # access denied
                 time.sleep( 0.01 )
-            elif ex.winerror == 1418:  # doesn't have board open
+            elif winerror == 1418:  # doesn't have board open
                 pass
             else:
                 pass
@@ -424,9 +435,10 @@ def AddNewlineToClipboard():
             win32clipboard.CloseClipboard()
             break
         except Exception as ex:
-            if ex.winerror == 5:  # access denied
+            winerror = getattr(ex, 'winerror', None)
+            if winerror == 5:  # access denied
                 time.sleep( 0.01 )
-            elif ex.winerror == 1418:  # doesn't have board open
+            elif winerror == 1418:  # doesn't have board open
                 pass
             else:
                 pass
@@ -452,7 +464,8 @@ def EnterInsertMode():
     global g_PerformingDot
     global g_InsertBuffer
 
-    assert g_Mode != Mode.INSERT
+    if g_Mode == Mode.INSERT:
+        return
 
     g_Mode = Mode.INSERT
     N10X.Editor.ResetCursorBlink()
@@ -666,6 +679,8 @@ def IsWordChar(c):
 #------------------------------------------------------------------------
 def IsWord(x, y):
     line = GetLine(y)
+    if x < 0 or x >= len(line):
+        return False
     return IsWordChar(line[x])
 
 #------------------------------------------------------------------------
@@ -964,10 +979,10 @@ def MoveToPreviousParagraphBegin():
 def MoveToNextParagraphEnd():
     line_count = N10X.Editor.GetLineCount()
     y = FindNextParagraphEnd()
-    if y != line_count:
+    if y != line_count - 1:
         SetCursorPos(0, y + 1)
     else:
-        SetCursorPos(GetLineLength(line_count - 1) - 1, line_count)
+        SetCursorPos(GetLineLength(line_count - 1) - 1, line_count - 1)
 
    
 #------------------------------------------------------------------------
@@ -1029,6 +1044,8 @@ def FindEnclosingBlockStartPos(c, start, count=1):
         line = GetLine(y)
         if open_char not in line and closed_char not in line:
             y -= 1
+            if y < 0:
+                break
             x = GetLineLength(y) - 1
             continue
             
@@ -1160,7 +1177,7 @@ def GetInsideBlockSelectionOrPos(c, start, count=1):
             end = len(GetLine(end[1] - 1)) - 1, end[1] - 1
 
         line = GetLine(start[1])
-        if line[start[0]] == "\r":
+        if start[0] < len(line) and line[start[0]] == "\r":
             start_newline = True
             start = 0, start[1] + 1
             line = GetLine(start[1])
@@ -1196,15 +1213,15 @@ def SelectOrMoveInsideBlock(c, count=1, insert_after_move=False):
     match GetInsideBlockSelectionOrPos(c, start, count):
         case None:
             return False
-        case ((a, b), (c, d)):
-            SetSelection((a, b), (c, d))
-            return (a, b), (c, d)
+        case ((a, b), (x, y)):
+            SetSelection((a, b), (x, y))
+            return (a, b), (x, y)
         case (pos):
             SetCursorPos(pos[0], pos[1])
             if insert_after_move:
                 EnterInsertMode()
             return False
-            
+
     return False 
 
 #------------------------------------------------------------------------
@@ -1215,8 +1232,11 @@ def GetAroundWordSelection(start):
     end_x = x
 
     line = GetLine(y)
+    if end_x >= len(line):
+        end_x = max(0, len(line) - 1)
+        start_x = end_x
 
-    character_class = GetCharacterClass(line[end_x])
+    character_class = GetCharacterClass(line[end_x]) if end_x < len(line) else CharacterClass.WHITESPACE
 
     line_len = len(line)
 
@@ -1238,13 +1258,14 @@ def GetAroundWordSelection(start):
 def GetInsideWordSelection(start):
     x, y = start
     x = min(GetLineLength(y) - 1, x)
+    x = max(0, x)
 
     start_x = x
     end_x = x
 
     line = GetLine(y)
 
-    character_class = GetCharacterClass(line[end_x])
+    character_class = GetCharacterClass(line[end_x]) if end_x < len(line) else CharacterClass.WHITESPACE
 
     while end_x < len(line) - 1 and GetCharacterClass(line[end_x + 1]) == character_class:
         end_x += 1
@@ -1264,8 +1285,11 @@ def GetAroundWordSelectionWithPunctuation(start):
     line = GetLine(y)
 
     line_len = len(line)
+    if end_x >= line_len:
+        end_x = max(0, line_len - 1)
+        start_x = end_x
 
-    is_start_whitespace = GetCharacterClass(line[end_x]) == CharacterClass.WHITESPACE
+    is_start_whitespace = (GetCharacterClass(line[end_x]) == CharacterClass.WHITESPACE) if end_x < line_len else True
 
     while end_x < line_len - 1:
         curr_class = GetCharacterClass(line[end_x + 1])
@@ -1292,13 +1316,14 @@ def GetAroundWordSelectionWithPunctuation(start):
 def GetInsideWordSelectionWithPunctuation(start):
     x, y = start
     x = min(GetLineLength(y) - 1, x)
+    x = max(0, x)
 
     start_x = x
     end_x = x
 
     line = GetLine(y)
 
-    character_class = GetCharacterClass(line[end_x])
+    character_class = GetCharacterClass(line[end_x]) if end_x < len(line) else CharacterClass.WHITESPACE
     if character_class != CharacterClass.WHITESPACE:
         while end_x < len(line) - 1 and GetCharacterClass(line[end_x + 1]) != CharacterClass.WHITESPACE:
             end_x += 1
@@ -1350,9 +1375,9 @@ def SelectOrMoveInsideQuote(c, insert_after_move=False, whitespace=False):
     match GetInsideQuoteSelection(c, start, whitespace):
         case None:
             return False
-        case ((a, b), (c, d)):
-            SetSelection((a, b), (c, d))
-            return (a, b), (c, d)
+        case ((a, b), (x, y)):
+            SetSelection((a, b), (x, y))
+            return (a, b), (x, y)
         case (pos):
             SetCursorPos(pos[0], pos[1])
             if insert_after_move:
@@ -1373,16 +1398,16 @@ def MergeLinesTrimIndentation():
     line = GetLine(y)
     SetCursorPos(x=startlinelen, max_offset=0)
     N10X.Editor.ExecuteCommand("Delete")
-    x = startlinelen
+    x = startlinelen - 1
     while x > 0 and IsWhitespaceChar(line[x]):
         x -= 1
-    if not IsWhitespaceChar(line[x]):
+    if x >= 0 and x < len(line) and not IsWhitespaceChar(line[x]):
         x += 1
     clearx = x
     line = GetLine(y)
     newlinelen = GetLineLength(y)
     x = startlinelen
-    while x < newlinelen and IsWhitespaceChar(line[x]):
+    while x < newlinelen and x < len(line) and IsWhitespaceChar(line[x]):
         x += 1
     if clearx != x:
         x -= 1
@@ -1533,7 +1558,7 @@ def SubmitSubstitution(text):
         # for each iteration process each line down from the cursor
         for _ in range(line_count):
             # check file limit
-            if line_idx + 1 >= N10X.Editor.GetLineCount():
+            if line_idx >= N10X.Editor.GetLineCount():
                 break
             line_text = N10X.Editor.GetLine(line_idx) 
             if replace_all == True:
@@ -1968,18 +1993,18 @@ def HandleCommandModeChar(char):
         should_save = True
     
     elif (m := re.match("di([`'\"])", c)):
-        action = m.group(1)
-        if sel := SelectOrMoveInsideQuote(m.group(1)):
+        quote_char = m.group(1)
+        if sel := SelectOrMoveInsideQuote(quote_char):
             start, end = sel
             N10X.Editor.PushUndoGroup()
             N10X.Editor.ExecuteCommand("Cut")
             SetCursorPos(start[0], start[1])
             N10X.Editor.PopUndoGroup()
         should_save = True
-    
+
     elif (m := re.match("da([`'\"])", c)):
-        action = m.group(1)
-        if pos := SelectAroundQuote(m.group(1)):
+        quote_char = m.group(1)
+        if pos := SelectAroundQuote(quote_char):
             N10X.Editor.PushUndoGroup()
             N10X.Editor.ExecuteCommand("Cut")
             SetCursorPos(pos[0], pos[1])
@@ -2006,7 +2031,7 @@ def HandleCommandModeChar(char):
             end_y = min(y + count, GetMaxY())
             SetLineSelection(y, end_y)
             N10X.Editor.ExecuteCommand("Cut")
-            SetCursorPos(0, y - 1)
+            SetCursorPos(0, max(0, y - 1))
         MoveCursorPos(y_delta=1, override_horizontal_target=False)
         N10X.Editor.PopUndoGroup()
         should_save = True
@@ -2016,7 +2041,7 @@ def HandleCommandModeChar(char):
         for i in range(repeat_count):
             x, y = N10X.Editor.GetCursorPos()
             count = int(m.group(1)) if m.group(1) else 1
-            end_y = min(y - count, GetMaxY())
+            end_y = max(0, y - count)
             SetLineSelection(y, end_y)
             N10X.Editor.ExecuteCommand("Cut")
         N10X.Editor.PopUndoGroup()
@@ -2045,7 +2070,7 @@ def HandleCommandModeChar(char):
                 x, end_y = N10X.Editor.GetCursorPos()
             SetLineSelection(y, end_y)
             N10X.Editor.ExecuteCommand("Cut")
-            SetCursorPos(0, end_y - 1)
+            SetCursorPos(0, max(0, end_y - 1))
         N10X.Editor.PopUndoGroup()
         should_save = True
 
@@ -2059,7 +2084,7 @@ def HandleCommandModeChar(char):
                 x, end_y = N10X.Editor.GetCursorPos()
             SetLineSelection(y, end_y)
             N10X.Editor.ExecuteCommand("Cut")
-            SetCursorPos(0, y - 1)
+            SetCursorPos(0, max(0, y - 1))
         MoveCursorPos(y_delta=1, override_horizontal_target=False)
         N10X.Editor.PopUndoGroup()
         should_save = True
@@ -2070,11 +2095,10 @@ def HandleCommandModeChar(char):
         action = m.group(2)
         search = m.group(3)
         start = N10X.Editor.GetCursorPos()
-        for i in range(repeat_count):
-            for _ in range(count):
-                if not MoveToLineText(action, search):
-                    N10X.Editor.PopUndoGroup()
-                    return
+        for _ in range(count):
+            if not MoveToLineText(action, search):
+                N10X.Editor.PopUndoGroup()
+                return
         end = N10X.Editor.GetCursorPos()
         SetSelection(start, end)
         N10X.Editor.ExecuteCommand("Cut")
@@ -2152,7 +2176,7 @@ def HandleCommandModeChar(char):
             N10X.Editor.PopUndoGroup()
             should_save = True
 
-    elif (m := re.match("d" + g_RepeatMatch, c)) or c == "dg":
+    elif c == "dg" or re.match("d" + g_RepeatMatch + "$", c):
         return
 
     elif c == "x":
@@ -2472,7 +2496,7 @@ def HandleCommandModeChar(char):
         if sel := SelectOrMoveInsideBlock(action, count, True):
             start, end = sel
             N10X.Editor.PushUndoGroup()
-            insert_line = GetLine(start[1] - 1)[-3:-1] == action + "\r\n"
+            insert_line = start[1] > 0 and GetLine(start[1] - 1).rstrip("\r\n").endswith(action)
             N10X.Editor.ExecuteCommand("Cut")
             if insert_line:
                 N10X.Editor.ExecuteCommand("InsertLine")
@@ -2485,23 +2509,23 @@ def HandleCommandModeChar(char):
         action = m.group(2)
         if pos := SelectAroundBlock(action, count):
             N10X.Editor.PushUndoGroup()
-            N10X.Editor.ExecuteCommand("")
-            EnterInsertMode()
-            N10X.Editor.PopUndoGroup()
-        should_save = True
-    
-    elif (m := re.match("ci([`'\"])", c)):
-        action = m.group(1)
-        if SelectOrMoveInsideQuote(action, True):
-            N10X.Editor.PushUndoGroup()
             N10X.Editor.ExecuteCommand("Cut")
             EnterInsertMode()
             N10X.Editor.PopUndoGroup()
         should_save = True
     
+    elif (m := re.match("ci([`'\"])", c)):
+        quote_char = m.group(1)
+        if SelectOrMoveInsideQuote(quote_char, True):
+            N10X.Editor.PushUndoGroup()
+            N10X.Editor.ExecuteCommand("Cut")
+            EnterInsertMode()
+            N10X.Editor.PopUndoGroup()
+        should_save = True
+
     elif (m := re.match("ca([`'\"])", c)):
-        action = m.group(1)
-        if SelectAroundQuote(action):
+        quote_char = m.group(1)
+        if SelectAroundQuote(quote_char):
             N10X.Editor.PushUndoGroup()
             N10X.Editor.ExecuteCommand("Cut")
             EnterInsertMode()
@@ -2769,15 +2793,15 @@ def HandleCommandModeChar(char):
             SetCursorPos(pos[0], pos[1])
     
     elif (m := re.match("yi([`'\"])", c)):
-        action = m.group(1)
-        if sel := SelectOrMoveInsideQuote(m.group(1)):
+        quote_char = m.group(1)
+        if sel := SelectOrMoveInsideQuote(quote_char):
             start, end = sel
             N10X.Editor.ExecuteCommand("Copy")
             SetCursorPos(start[0], start[1])
-    
+
     elif (m := re.match("ya([`'\"])", c)):
-        action = m.group(1)
-        if pos := SelectAroundQuote(m.group(1), N10X.Editor.GetCursorPos()):
+        quote_char = m.group(1)
+        if pos := SelectAroundQuote(quote_char):
             N10X.Editor.ExecuteCommand("Copy")
             SetCursorPos(pos[0], pos[1])
 
@@ -3203,10 +3227,13 @@ def HandleCommandlineModeKey(key: Key):
 
     # Paste
     elif key == Key("V", control=True):
-        clipboard_text = GetClipboardValue().strip()
+        clipboard_text = GetClipboardValue()
+        if clipboard_text is None:
+            return True
+        clipboard_text = clipboard_text.strip()
         # Truncate if too big
         max_paste_length = 512 # characters
-        clipboard_text = clipboard_text[:max_paste_length-len(clipboard_text)]
+        clipboard_text = clipboard_text[:max_paste_length]
         # Insert clipboard at cursor pos
         g_Commandline.text = g_Commandline.text[:g_Commandline.cursorPos] + clipboard_text + g_Commandline.text[g_Commandline.cursorPos:]
         g_Commandline.cursorPos += len(clipboard_text)
@@ -3343,7 +3370,6 @@ def HandleCommandlineModeChar(char):
     global g_Mode
     global g_ReverseSearch
     global g_LastJumpPoint
-    global g_CommandlineText
     global g_Commandline
 
     # Insert char at cursor pos
@@ -3701,29 +3727,33 @@ def HandleVisualModeChar(char):
 
     elif (m := re.match("i" + g_BlockMatch, c)):
         g_Mode = Mode.VISUAL
-        action = m.group(1)
-        if sel := GetInsideBlockSelectionOrPos(m.group(1), N10X.Editor.GetCursorPos()):
-            start, end = sel
-            SetVisualModeSelection(start, end)
-    
+        block_char = m.group(1)
+        if sel := GetInsideBlockSelectionOrPos(block_char, N10X.Editor.GetCursorPos()):
+            # Check if sel is a selection (tuple of tuples) or just a position
+            if isinstance(sel[0], tuple):
+                start, end = sel
+                SetVisualModeSelection(start, end)
+
     elif (m := re.match("a" + g_BlockMatch, c)):
         g_Mode = Mode.VISUAL
-        action = m.group(1)
-        if sel := GetBlockSelection(m.group(1), N10X.Editor.GetCursorPos()):
+        block_char = m.group(1)
+        if sel := GetBlockSelection(block_char, N10X.Editor.GetCursorPos()):
             start, end = sel
             SetVisualModeSelection(start, end)
-    
+
     elif (m := re.match("i([`'\"])", c)):
         g_Mode = Mode.VISUAL
-        action = m.group(1)
-        if sel := GetInsideQuoteSelection(m.group(1), N10X.Editor.GetCursorPos()):
-            start, end = sel
-            SetVisualModeSelection(start, end)
-    
+        quote_char = m.group(1)
+        if sel := GetInsideQuoteSelection(quote_char, N10X.Editor.GetCursorPos()):
+            # Check if sel is a selection (tuple of tuples) or just a position
+            if isinstance(sel[0], tuple):
+                start, end = sel
+                SetVisualModeSelection(start, end)
+
     elif (m := re.match("a([`'\"])", c)):
         g_Mode = Mode.VISUAL
-        action = m.group(1)
-        if sel := GetQuoteSelection(m.group(1), N10X.Editor.GetCursorPos()):
+        quote_char = m.group(1)
+        if sel := GetQuoteSelection(quote_char, N10X.Editor.GetCursorPos()):
             start, end = sel
             SetVisualModeSelection(start, end)
 
@@ -3736,7 +3766,7 @@ def HandleVisualModeChar(char):
             length = GetLineLength(current_line_y)
             if length > 0:
                 begin_x = start[0] if current_line_y == start[1] else 0
-                end_x = end[0] if current_line_y == end[1] else length - 1
+                end_x = (end[0] + 1) if current_line_y == end[1] else length
                 line = line[:begin_x] + line[begin_x:end_x].swapcase() + line[end_x:]
                 N10X.Editor.SetLine(current_line_y, line)
             current_line_y += 1
@@ -3896,7 +3926,8 @@ def RecordCharKey(buffer, char):
 
 #------------------------------------------------------------------------
 def TrimBuffer(buffer):
-    buffer.pop()
+    if buffer:
+        buffer.pop()
 
 #------------------------------------------------------------------------
 def PlaybackBuffer(buffer):
