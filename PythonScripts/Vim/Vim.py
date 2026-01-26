@@ -4067,6 +4067,8 @@ def EnableVim():
             N10X.Editor.AddOnInterceptCharKeyFunction(OnInterceptCharKey)
             N10X.Editor.AddOnInterceptKeyFunction(OnInterceptKey)
             N10X.Editor.AddOnFileLosingFocusFunction(OnFileLosingFocus)
+            N10X.Editor.AddMouseSelectStartedFunction(OnMouseSelectStarted)
+            N10X.Editor.AddMouseSelectFinishedFunction(OnMouseSelectFinished)
             N10X.Editor.OverrideSetting("ReverseFindSelection","true")
             EnterCommandMode(False)
 
@@ -4077,8 +4079,67 @@ def EnableVim():
             N10X.Editor.RemoveOnInterceptCharKeyFunction(OnInterceptCharKey)
             N10X.Editor.RemoveOnInterceptKeyFunction(OnInterceptKey)
             N10X.Editor.RemoveOnFileLosingFocusFunction(OnFileLosingFocus)
+            N10X.Editor.RemoveMouseSelectStartedFunction(OnMouseSelectStarted)
+            N10X.Editor.RemoveMouseSelectFinishedFunction(OnMouseSelectFinished)
             N10X.Editor.RemoveSettingOverride("ReverseFindSelection")
 
+
+#------------------------------------------------------------------------
+g_MouseSelectStartPos = None
+
+def OnMouseSelectStarted(start_pos):
+    global g_MouseSelectStartPos
+    g_MouseSelectStartPos = start_pos
+
+#------------------------------------------------------------------------
+def OnMouseSelectFinished(end_pos):
+    global g_MouseSelectStartPos
+
+    if not g_VimEnabled or g_Mode == Mode.SUSPENDED:
+        g_MouseSelectStartPos = None
+        return
+
+    start_pos = g_MouseSelectStartPos
+    g_MouseSelectStartPos = None
+
+    if start_pos is None or end_pos is None:
+        return
+
+    # Single click (no drag) - exit visual mode if in it
+    if start_pos == end_pos:
+        if InVisualMode():
+            N10X.Editor.CallOnMainThread(ExitVisualModeFromMouseClick)
+        return
+
+    # Defer visual mode entry to avoid interfering with 10x's mouse handling
+    N10X.Editor.CallOnMainThread(lambda: EnterVisualModeFromMouseSelect(start_pos, end_pos))
+
+#------------------------------------------------------------------------
+def ExitVisualModeFromMouseClick():
+    if not g_VimEnabled or g_Mode == Mode.SUSPENDED:
+        return
+
+    if InVisualMode():
+        N10X.Editor.ClearSelection()
+        EnterCommandMode()
+
+#------------------------------------------------------------------------
+def EnterVisualModeFromMouseSelect(start_pos, end_pos):
+    global g_Mode
+    global g_VisualModeStartPos
+
+    if not g_VimEnabled or g_Mode == Mode.SUSPENDED:
+        return
+
+    g_Mode = Mode.VISUAL
+    g_VisualModeStartPos = start_pos
+
+    # Position cursor at end of selection (subtract 1 since selection end is exclusive)
+    end_x = end_pos[0] - 1 if end_pos[0] > 0 else 0
+    N10X.Editor.SetCursorPos((end_x, end_pos[1]))
+
+    UpdateVisualModeSelection()
+    UpdateCursorMode()
 
 #------------------------------------------------------------------------
 # enable/disable Vim when it's changed in the settings file
