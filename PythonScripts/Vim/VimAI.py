@@ -1,3 +1,7 @@
+# Vim emulation layer for 10x Editor
+# 10x Python API Reference: https://www.10xeditor.com/10xDocumentation/PythonFunctions.htm
+# 10x Command API Reference: https://www.10xeditor.com/10xDocumentation/Commands.htm
+
 import N10X
 from enum import Enum, auto
 
@@ -31,15 +35,21 @@ class Key:
         self.alt = alt
 
     def __eq__(self, other):
-        if not isinstance(other, Key):
+        # Use duck typing to handle module reloading creating different Key classes
+        if not hasattr(other, 'key') or not hasattr(other, 'shift') or not hasattr(other, 'control') or not hasattr(other, 'alt'):
             return False
-        return (self.key == other.key and
+        # Case-insensitive comparison for single-character keys
+        self_key = self.key.lower() if len(self.key) == 1 else self.key
+        other_key = other.key.lower() if len(other.key) == 1 else other.key
+        return (self_key == other_key and
                 self.shift == other.shift and
                 self.control == other.control and
                 self.alt == other.alt)
 
     def __hash__(self):
-        return hash((self.key, self.shift, self.control, self.alt))
+        # Use lowercase for single-character keys to match __eq__
+        key = self.key.lower() if len(self.key) == 1 else self.key
+        return hash((key, self.shift, self.control, self.alt))
 
     def __repr__(self):
         mods = []
@@ -65,14 +75,13 @@ g_count = ""
 g_operator = ""
 g_pending_motion = ""
 g_command_line = ""
-g_command_line_type = ""  # ":" or "/" or "?"
-g_last_search = ""
-g_last_search_direction = 1  # 1 = forward, -1 = backward
+g_command_line_type = ""  # ":"
 g_registers = {"\"": "", "0": ""}  # Default and yank registers
 g_current_register = "\""
 g_marks = {}
-g_last_edit = None  # For . repeat
+g_last_edit = None  # For . repeat: {'op', 'motion', 'motion_arg', 'count', 'linewise', 'text_obj', 'text_obj_arg'}
 g_last_insert_text = ""
+g_current_edit = None  # Track the edit being built for dot repeat
 g_visual_start = (0, 0)
 g_recording_macro = ""
 g_macros = {}
@@ -86,44 +95,166 @@ g_insert_start_pos = (0, 0)
 g_exit_sequence = ""
 g_exit_sequence_chars = ""
 g_initialized = False
-g_sneak_enabled = False
-g_use_10x_command_panel = False
-g_use_10x_find_panel = False
 g_filtered_history = True
-g_show_scope_name = False
 g_command_history = []
 g_command_history_index = -1
-g_search_history = []
-g_search_history_index = -1
 g_last_visual_start = (0, 0)
 g_last_visual_end = (0, 0)
 g_last_visual_mode = Mode.VISUAL
 g_debug = False
 g_suppress_next_char = False  # Suppress char after operator enters insert mode
 g_change_undo_group = False   # Track if we're in a change operation undo group
+g_undo_cursor_stack = []      # Stack of cursor positions for undo
+g_redo_cursor_stack = []      # Stack of cursor positions for redo
 
 # =============================================================================
 # Utility Functions
 # =============================================================================
 
-def get_line(y):
+# Map of special key names to actual characters
+SPECIAL_KEY_MAP = {
+    'Space': ' ',
+    'Tab': '\t',
+    'Slash': '/',
+    'OemQuestion': '/',
+    'Oem2': '/',
+    'Divide': '/',
+}
+
+# Map of shifted characters (US keyboard layout)
+SHIFT_CHAR_MAP = {
+    '1': '!', '2': '@', '3': '#', '4': '$', '5': '%',
+    '6': '^', '7': '&', '8': '*', '9': '(', '0': ')',
+    '-': '_', '=': '+', '[': '{', ']': '}', '\\': '|',
+    ';': ':', "'": '"', ',': '<', '.': '>', '/': '?', '`': '~',
+}
+
+# Command aliases - map short forms to canonical names
+COMMAND_ALIASES = {
+    'x': 'wq',
+    'sp': 'split',
+    'vs': 'vsplit',
+    'vsp': 'vsplit',
+    'bn': 'bnext',
+    'bp': 'bprev',
+    'bd': 'bdelete',
+    'noh': 'nohlsearch',
+    'reg': 'registers',
+    'tabn': 'tabnext',
+    'tabp': 'tabprev',
+}
+
+# =============================================================================
+# Helper Functions
+# =============================================================================
+
+def in_visual_mode():
+    """Check if currently in any visual mode."""
+    return g_mode in (Mode.VISUAL, Mode.VISUAL_LINE, Mode.VISUAL_BLOCK)
+
+g_pending_undo_before = None  # Temporary storage for "before" position
+
+def save_undo_cursor():
+    """Save current cursor position as the 'before' position for an edit."""
+    global g_pending_undo_before, g_redo_cursor_stack
+    pos = safe_call(N10X.Editor.GetCursorPos, 0, default=(0, 0))
+    if pos:
+        g_pending_undo_before = (pos[0], pos[1])
+        # Clear redo stack since new edits invalidate redo history
+        g_redo_cursor_stack = []
+
+def finalize_undo_cursor():
+    """Save the 'after' position and commit (before, after) pair to undo stack."""
+    global g_undo_cursor_stack, g_pending_undo_before
+    if g_pending_undo_before is None:
+        return
+    after_pos = safe_call(N10X.Editor.GetCursorPos, 0, default=(0, 0))
+    if after_pos:
+        g_undo_cursor_stack.append((g_pending_undo_before, (after_pos[0], after_pos[1])))
+        # Limit stack size to prevent memory issues
+        if len(g_undo_cursor_stack) > 1000:
+            g_undo_cursor_stack = g_undo_cursor_stack[-500:]
+    g_pending_undo_before = None
+
+def pop_undo_cursor():
+    """Pop (before, after) for undo, push full pair to redo stack, return 'before'."""
+    global g_undo_cursor_stack, g_redo_cursor_stack
+    if g_undo_cursor_stack:
+        before_pos, after_pos = g_undo_cursor_stack.pop()
+        # Push full (before, after) to redo stack
+        g_redo_cursor_stack.append((before_pos, after_pos))
+        return before_pos
+    return None
+
+def pop_redo_cursor():
+    """Pop (before, after) for redo, push back to undo stack, return 'after'."""
+    global g_undo_cursor_stack, g_redo_cursor_stack
+    if g_redo_cursor_stack:
+        before_pos, after_pos = g_redo_cursor_stack.pop()
+        # Push same (before, after) back to undo stack
+        g_undo_cursor_stack.append((before_pos, after_pos))
+        return after_pos
+    return None
+
+def safe_call(func, *args, default=None, **kwargs):
+    """Call a function safely, returning default on any exception."""
     try:
-        return N10X.Editor.GetLine(y) or ""
-    except:
-        return ""
+        result = func(*args, **kwargs)
+        return result if result is not None else default
+    except Exception:
+        return default
+
+def get_setting_bool(name, default=False):
+    """Get a boolean setting value."""
+    try:
+        val = N10X.Editor.GetSetting(name)
+        if not val:
+            return default
+        return val.lower() in ("true", "1", "yes")
+    except Exception:
+        return default
+
+def get_setting_str(name, default=""):
+    """Get a string setting value."""
+    try:
+        return N10X.Editor.GetSetting(name) or default
+    except Exception:
+        return default
+
+def get_char_from_key(key):
+    """Convert a Key object to the actual character it represents.
+
+    Handles special keys like Space, and shifted characters like : (Shift+;).
+    Returns None if the key doesn't represent a printable character.
+    """
+    key_str = key.key
+
+    # Handle special key names
+    if key_str in SPECIAL_KEY_MAP:
+        return SPECIAL_KEY_MAP[key_str]
+
+    # Handle single character keys
+    if len(key_str) == 1:
+        if key.shift:
+            # Check if it's a character that produces a different symbol when shifted
+            if key_str.lower() in SHIFT_CHAR_MAP:
+                return SHIFT_CHAR_MAP[key_str.lower()]
+            # For letters, return uppercase
+            return key_str.upper()
+        else:
+            return key_str.lower()
+
+    return None
+
+def get_line(y):
+    return safe_call(N10X.Editor.GetLine, y, default="") or ""
 
 def get_line_count():
-    try:
-        return N10X.Editor.GetLineCount() or 1
-    except:
-        return 1
+    return safe_call(N10X.Editor.GetLineCount, default=1) or 1
 
 def get_cursor_pos():
-    try:
-        pos = N10X.Editor.GetCursorPos(0)
-        return (pos[0], pos[1])
-    except:
-        return (0, 0)
+    pos = safe_call(N10X.Editor.GetCursorPos, 0, default=(0, 0))
+    return (pos[0], pos[1]) if pos else (0, 0)
 
 def set_cursor_pos(x, y, extend_selection=False):
     line_count = get_line_count()
@@ -134,42 +265,76 @@ def set_cursor_pos(x, y, extend_selection=False):
         x = max(0, min(x, line_len - 1))
     else:
         x = max(0, min(x, line_len))
-    try:
-        if extend_selection:
-            N10X.Editor.SetCursorPosSelect((x, y))
-        else:
-            N10X.Editor.SetCursorPos((x, y), 0)
-    except:
-        pass
+    if extend_selection:
+        safe_call(N10X.Editor.SetCursorPosSelect, (x, y))
+    else:
+        safe_call(N10X.Editor.SetCursorPos, (x, y), 0)
 
 def get_selection():
-    try:
-        return N10X.Editor.GetSelection() or ""
-    except:
-        return ""
+    return safe_call(N10X.Editor.GetSelection, default="") or ""
 
 def set_selection(start, end):
-    try:
-        N10X.Editor.SetSelection(start, end, 0)
-    except:
-        pass
+    safe_call(N10X.Editor.SetSelection, start, end, 0)
 
 def clear_selection():
-    try:
-        N10X.Editor.ClearSelection()
-    except:
-        pass
+    safe_call(N10X.Editor.ClearSelection)
 
 def insert_text(text):
-    try:
-        N10X.Editor.InsertText(text)
-    except:
-        pass
+    safe_call(N10X.Editor.InsertText, text)
 
 def delete_selection():
+    """Delete the currently selected text and return what was deleted."""
     sel = get_selection()
-    if sel:
-        N10X.Editor.ExecuteCommand("Delete")
+    if not sel:
+        return ""
+
+    try:
+        start = N10X.Editor.GetSelectionStart()
+        end = N10X.Editor.GetSelectionEnd()
+    except Exception:
+        return ""
+
+    if start is None or end is None:
+        return ""
+
+    start_x, start_y = start
+    end_x, end_y = end
+
+    # Ensure start is before end
+    if start_y > end_y or (start_y == end_y and start_x > end_x):
+        start_x, start_y, end_x, end_y = end_x, end_y, start_x, start_y
+
+    clear_selection()
+
+    if start_y == end_y:
+        # Single line selection - just modify the line
+        line = get_line(start_y)
+        new_line = line[:start_x] + line[end_x:]
+        N10X.Editor.SetLine(start_y, new_line)
+    else:
+        # Multi-line selection
+        first_line = get_line(start_y)
+        last_line = get_line(end_y)
+
+        # Merge: keep part before selection on first line + part after selection on last line
+        new_line = first_line[:start_x] + last_line[end_x:]
+
+        N10X.Editor.PushUndoGroup()
+
+        # Set the first line to the merged content
+        N10X.Editor.SetLine(start_y, new_line)
+
+        # Delete the extra lines (from start_y+1 to end_y)
+        # Position cursor on each line and delete it
+        for _ in range(end_y - start_y):
+            set_cursor_pos(0, start_y + 1)
+            N10X.Editor.ExecuteCommand("DeleteLine")
+
+        N10X.Editor.PopUndoGroup()
+
+    # Position cursor at start of deleted region
+    set_cursor_pos(start_x, start_y)
+
     return sel
 
 def get_word_at_cursor():
@@ -266,25 +431,20 @@ def is_big_word_char(c):
     return not is_whitespace(c) and c not in '\n\r'
 
 def set_status(text):
-    try:
-        N10X.Editor.SetStatusBarText(text)
-    except:
-        pass
+    safe_call(N10X.Editor.SetStatusBarText, text)
 
 def set_cursor_style():
-    try:
-        if g_mode == Mode.NORMAL:
-            N10X.Editor.SetCursorMode("Block")
-        elif g_mode == Mode.INSERT:
-            N10X.Editor.SetCursorMode("Line")
-        elif g_mode == Mode.REPLACE:
-            N10X.Editor.SetCursorMode("Underscore")
-        elif g_mode in (Mode.VISUAL, Mode.VISUAL_LINE, Mode.VISUAL_BLOCK):
-            N10X.Editor.SetCursorMode("Block")
-        elif g_mode == Mode.COMMAND_LINE:
-            N10X.Editor.SetCursorMode("Block")
-    except:
-        pass
+    cursor_modes = {
+        Mode.NORMAL: "Block",
+        Mode.INSERT: "Line",
+        Mode.REPLACE: "Underscore",
+        Mode.VISUAL: "Block",
+        Mode.VISUAL_LINE: "Block",
+        Mode.VISUAL_BLOCK: "Block",
+        Mode.COMMAND_LINE: "Block",
+    }
+    mode = cursor_modes.get(g_mode, "Block")
+    safe_call(N10X.Editor.SetCursorMode, mode)
 
 def update_status():
     mode_names = {
@@ -328,8 +488,33 @@ def yank_to_register(text, linewise=False):
 def get_register(reg=None):
     if reg is None:
         reg = g_current_register
-    if reg == "+":
-        # System clipboard - use 10x paste
+    if reg == "+" or reg == "*":
+        # System clipboard - try to get from clipboard via 10x
+        try:
+            # Use a workaround: save cursor, paste, get selection, undo
+            # This is a hack but 10x doesn't expose clipboard API directly
+            x, y = get_cursor_pos()
+            N10X.Editor.ExecuteCommand("Paste")
+            # Get the pasted text
+            new_x, new_y = get_cursor_pos()
+            if new_y == y:
+                line = get_line(y)
+                text = line[x:new_x]
+            else:
+                # Multi-line paste
+                lines = []
+                for i in range(y, new_y + 1):
+                    if i == y:
+                        lines.append(get_line(i)[x:])
+                    elif i == new_y:
+                        lines.append(get_line(i)[:new_x])
+                    else:
+                        lines.append(get_line(i))
+                text = ''.join(lines)
+            N10X.Editor.Undo()
+            return text
+        except Exception:
+            pass
         return g_registers.get("\"", "")
     return g_registers.get(reg, "")
 
@@ -362,17 +547,29 @@ def enter_mode(mode):
             g_last_visual_end = get_cursor_pos()
             g_last_visual_mode = old_mode
         clear_selection()
+        # Clear any multi-cursors when returning to normal mode
+        try:
+            N10X.Editor.ClearMultiCursors()
+        except Exception:
+            pass
         # Adjust cursor if coming from insert mode
         if old_mode == Mode.INSERT:
             # Close undo group if we were in a change operation
-            global g_change_undo_group
+            global g_change_undo_group, g_current_edit, g_last_edit
             if g_change_undo_group:
                 N10X.Editor.PopUndoGroup()
                 g_change_undo_group = False
+            # Finalize the edit for dot repeat
+            if g_current_edit is not None:
+                g_current_edit['insert_text'] = g_last_insert_text
+                g_last_edit = g_current_edit
+                g_current_edit = None
             x, y = get_cursor_pos()
             line = get_line(y)
             if x > 0 and x >= len(line.rstrip('\n\r')):
                 set_cursor_pos(x - 1, y)
+            # Finalize undo cursor position (after position adjustment)
+            finalize_undo_cursor()
 
     set_cursor_style()
     update_status()
@@ -381,25 +578,27 @@ def enter_normal_mode():
     enter_mode(Mode.NORMAL)
 
 def enter_insert_mode():
+    save_undo_cursor()
     enter_mode(Mode.INSERT)
 
 def enter_visual_mode():
     enter_mode(Mode.VISUAL)
+    update_visual_selection()
 
 def enter_visual_line_mode():
     enter_mode(Mode.VISUAL_LINE)
+    update_visual_selection()
 
 def enter_visual_block_mode():
     enter_mode(Mode.VISUAL_BLOCK)
+    update_visual_selection()
 
 def enter_command_line_mode(char):
-    global g_mode, g_command_line, g_command_line_type
-    global g_command_history_index, g_search_history_index
+    global g_mode, g_command_line, g_command_line_type, g_command_history_index
     g_mode = Mode.COMMAND_LINE
     g_command_line = ""
     g_command_line_type = char
     g_command_history_index = -1
-    g_search_history_index = -1
     set_status(char)
     set_cursor_style()
 
@@ -409,32 +608,32 @@ def enter_command_line_mode(char):
 
 def motion_h(count=1):
     x, y = get_cursor_pos()
-    set_cursor_pos(x - count, y, g_mode in (Mode.VISUAL, Mode.VISUAL_LINE, Mode.VISUAL_BLOCK))
+    set_cursor_pos(x - count, y, in_visual_mode())
 
 def motion_l(count=1):
     x, y = get_cursor_pos()
-    set_cursor_pos(x + count, y, g_mode in (Mode.VISUAL, Mode.VISUAL_LINE, Mode.VISUAL_BLOCK))
+    set_cursor_pos(x + count, y, in_visual_mode())
 
 def motion_j(count=1):
     x, y = get_cursor_pos()
-    set_cursor_pos(x, y + count, g_mode in (Mode.VISUAL, Mode.VISUAL_LINE, Mode.VISUAL_BLOCK))
+    set_cursor_pos(x, y + count, in_visual_mode())
 
 def motion_k(count=1):
     x, y = get_cursor_pos()
-    set_cursor_pos(x, y - count, g_mode in (Mode.VISUAL, Mode.VISUAL_LINE, Mode.VISUAL_BLOCK))
+    set_cursor_pos(x, y - count, in_visual_mode())
 
 def motion_0():
     x, y = get_cursor_pos()
-    set_cursor_pos(0, y, g_mode in (Mode.VISUAL, Mode.VISUAL_LINE, Mode.VISUAL_BLOCK))
+    set_cursor_pos(0, y, in_visual_mode())
 
 def motion_caret():
     x, y = get_cursor_pos()
     line = get_line(y)
     for i, c in enumerate(line):
         if not is_whitespace(c):
-            set_cursor_pos(i, y, g_mode in (Mode.VISUAL, Mode.VISUAL_LINE, Mode.VISUAL_BLOCK))
+            set_cursor_pos(i, y, in_visual_mode())
             return
-    set_cursor_pos(0, y, g_mode in (Mode.VISUAL, Mode.VISUAL_LINE, Mode.VISUAL_BLOCK))
+    set_cursor_pos(0, y, in_visual_mode())
 
 def motion_dollar(count=1):
     x, y = get_cursor_pos()
@@ -442,7 +641,7 @@ def motion_dollar(count=1):
     line = get_line(target_y)
     line_len = len(line.rstrip('\n\r'))
     pos = max(0, line_len - 1) if g_mode == Mode.NORMAL else line_len
-    set_cursor_pos(pos, target_y, g_mode in (Mode.VISUAL, Mode.VISUAL_LINE, Mode.VISUAL_BLOCK))
+    set_cursor_pos(pos, target_y, in_visual_mode())
 
 def motion_w(count=1):
     x, y = get_cursor_pos()
@@ -478,7 +677,7 @@ def motion_w(count=1):
             while x < len(line) and is_whitespace(line[x]):
                 x += 1
 
-    set_cursor_pos(x, y, g_mode in (Mode.VISUAL, Mode.VISUAL_LINE, Mode.VISUAL_BLOCK))
+    set_cursor_pos(x, y, in_visual_mode())
 
 def motion_W(count=1):
     x, y = get_cursor_pos()
@@ -501,7 +700,7 @@ def motion_W(count=1):
             while x < len(line) and is_whitespace(line[x]):
                 x += 1
 
-    set_cursor_pos(x, y, g_mode in (Mode.VISUAL, Mode.VISUAL_LINE, Mode.VISUAL_BLOCK))
+    set_cursor_pos(x, y, in_visual_mode())
 
 def motion_b(count=1):
     x, y = get_cursor_pos()
@@ -530,7 +729,7 @@ def motion_b(count=1):
             while x > 0 and not is_whitespace(line[x-1]) and not is_word_char(line[x-1]):
                 x -= 1
 
-    set_cursor_pos(x, y, g_mode in (Mode.VISUAL, Mode.VISUAL_LINE, Mode.VISUAL_BLOCK))
+    set_cursor_pos(x, y, in_visual_mode())
 
 def motion_B(count=1):
     x, y = get_cursor_pos()
@@ -550,7 +749,7 @@ def motion_B(count=1):
         while x > 0 and is_big_word_char(line[x-1]):
             x -= 1
 
-    set_cursor_pos(x, y, g_mode in (Mode.VISUAL, Mode.VISUAL_LINE, Mode.VISUAL_BLOCK))
+    set_cursor_pos(x, y, in_visual_mode())
 
 def motion_e(count=1):
     x, y = get_cursor_pos()
@@ -583,7 +782,7 @@ def motion_e(count=1):
             while x < line_len - 1 and not is_whitespace(line[x+1]) and not is_word_char(line[x+1]):
                 x += 1
 
-    set_cursor_pos(x, y, g_mode in (Mode.VISUAL, Mode.VISUAL_LINE, Mode.VISUAL_BLOCK))
+    set_cursor_pos(x, y, in_visual_mode())
 
 def motion_E(count=1):
     x, y = get_cursor_pos()
@@ -610,7 +809,7 @@ def motion_E(count=1):
         while x < line_len - 1 and is_big_word_char(line[x+1]):
             x += 1
 
-    set_cursor_pos(x, y, g_mode in (Mode.VISUAL, Mode.VISUAL_LINE, Mode.VISUAL_BLOCK))
+    set_cursor_pos(x, y, in_visual_mode())
 
 def motion_ge(count=1):
     """Move backward to end of previous word"""
@@ -654,7 +853,7 @@ def motion_ge(count=1):
             # At punctuation - we're at the end
             pass
 
-    set_cursor_pos(x, y, g_mode in (Mode.VISUAL, Mode.VISUAL_LINE, Mode.VISUAL_BLOCK))
+    set_cursor_pos(x, y, in_visual_mode())
 
 def motion_gE(count=1):
     """Move backward to end of previous WORD"""
@@ -688,7 +887,7 @@ def motion_gE(count=1):
             else:
                 break
 
-    set_cursor_pos(x, y, g_mode in (Mode.VISUAL, Mode.VISUAL_LINE, Mode.VISUAL_BLOCK))
+    set_cursor_pos(x, y, in_visual_mode())
 
 def motion_brace_forward(count=1):
     """Move forward to next blank line"""
@@ -707,7 +906,7 @@ def motion_brace_forward(count=1):
         # y is now at a blank line or end of file
 
     y = min(y, line_count - 1)
-    set_cursor_pos(0, y, g_mode in (Mode.VISUAL, Mode.VISUAL_LINE, Mode.VISUAL_BLOCK))
+    set_cursor_pos(0, y, in_visual_mode())
 
 def motion_brace_backward(count=1):
     """Move backward to previous blank line"""
@@ -725,14 +924,55 @@ def motion_brace_backward(count=1):
         # y is now at a blank line or start of file
 
     y = max(0, y)
-    set_cursor_pos(0, y, g_mode in (Mode.VISUAL, Mode.VISUAL_LINE, Mode.VISUAL_BLOCK))
+    set_cursor_pos(0, y, in_visual_mode())
+
+def motion_section_forward(count=1, end=False):
+    """Move forward to next section (line starting with { or })
+    If end=False, look for '{' at start of line (]])
+    If end=True, look for '}' at start of line (][)
+    """
+    x, y = get_cursor_pos()
+    line_count = get_line_count()
+    target_char = '}' if end else '{'
+
+    for _ in range(count):
+        y += 1
+        while y < line_count:
+            line = get_line(y)
+            stripped = line.lstrip()
+            if stripped.startswith(target_char):
+                break
+            y += 1
+
+    y = min(y, line_count - 1)
+    set_cursor_pos(0, y, in_visual_mode())
+
+def motion_section_backward(count=1, end=False):
+    """Move backward to previous section
+    If end=False, look for '{' at start of line ([[)
+    If end=True, look for '}' at start of line ([])
+    """
+    x, y = get_cursor_pos()
+    target_char = '}' if end else '{'
+
+    for _ in range(count):
+        y -= 1
+        while y >= 0:
+            line = get_line(y)
+            stripped = line.lstrip()
+            if stripped.startswith(target_char):
+                break
+            y -= 1
+
+    y = max(0, y)
+    set_cursor_pos(0, y, in_visual_mode())
 
 def motion_gg(count=None):
     push_jump()
     if count is None:
         count = 1
     target_y = count - 1
-    set_cursor_pos(0, target_y, g_mode in (Mode.VISUAL, Mode.VISUAL_LINE, Mode.VISUAL_BLOCK))
+    set_cursor_pos(0, target_y, in_visual_mode())
     motion_caret()
 
 def motion_G(count=None):
@@ -741,7 +981,7 @@ def motion_G(count=None):
         target_y = get_line_count() - 1
     else:
         target_y = count - 1
-    set_cursor_pos(0, target_y, g_mode in (Mode.VISUAL, Mode.VISUAL_LINE, Mode.VISUAL_BLOCK))
+    set_cursor_pos(0, target_y, in_visual_mode())
     motion_caret()
 
 def motion_percent():
@@ -788,108 +1028,124 @@ def motion_percent():
                 depth -= 1
 
     push_jump()
-    set_cursor_pos(curr_x, curr_y, g_mode in (Mode.VISUAL, Mode.VISUAL_LINE, Mode.VISUAL_BLOCK))
+    set_cursor_pos(curr_x, curr_y, in_visual_mode())
 
-def motion_f(char, count=1):
-    global g_last_f_char, g_last_f_direction, g_last_t_mode
-    g_last_f_char = char
-    g_last_f_direction = 1
-    g_last_t_mode = False
-
+def _find_char_on_line(char, count, forward, offset=0):
+    """Core logic for f/F/t/T motions. Returns target x position or None."""
     x, y = get_cursor_pos()
     line = get_line(y)
     found = 0
-    for i in range(x + 1, len(line)):
-        if line[i] == char:
-            found += 1
-            if found == count:
-                set_cursor_pos(i, y, g_mode in (Mode.VISUAL, Mode.VISUAL_LINE, Mode.VISUAL_BLOCK))
-                return True
+    if forward:
+        for i in range(x + 1, len(line)):
+            if line[i] == char:
+                found += 1
+                if found == count:
+                    return i + offset, y
+    else:
+        for i in range(x - 1, -1, -1):
+            if line[i] == char:
+                found += 1
+                if found == count:
+                    return i - offset, y
+    return None
+
+def motion_f(char, count=1, update_state=True):
+    """Move forward to character. Set update_state=False for ; and , repeats."""
+    if update_state:
+        global g_last_f_char, g_last_f_direction, g_last_t_mode
+        g_last_f_char = char
+        g_last_f_direction = 1
+        g_last_t_mode = False
+    result = _find_char_on_line(char, count, forward=True, offset=0)
+    if result:
+        set_cursor_pos(result[0], result[1], in_visual_mode())
+        return True
     return False
 
-def motion_F(char, count=1):
-    global g_last_f_char, g_last_f_direction, g_last_t_mode
-    g_last_f_char = char
-    g_last_f_direction = -1
-    g_last_t_mode = False
-
-    x, y = get_cursor_pos()
-    line = get_line(y)
-    found = 0
-    for i in range(x - 1, -1, -1):
-        if line[i] == char:
-            found += 1
-            if found == count:
-                set_cursor_pos(i, y, g_mode in (Mode.VISUAL, Mode.VISUAL_LINE, Mode.VISUAL_BLOCK))
-                return True
+def motion_F(char, count=1, update_state=True):
+    """Move backward to character. Set update_state=False for ; and , repeats."""
+    if update_state:
+        global g_last_f_char, g_last_f_direction, g_last_t_mode
+        g_last_f_char = char
+        g_last_f_direction = -1
+        g_last_t_mode = False
+    result = _find_char_on_line(char, count, forward=False, offset=0)
+    if result:
+        set_cursor_pos(result[0], result[1], in_visual_mode())
+        return True
     return False
 
-def motion_t(char, count=1):
-    global g_last_f_char, g_last_f_direction, g_last_t_mode
-    g_last_f_char = char
-    g_last_f_direction = 1
-    g_last_t_mode = True
-
-    x, y = get_cursor_pos()
-    line = get_line(y)
-    found = 0
-    for i in range(x + 1, len(line)):
-        if line[i] == char:
-            found += 1
-            if found == count:
-                set_cursor_pos(i - 1, y, g_mode in (Mode.VISUAL, Mode.VISUAL_LINE, Mode.VISUAL_BLOCK))
-                return True
+def motion_t(char, count=1, update_state=True):
+    """Move forward to before character. Set update_state=False for ; and , repeats."""
+    if update_state:
+        global g_last_f_char, g_last_f_direction, g_last_t_mode
+        g_last_f_char = char
+        g_last_f_direction = 1
+        g_last_t_mode = True
+    result = _find_char_on_line(char, count, forward=True, offset=-1)
+    if result:
+        set_cursor_pos(result[0], result[1], in_visual_mode())
+        return True
     return False
 
-def motion_T(char, count=1):
-    global g_last_f_char, g_last_f_direction, g_last_t_mode
-    g_last_f_char = char
-    g_last_f_direction = -1
-    g_last_t_mode = True
-
-    x, y = get_cursor_pos()
-    line = get_line(y)
-    found = 0
-    for i in range(x - 1, -1, -1):
-        if line[i] == char:
-            found += 1
-            if found == count:
-                set_cursor_pos(i + 1, y, g_mode in (Mode.VISUAL, Mode.VISUAL_LINE, Mode.VISUAL_BLOCK))
-                return True
+def motion_T(char, count=1, update_state=True):
+    """Move backward to after character. Set update_state=False for ; and , repeats."""
+    if update_state:
+        global g_last_f_char, g_last_f_direction, g_last_t_mode
+        g_last_f_char = char
+        g_last_f_direction = -1
+        g_last_t_mode = True
+    result = _find_char_on_line(char, count, forward=False, offset=-1)
+    if result:
+        set_cursor_pos(result[0], result[1], in_visual_mode())
+        return True
     return False
 
 def motion_semicolon(count=1):
-    if g_last_f_char:
-        if g_last_f_direction == 1:
-            if g_last_t_mode:
-                motion_t(g_last_f_char, count)
-            else:
-                motion_f(g_last_f_char, count)
-        else:
-            if g_last_t_mode:
-                motion_T(g_last_f_char, count)
-            else:
-                motion_F(g_last_f_char, count)
+    """Repeat last f/F/t/T in same direction"""
+    if not g_last_f_char:
+        return
+    motion_func = (motion_t if g_last_t_mode else motion_f) if g_last_f_direction == 1 else (motion_T if g_last_t_mode else motion_F)
+    motion_func(g_last_f_char, count, update_state=False)
 
 def motion_comma(count=1):
-    if g_last_f_char:
-        if g_last_f_direction == 1:
-            if g_last_t_mode:
-                motion_T(g_last_f_char, count)
-            else:
-                motion_F(g_last_f_char, count)
-        else:
-            if g_last_t_mode:
-                motion_t(g_last_f_char, count)
-            else:
-                motion_f(g_last_f_char, count)
+    """Repeat last f/F/t/T in opposite direction without changing stored state"""
+    if not g_last_f_char:
+        return
+    # Opposite direction: if last was forward (1), go backward, and vice versa
+    motion_func = (motion_T if g_last_t_mode else motion_F) if g_last_f_direction == 1 else (motion_t if g_last_t_mode else motion_f)
+    motion_func(g_last_f_char, count, update_state=False)
+
+def motion_underscore(count=1):
+    """Move to first non-blank of count-1 lines down"""
+    x, y = get_cursor_pos()
+    target_y = y + count - 1
+    set_cursor_pos(0, target_y, in_visual_mode())
+    motion_caret()
+
+def motion_plus(count=1):
+    """Move to first non-blank of next line"""
+    x, y = get_cursor_pos()
+    set_cursor_pos(0, y + count, in_visual_mode())
+    motion_caret()
+
+def motion_minus(count=1):
+    """Move to first non-blank of previous line"""
+    x, y = get_cursor_pos()
+    set_cursor_pos(0, max(0, y - count), in_visual_mode())
+    motion_caret()
+
+def motion_pipe(count=1):
+    """Move to column N (1-indexed)"""
+    x, y = get_cursor_pos()
+    set_cursor_pos(count - 1, y, in_visual_mode())
 
 def motion_H():
     try:
         scroll_line = N10X.Editor.GetScrollLine()
-        set_cursor_pos(0, scroll_line, g_mode in (Mode.VISUAL, Mode.VISUAL_LINE, Mode.VISUAL_BLOCK))
+        set_cursor_pos(0, scroll_line, in_visual_mode())
         motion_caret()
-    except:
+    except Exception:
         pass
 
 def motion_M():
@@ -897,9 +1153,9 @@ def motion_M():
         scroll_line = N10X.Editor.GetScrollLine()
         visible = N10X.Editor.GetVisibleLineCount()
         mid = scroll_line + visible // 2
-        set_cursor_pos(0, mid, g_mode in (Mode.VISUAL, Mode.VISUAL_LINE, Mode.VISUAL_BLOCK))
+        set_cursor_pos(0, mid, in_visual_mode())
         motion_caret()
-    except:
+    except Exception:
         pass
 
 def motion_L():
@@ -907,9 +1163,9 @@ def motion_L():
         scroll_line = N10X.Editor.GetScrollLine()
         visible = N10X.Editor.GetVisibleLineCount()
         bottom = scroll_line + visible - 1
-        set_cursor_pos(0, bottom, g_mode in (Mode.VISUAL, Mode.VISUAL_LINE, Mode.VISUAL_BLOCK))
+        set_cursor_pos(0, bottom, in_visual_mode())
         motion_caret()
-    except:
+    except Exception:
         pass
 
 # =============================================================================
@@ -1001,11 +1257,16 @@ def get_text_object_range(obj, inner):
             end_y += 1
 
         if inner:
-            end_y -= 1
-            if end_y < start_y:
-                end_y = start_y
-            return ((0, start_y), (len(get_line(end_y)), end_y))
+            # Inner paragraph: don't include trailing blank line
+            # end_y points to blank line after paragraph (or last non-blank if at end of file)
+            actual_end_y = end_y - 1 if end_y > start_y and not get_line(end_y).strip() else end_y
+            if actual_end_y < start_y:
+                actual_end_y = start_y
+            return ((0, start_y), (len(get_line(actual_end_y).rstrip('\n\r')), actual_end_y))
         else:
+            # Outer paragraph: include trailing blank lines
+            while end_y < get_line_count() - 1 and not get_line(end_y).strip():
+                end_y += 1
             return ((0, start_y), (len(get_line(end_y)), end_y))
 
     elif obj == 's':  # sentence
@@ -1172,10 +1433,15 @@ def find_bracket_range(open_b, close_b, x, y, inner):
 # Operators
 # =============================================================================
 
-def apply_operator_to_range(op, start, end, linewise=False):
-    global g_last_edit
+def apply_operator_to_range(op, start, end, linewise=False, edit_info=None, skip_undo_save=False):
+    global g_last_edit, g_current_edit
 
-    N10X.Editor.LogTo10XOutput(f"DEBUG apply_operator_to_range: op='{op}' start={start} end={end} linewise={linewise}\n")
+    # Save cursor for undo (except for yank which doesn't modify)
+    if op != 'y' and not skip_undo_save:
+        save_undo_cursor()
+
+    if g_debug:
+        N10X.Editor.LogTo10XOutput(f"DEBUG apply_operator_to_range: op='{op}' start={start} end={end} linewise={linewise}\n")
 
     start_x, start_y = start
     end_x, end_y = end
@@ -1191,16 +1457,35 @@ def apply_operator_to_range(op, start, end, linewise=False):
 
     set_selection((start_x, start_y), (end_x, end_y))
     text = get_selection()
-    N10X.Editor.LogTo10XOutput(f"DEBUG apply_operator_to_range: selected text='{text}' len={len(text)}\n")
+    if g_debug:
+        N10X.Editor.LogTo10XOutput(f"DEBUG apply_operator_to_range: selected text='{text}' len={len(text)}\n")
+
+    # Build edit info for dot repeat
+    if edit_info is None:
+        edit_info = {}
+    edit_info['op'] = op
+    edit_info['linewise'] = linewise
 
     if op == 'd':  # delete
-        N10X.Editor.LogTo10XOutput(f"DEBUG: Deleting text\n")
+        if g_debug:
+            N10X.Editor.LogTo10XOutput(f"DEBUG: Deleting text\n")
         yank_to_register(text, linewise)
-        delete_selection()
         if linewise:
-            x, y = get_cursor_pos()
+            # Delete entire lines, not just content
+            clear_selection()
+            N10X.Editor.PushUndoGroup()
+            num_lines = end_y - start_y + 1
+            set_cursor_pos(0, start_y)
+            for _ in range(num_lines):
+                N10X.Editor.ExecuteCommand("DeleteLine")
+            N10X.Editor.PopUndoGroup()
+            # Position cursor on the line that took the place of deleted lines
+            new_y = min(start_y, get_line_count() - 1)
+            set_cursor_pos(0, new_y)
             motion_caret()
-        g_last_edit = ('d', text, linewise)
+        else:
+            delete_selection()
+        g_last_edit = edit_info
 
     elif op == 'c':  # change
         global g_suppress_next_char, g_change_undo_group
@@ -1208,37 +1493,42 @@ def apply_operator_to_range(op, start, end, linewise=False):
         N10X.Editor.PushUndoGroup()  # Group deletion and insertion together
         g_change_undo_group = True
         delete_selection()
+        # Reposition cursor using API directly to bypass normal mode clamping,
+        # since we're about to enter insert mode and may need to be at end of line
+        N10X.Editor.SetCursorPos((start_x, start_y), 0)
         g_suppress_next_char = True  # Don't insert the motion key
         enter_insert_mode()
-        g_last_edit = ('c', text, linewise)
+        # Store current edit, will be finalized when leaving insert mode
+        g_current_edit = edit_info
 
     elif op == 'y':  # yank
         yank_to_register(text, linewise)
         clear_selection()
         set_cursor_pos(start_x, start_y)
         set_status(f"Yanked {len(text)} characters")
-        g_last_edit = ('y', text, linewise)
+        # Yank is not repeatable with dot
 
     elif op == '>':  # indent
-        N10X.Editor.PushUndoGroup()
         clear_selection()
-        for line_y in range(start_y, end_y + 1):
-            line = get_line(line_y)
-            N10X.Editor.SetLine(line_y, "\t" + line)
-        N10X.Editor.PopUndoGroup()
-        set_cursor_pos(start_x, start_y)
+        # Select the lines to indent
+        end_line = get_line(end_y)
+        set_selection((0, start_y), (len(end_line), end_y))
+        N10X.Editor.ExecuteCommand("IndentLine")
+        clear_selection()
+        # Move cursor to first non-whitespace of first line
+        set_cursor_pos(0, start_y)
+        motion_caret()
 
     elif op == '<':  # unindent
-        N10X.Editor.PushUndoGroup()
         clear_selection()
-        for line_y in range(start_y, end_y + 1):
-            line = get_line(line_y)
-            if line.startswith('\t'):
-                N10X.Editor.SetLine(line_y, line[1:])
-            elif line.startswith('    '):
-                N10X.Editor.SetLine(line_y, line[4:])
-        N10X.Editor.PopUndoGroup()
-        set_cursor_pos(start_x, start_y)
+        # Select the lines to unindent
+        end_line = get_line(end_y)
+        set_selection((0, start_y), (len(end_line), end_y))
+        N10X.Editor.ExecuteCommand("UnindentLine")
+        clear_selection()
+        # Move cursor to first non-whitespace of first line
+        set_cursor_pos(0, start_y)
+        motion_caret()
 
     elif op == 'gu':  # lowercase
         clear_selection()
@@ -1254,11 +1544,29 @@ def apply_operator_to_range(op, start, end, linewise=False):
         insert_text(new_text)
         set_cursor_pos(start_x, start_y)
 
+    elif op == '=':  # auto-indent
+        clear_selection()
+        set_cursor_pos(start_x, start_y)
+        set_status("Auto-indent not supported")
+
+    elif op == 'g~':  # toggle case
+        clear_selection()
+        new_text = text.swapcase()
+        set_selection((start_x, start_y), (end_x, end_y))
+        insert_text(new_text)
+        set_cursor_pos(start_x, start_y)
+
+    # Finalize undo cursor for operations that don't enter insert mode
+    # 'c' (change) finalizes when leaving insert mode, 'y' (yank) doesn't modify
+    if op not in ('c', 'y'):
+        finalize_undo_cursor()
+
 def operator_dd(count=1):
     x, y = get_cursor_pos()
     end_y = min(y + count - 1, get_line_count() - 1)
     end_line = get_line(end_y)
-    apply_operator_to_range('d', (0, y), (len(end_line), end_y), linewise=True)
+    edit_info = {'motion': 'dd', 'count': count}
+    apply_operator_to_range('d', (0, y), (len(end_line), end_y), linewise=True, edit_info=edit_info)
 
 def operator_yy(count=1):
     x, y = get_cursor_pos()
@@ -1279,125 +1587,234 @@ def operator_cc(count=1):
     end_y = min(y + count - 1, get_line_count() - 1)
     end_line = get_line(end_y)
     # Use 'c' operator so it gets proper undo grouping and suppress flag
-    apply_operator_to_range('c', (indent, y), (len(end_line.rstrip('\n\r')), end_y), linewise=False)
+    edit_info = {'motion': 'cc', 'count': count}
+    apply_operator_to_range('c', (indent, y), (len(end_line.rstrip('\n\r')), end_y), linewise=False, edit_info=edit_info)
     # Note: apply_operator_to_range('c',...) already enters insert mode
+
+def _repeat_last_edit(repeat_count=1):
+    """Repeat the last edit operation (for dot command)."""
+    global g_last_edit
+
+    if not g_last_edit or not isinstance(g_last_edit, dict):
+        return
+
+    # Save cursor position for undo before repeating the edit
+    save_undo_cursor()
+
+    op = g_last_edit.get('op')
+    motion = g_last_edit.get('motion')
+    motion_arg = g_last_edit.get('motion_arg')
+    edit_count = g_last_edit.get('count', 1)
+    linewise = g_last_edit.get('linewise', False)
+    insert_text_content = g_last_edit.get('insert_text', '')
+
+    # Use repeat_count if provided, otherwise use original count
+    use_count = repeat_count if repeat_count > 1 else edit_count
+
+    if not op or not motion:
+        return
+
+    # Execute the motion and get the range
+    start = get_cursor_pos()
+    end = start
+
+    # Handle different motion types
+    if motion == 'w':
+        if op == 'c':
+            motion_e(use_count)  # cw acts like ce
+        else:
+            motion_w(use_count)
+        end = get_cursor_pos()
+        end = (end[0] + 1, end[1]) if op == 'c' else end
+    elif motion == 'W':
+        if op == 'c':
+            motion_E(use_count)
+        else:
+            motion_W(use_count)
+        end = get_cursor_pos()
+        end = (end[0] + 1, end[1]) if op == 'c' else end
+    elif motion == 'e':
+        motion_e(use_count)
+        end = get_cursor_pos()
+        end = (end[0] + 1, end[1])
+    elif motion == 'E':
+        motion_E(use_count)
+        end = get_cursor_pos()
+        end = (end[0] + 1, end[1])
+    elif motion == 'b':
+        motion_b(use_count)
+        end = get_cursor_pos()
+        start, end = end, start  # b goes backward
+    elif motion == 'B':
+        motion_B(use_count)
+        end = get_cursor_pos()
+        start, end = end, start
+    elif motion == '$':
+        motion_dollar(use_count)
+        end = get_cursor_pos()
+        end = (end[0] + 1, end[1])
+    elif motion == '0':
+        motion_0()
+        end = get_cursor_pos()
+        start, end = end, start
+    elif motion == '^':
+        motion_caret()
+        end = get_cursor_pos()
+        start, end = end, start
+    elif motion in ('h', 'j', 'k', 'l'):
+        if motion == 'h':
+            motion_h(use_count)
+        elif motion == 'j':
+            motion_j(use_count)
+        elif motion == 'k':
+            motion_k(use_count)
+        elif motion == 'l':
+            motion_l(use_count)
+        end = get_cursor_pos()
+        if motion == 'l':
+            end = (end[0] + 1, end[1])
+        linewise = motion in ('j', 'k')
+    elif motion == 'f' and motion_arg:
+        motion_f(motion_arg, use_count)
+        end = get_cursor_pos()
+        end = (end[0] + 1, end[1])
+    elif motion == 'F' and motion_arg:
+        motion_F(motion_arg, use_count)
+        end = get_cursor_pos()
+        start, end = end, start
+    elif motion == 't' and motion_arg:
+        motion_t(motion_arg, use_count)
+        end = get_cursor_pos()
+        end = (end[0] + 1, end[1])
+    elif motion == 'T' and motion_arg:
+        motion_T(motion_arg, use_count)
+        end = get_cursor_pos()
+        start, end = end, start
+    elif motion.startswith('i') or motion.startswith('a'):
+        # Text object
+        inner = motion.startswith('i')
+        obj_char = motion[1] if len(motion) > 1 else None
+        if obj_char:
+            obj_range = get_text_object_range(obj_char, inner)
+            if obj_range:
+                start, end = obj_range
+            else:
+                return  # No matching text object found
+    elif motion == 'gg':
+        target = use_count - 1 if use_count else 0
+        end = (0, target)
+        linewise = True
+    elif motion == 'G':
+        motion_G(use_count if use_count > 1 else None)
+        end = get_cursor_pos()
+        end = (len(get_line(end[1])), end[1])
+        linewise = True
+    elif motion == 'dd':
+        # Delete lines
+        operator_dd(use_count)
+        return  # operator_dd handles everything
+    elif motion == 'cc':
+        # Change lines - need to handle specially to insert the text
+        x, y = get_cursor_pos()
+        line = get_line(y)
+        indent = 0
+        for c in line:
+            if c in ' \t':
+                indent += 1
+            else:
+                break
+        end_y = min(y + use_count - 1, get_line_count() - 1)
+        end_line = get_line(end_y)
+        set_selection((indent, y), (len(end_line.rstrip('\n\r')), end_y))
+        text = get_selection()
+        yank_to_register(text, False)
+        delete_selection()
+        if insert_text_content:
+            insert_text(insert_text_content)
+        return
+    elif motion == 'x':
+        # Delete character under cursor
+        x, y = get_cursor_pos()
+        line = get_line(y)
+        line_len = len(line.rstrip('\n\r'))
+        del_count = min(use_count, line_len - x)
+        if del_count > 0:
+            deleted = line[x:x + del_count]
+            yank_to_register(deleted, False)
+            N10X.Editor.SetLine(y, line[:x] + line[x + del_count:])
+        return
+    elif motion == 'X':
+        # Delete character before cursor
+        x, y = get_cursor_pos()
+        if x > 0:
+            line = get_line(y)
+            del_count = min(use_count, x)
+            deleted = line[x - del_count:x]
+            yank_to_register(deleted, False)
+            N10X.Editor.SetLine(y, line[:x - del_count] + line[x:])
+            set_cursor_pos(x - del_count, y)
+        return
+    elif motion == 's':
+        # Substitute character(s) under cursor
+        x, y = get_cursor_pos()
+        line = get_line(y)
+        line_len = len(line.rstrip('\n\r'))
+        del_count = min(use_count, line_len - x)
+        if del_count > 0:
+            deleted = line[x:x + del_count]
+            yank_to_register(deleted, False)
+            N10X.Editor.SetLine(y, line[:x] + line[x + del_count:])
+        if insert_text_content:
+            insert_text(insert_text_content)
+        return
+    else:
+        return  # Unknown motion
+
+    # Apply the operator
+    if op == 'd':
+        set_cursor_pos(start[0], start[1])
+        apply_operator_to_range('d', start, end, linewise, g_last_edit, skip_undo_save=True)
+    elif op == 'c':
+        set_cursor_pos(start[0], start[1])
+        # For change, we need to delete and insert without entering insert mode
+        # Group delete and insert as one undo operation
+        N10X.Editor.PushUndoGroup()
+        set_selection(start, end)
+        text = get_selection()
+        yank_to_register(text, linewise)
+        delete_selection()
+        if insert_text_content:
+            insert_text(insert_text_content)
+        N10X.Editor.PopUndoGroup()
+        finalize_undo_cursor()
+        # Don't update g_last_edit - keep the original
 
 # =============================================================================
 # Search
 # =============================================================================
 
-def do_search(pattern, direction=1, whole_word=False):
-    global g_last_search, g_last_search_direction
-
-    if not pattern:
-        pattern = g_last_search
-    if not pattern:
-        return
-
-    g_last_search = pattern
-    g_last_search_direction = direction
-
-    push_jump()
-
-    x, y = get_cursor_pos()
-    line_count = get_line_count()
-
-    # Search from current position
-    start_y = y
-    start_x = x + direction
-
-    def find_pattern(line, start_pos, reverse=False):
-        """Find pattern in line, optionally checking word boundaries"""
-        if not whole_word:
-            if reverse:
-                return line.rfind(pattern, 0, max(0, start_pos))
-            else:
-                return line.find(pattern, start_pos)
-
-        # Search with word boundary checking
-        search_start = start_pos if not reverse else 0
-        search_end = len(line) if not reverse else start_pos
-
-        if reverse:
-            # Search backwards
-            idx = search_end
-            while idx >= search_start:
-                idx = line.rfind(pattern, search_start, idx)
-                if idx < 0:
-                    break
-                # Check word boundaries
-                before_ok = (idx == 0 or not is_word_char(line[idx - 1]))
-                after_idx = idx + len(pattern)
-                after_ok = (after_idx >= len(line) or not is_word_char(line[after_idx]))
-                if before_ok and after_ok:
-                    return idx
-                idx -= 1
-            return -1
-        else:
-            # Search forwards
-            idx = search_start
-            while idx < len(line):
-                idx = line.find(pattern, idx)
-                if idx < 0:
-                    break
-                # Check word boundaries
-                before_ok = (idx == 0 or not is_word_char(line[idx - 1]))
-                after_idx = idx + len(pattern)
-                after_ok = (after_idx >= len(line) or not is_word_char(line[after_idx]))
-                if before_ok and after_ok:
-                    return idx
-                idx += 1
-            return -1
-
-    for i in range(line_count + 1):
-        if direction == 1:
-            curr_y = (start_y + i) % line_count
-        else:
-            curr_y = (start_y - i) % line_count
-
-        line = get_line(curr_y)
-
-        if direction == 1:
-            if curr_y == start_y:
-                idx = find_pattern(line, start_x, reverse=False)
-            else:
-                idx = find_pattern(line, 0, reverse=False)
-        else:
-            if curr_y == start_y:
-                idx = find_pattern(line, start_x, reverse=True)
-            else:
-                idx = find_pattern(line, len(line), reverse=True)
-
-        if idx >= 0:
-            set_cursor_pos(idx, curr_y, g_mode in (Mode.VISUAL, Mode.VISUAL_LINE, Mode.VISUAL_BLOCK))
-            try:
-                N10X.Editor.CenterViewAtLinePos(curr_y)
-            except:
-                pass
-            set_status(f"/{pattern}" if direction == 1 else f"?{pattern}")
-            return True
-
-    set_status(f"Pattern not found: {pattern}")
-    return False
-
 def search_word_under_cursor(direction=1):
+    """Search for the word under cursor (* and # commands)."""
     word = get_word_at_cursor()
     if word:
-        # Search for whole word by adding word boundaries
-        # Use \b for word boundary in regex-style search
-        pattern = r'\b' + word + r'\b'
-        # For simple search, just use the word itself but check boundaries manually
-        do_search(word, direction, whole_word=True)
-
-def search_next():
-    do_search(g_last_search, g_last_search_direction)
-
-def search_prev():
-    do_search(g_last_search, -g_last_search_direction)
+        push_jump()
+        reverse = (direction == -1)
+        N10X.Editor.SetFindText(word, False, True, False, reverse)
+        N10X.Editor.ExecuteCommand("FindInFileNext")
+        set_status(f"/{word}" if direction == 1 else f"?{word}")
 
 # =============================================================================
 # Commands
 # =============================================================================
+
+def _switch_buffer(direction):
+    """Switch to next (direction=1) or previous (direction=-1) buffer."""
+    files = safe_call(N10X.Editor.GetOpenFiles, default=[])
+    current = safe_call(N10X.Editor.GetCurrentFilename, default="")
+    if files and current in files:
+        idx = files.index(current)
+        new_idx = (idx + direction) % len(files)
+        safe_call(N10X.Editor.FocusFile, files[new_idx])
 
 def execute_command(cmd):
     global g_command_history
@@ -1417,12 +1834,14 @@ def execute_command(cmd):
 
     # Try user handler first
     result = VimUser.UserHandleCommandline(":" + cmd)
-    if result == UserHandledResult.HANDLED:
+    # Compare by name to handle module reloading creating different enum classes
+    result_name = result.name if hasattr(result, 'name') else str(result)
+    if result_name == 'HANDLED':
         return
-    elif result == UserHandledResult.PASS_TO_10X:
+    elif result_name == 'PASS_TO_10X':
         try:
             N10X.Editor.ExecuteCommand(cmd)
-        except:
+        except Exception:
             pass
         return
 
@@ -1430,6 +1849,9 @@ def execute_command(cmd):
     parts = cmd.split(None, 1)
     command = parts[0] if parts else ""
     args = parts[1] if len(parts) > 1 else ""
+
+    # Normalize command aliases
+    command = COMMAND_ALIASES.get(command, command)
 
     # Handle line number
     if command.isdigit():
@@ -1464,7 +1886,7 @@ def execute_command(cmd):
                             operator_dd(1)
                         N10X.Editor.PopUndoGroup()
                         return
-            except:
+            except Exception:
                 pass
 
     # Standard commands
@@ -1489,7 +1911,7 @@ def execute_command(cmd):
         N10X.Editor.DiscardUnsavedChanges()
         N10X.Editor.CloseFile()
 
-    elif command == 'wq' or command == 'x':
+    elif command == 'wq':
         N10X.Editor.SaveFile()
         N10X.Editor.CloseFile()
 
@@ -1506,7 +1928,7 @@ def execute_command(cmd):
             if has_modified:
                 set_status("No write since last change (use :qa! to override)")
                 return
-        except:
+        except Exception:
             pass
         N10X.Editor.Exit(False)
 
@@ -1520,76 +1942,64 @@ def execute_command(cmd):
         else:
             N10X.Editor.CheckForModifiedFiles()
 
-    elif command == 'sp' or command == 'split':
-        # Horizontal split - increase row count
-        try:
-            cols = N10X.Editor.GetColumnCount()
-            N10X.Editor.SetColumnCount(cols + 1)
-        except:
-            pass
+    elif command == 'vsplit':
+        # Vertical split (side by side)
+        if args:
+            N10X.Editor.ExecuteCommand("DuplicatePanelRight")
+            N10X.Editor.OpenFile(args)
+        else:
+            N10X.Editor.ExecuteCommand("DuplicatePanelRight")
 
-    elif command == 'vs' or command == 'vsplit':
-        # Vertical split
-        try:
-            cols = N10X.Editor.GetColumnCount()
-            N10X.Editor.SetColumnCount(cols + 1)
-        except:
-            pass
+    elif command == 'split':
+        # Horizontal split - 10x doesn't have DuplicatePanelDown, so use DuplicatePanel
+        # which duplicates in place, or fall back to column-based split
+        if args:
+            N10X.Editor.ExecuteCommand("DuplicatePanel")
+            N10X.Editor.OpenFile(args)
+        else:
+            N10X.Editor.ExecuteCommand("DuplicatePanel")
 
-    elif command == 'bn' or command == 'bnext':
-        try:
-            files = N10X.Editor.GetOpenFiles()
-            current = N10X.Editor.GetCurrentFilename()
-            if files and current in files:
-                idx = files.index(current)
-                next_idx = (idx + 1) % len(files)
-                N10X.Editor.FocusFile(files[next_idx])
-        except:
-            pass
+    elif command == 'bnext':
+        _switch_buffer(1)
 
-    elif command == 'bp' or command == 'bprev':
-        try:
-            files = N10X.Editor.GetOpenFiles()
-            current = N10X.Editor.GetCurrentFilename()
-            if files and current in files:
-                idx = files.index(current)
-                prev_idx = (idx - 1) % len(files)
-                N10X.Editor.FocusFile(files[prev_idx])
-        except:
-            pass
+    elif command == 'bprev':
+        _switch_buffer(-1)
 
-    elif command == 'bd' or command == 'bdelete':
+    elif command == 'bdelete':
         N10X.Editor.CloseFile()
 
-    elif command == 'noh' or command == 'nohlsearch':
+    elif command == 'nohlsearch':
         set_status("")
+
+    elif command in ('wrap', 'setwrap', 'nowrap', 'setnowrap'):
+        N10X.Editor.ExecuteCommand("ToggleWordWrapForCurrentPanel")
 
     elif command == 'set':
         if args:
-            if '=' in args:
+            if args == 'wrap':
+                N10X.Editor.ExecuteCommand("ToggleWordWrapForCurrentPanel")
+            elif args == 'nowrap':
+                N10X.Editor.ExecuteCommand("ToggleWordWrapForCurrentPanel")
+            elif '=' in args:
                 name, value = args.split('=', 1)
                 try:
                     N10X.Editor.SetSetting(name.strip(), value.strip())
-                except:
+                except Exception:
                     pass
             elif args.startswith('no'):
                 try:
                     N10X.Editor.SetSetting(args[2:], "false")
-                except:
+                except Exception:
                     pass
             else:
                 try:
                     val = N10X.Editor.GetSetting(args)
                     set_status(f"{args}={val}")
-                except:
+                except Exception:
                     pass
 
-    elif command == 'reg' or command == 'registers':
-        reg_info = []
-        for r, v in g_registers.items():
-            if v:
-                preview = v[:30].replace('\n', '^J')
-                reg_info.append(f'"{r}: {preview}')
+    elif command == 'registers':
+        reg_info = [f'"{r}: {v[:30].replace(chr(10), "^J")}' for r, v in g_registers.items() if v]
         set_status(" | ".join(reg_info) if reg_info else "Registers empty")
 
     elif command == 'marks':
@@ -1674,64 +2084,34 @@ def execute_command(cmd):
             N10X.Editor.PopUndoGroup()
             set_status(f"Substituted {count_replaced} occurrence(s)")
 
-    elif command == 'make' or command == 'build':
-        try:
-            N10X.Editor.ExecuteCommand("Build.Build")
-        except:
-            pass
-
-    elif command == 'cn' or command == 'cnext':
-        try:
-            N10X.Editor.ExecuteCommand("Build.NextError")
-        except:
-            pass
-
-    elif command == 'cp' or command == 'cprev':
-        try:
-            N10X.Editor.ExecuteCommand("Build.PrevError")
-        except:
-            pass
+    elif command in ('make', 'build'):
+        safe_call(N10X.Editor.ExecuteCommand, "BuildActiveWorkspace")
 
     elif command == 'copen':
-        try:
-            N10X.Editor.ShowBuildOutput()
-        except:
-            pass
+        safe_call(N10X.Editor.ShowBuildOutput)
 
     elif command == 'cclose':
-        # No direct way to close build panel
-        pass
+        pass  # No direct way to close build panel
 
     elif command == 'only':
-        try:
-            N10X.Editor.SetColumnCount(1)
-        except:
-            pass
+        safe_call(N10X.Editor.SetColumnCount, 1)
 
     elif command == 'tabnew':
         if args:
             N10X.Editor.OpenFile(args)
 
-    elif command == 'tabn' or command == 'tabnext':
-        try:
-            N10X.Editor.ExecuteCommand("Tab.NextTab")
-        except:
-            pass
+    elif command == 'tabnext':
+        safe_call(N10X.Editor.ExecuteCommand, "NextPanelTab")
 
-    elif command == 'tabp' or command == 'tabprev':
-        try:
-            N10X.Editor.ExecuteCommand("Tab.PrevTab")
-        except:
-            pass
+    elif command == 'tabprev':
+        safe_call(N10X.Editor.ExecuteCommand, "PrevPanelTab")
 
     elif command == 'help':
         set_status("Vim mode - :w save, :q quit, :wq save+quit, :e file, /search, ?search")
 
     else:
         # Try as 10x command
-        try:
-            N10X.Editor.ExecuteCommand(command)
-        except:
+        if not safe_call(N10X.Editor.ExecuteCommand, command):
             set_status(f"Unknown command: {command}")
 
 # =============================================================================
@@ -1759,7 +2139,7 @@ def update_visual_selection():
         try:
             N10X.Editor.SetCursorRectSelect(start, end)
             return
-        except:
+        except Exception:
             pass
 
     set_selection(start, end)
@@ -1795,12 +2175,25 @@ def visual_operation(op):
 def handle_normal_mode_key(key):
     global g_count, g_operator, g_pending_motion, g_current_register
     global g_recording_macro, g_macro_keys, g_macros
+    global g_suppress_next_char, g_change_undo_group, g_current_edit, g_last_edit
 
-    # Use lowercase for comparisons, detect shift from uppercase char or key.shift
-    char = key.key.lower() if len(key.key) == 1 else key.key
+    # Get the actual character including shift transformations (e.g., Shift+. = >)
+    actual_char = get_char_from_key(key)
+    # For comparison purposes, use lowercase letter but keep symbols as-is
+    if key.key in SPECIAL_KEY_MAP:
+        char = SPECIAL_KEY_MAP[key.key]
+    elif actual_char and len(actual_char) == 1:
+        # Use actual_char for symbols like < > : etc, but lowercase for letters
+        if actual_char.isalpha():
+            char = actual_char.lower()
+        else:
+            char = actual_char
+    else:
+        char = key.key.lower() if len(key.key) == 1 else key.key
     is_shifted = key.shift
 
-    N10X.Editor.LogTo10XOutput(f"DEBUG handle_normal_mode_key: char='{char}' is_shifted={is_shifted} g_operator='{g_operator}' g_pending_motion='{g_pending_motion}'\n")
+    if g_debug:
+        N10X.Editor.LogTo10XOutput(f"DEBUG handle_normal_mode_key: char='{char}' is_shifted={is_shifted} g_operator='{g_operator}' g_pending_motion='{g_pending_motion}'\n")
 
     # Recording macros
     if g_recording_macro and char != 'q':
@@ -1808,9 +2201,11 @@ def handle_normal_mode_key(key):
 
     # Try user handler first
     result = VimUser.UserHandleCommandModeKey(key)
-    if result == UserHandledResult.HANDLED:
+    # Compare by name to handle module reloading creating different enum classes
+    result_name = result.name if hasattr(result, 'name') else str(result)
+    if result_name == 'HANDLED':
         return True
-    elif result == UserHandledResult.PASS_TO_10X:
+    elif result_name == 'PASS_TO_10X':
         return False
 
     count = int(g_count) if g_count else 1
@@ -1818,19 +2213,31 @@ def handle_normal_mode_key(key):
     # Handle pending motion for operators
     if g_pending_motion:
         if g_pending_motion in ('f', 'F', 't', 'T'):
-            if len(char) == 1:
+            target_char = get_char_from_key(key)
+            if target_char is not None:
+                # Save undo cursor BEFORE motion if there's an operator
+                if g_operator and g_operator != 'y':
+                    save_undo_cursor()
+                start = get_cursor_pos()  # Save position BEFORE motion
                 if g_pending_motion == 'f':
-                    motion_f(char, count)
+                    motion_f(target_char, count)
                 elif g_pending_motion == 'F':
-                    motion_F(char, count)
+                    motion_F(target_char, count)
                 elif g_pending_motion == 't':
-                    motion_t(char, count)
+                    motion_t(target_char, count)
                 elif g_pending_motion == 'T':
-                    motion_T(char, count)
+                    motion_T(target_char, count)
+                end = get_cursor_pos()  # Get position AFTER motion
+                pending = g_pending_motion
                 g_pending_motion = ""
+                g_count = ""
                 if g_operator:
-                    start = g_visual_start if g_mode in (Mode.VISUAL, Mode.VISUAL_LINE) else get_cursor_pos()
-                    # Motion already moved cursor
+                    # Apply operator to the motion range
+                    if pending in ('f', 't'):
+                        apply_operator_to_range(g_operator, start, (end[0] + 1, end[1]), False, skip_undo_save=True)
+                    else:  # F, T - backward motions
+                        apply_operator_to_range(g_operator, end, start, False, skip_undo_save=True)
+                    g_operator = ""
                 return True
 
         elif g_pending_motion == 'g':
@@ -1875,30 +2282,40 @@ def handle_normal_mode_key(key):
                 g_operator = 'gu'
                 g_pending_motion = ""
                 return True
+            elif char == '~':
+                # g~ - toggle case operator
+                g_operator = 'g~'
+                g_pending_motion = ""
+                return True
             elif char == 'd':
                 # Go to definition
                 try:
-                    N10X.Editor.ExecuteCommand("Editor.GoToDefinition")
-                except:
+                    N10X.Editor.ExecuteCommand("GotoSymbolDefinition")
+                except Exception:
                     pass
             elif char == 'f' and is_shifted:
                 # Go to file under cursor (gF)
                 try:
-                    N10X.Editor.ExecuteCommand("Editor.GoToFile")
-                except:
+                    N10X.Editor.ExecuteCommand("FindFile")
+                except Exception:
                     pass
             g_pending_motion = ""
+            g_count = ""
             return True
 
         elif g_pending_motion == 'r':
             # Replace character
-            if len(char) == 1:
+            target_char = get_char_from_key(key)
+            if target_char is not None:
+                save_undo_cursor()
                 x, y = get_cursor_pos()
                 line = get_line(y)
                 if x < len(line.rstrip('\n\r')):
-                    new_line = line[:x] + char + line[x+1:]
+                    new_line = line[:x] + target_char + line[x+1:]
                     N10X.Editor.SetLine(y, new_line)
+                finalize_undo_cursor()
             g_pending_motion = ""
+            g_count = ""
             return True
 
         elif g_pending_motion == "'":
@@ -1912,6 +2329,7 @@ def handle_normal_mode_key(key):
                 set_cursor_pos(pos[0], pos[1])
                 motion_caret()
             g_pending_motion = ""
+            g_count = ""
             return True
 
         elif g_pending_motion == '`':
@@ -1924,6 +2342,7 @@ def handle_normal_mode_key(key):
                 push_jump()
                 set_cursor_pos(pos[0], pos[1])
             g_pending_motion = ""
+            g_count = ""
             return True
 
         elif g_pending_motion == 'm':
@@ -1933,10 +2352,11 @@ def handle_normal_mode_key(key):
                 g_marks[char] = (filename, get_cursor_pos())
                 set_status(f"Mark '{char}' set")
             g_pending_motion = ""
+            g_count = ""
             return True
 
         elif g_pending_motion == '"':
-            # Select register
+            # Select register - don't clear count, it applies to the next command
             g_current_register = char
             g_pending_motion = ""
             return True
@@ -1951,7 +2371,46 @@ def handle_normal_mode_key(key):
                 visible = N10X.Editor.GetVisibleLineCount()
                 N10X.Editor.SetScrollLine(max(0, y - visible + 1))
             g_pending_motion = ""
+            g_count = ""
             return True
+
+        elif g_pending_motion == '[':
+            if char == '[':
+                push_jump()
+                motion_section_backward(count, end=False)  # [[
+                g_pending_motion = ""
+                g_count = ""
+                return True
+            elif char == ']':
+                push_jump()
+                motion_section_backward(count, end=True)   # []
+                g_pending_motion = ""
+                g_count = ""
+                return True
+            else:
+                # Not a valid sequence, cancel and re-process
+                g_pending_motion = ""
+                g_count = ""
+                # Fall through to handle the key normally
+
+        elif g_pending_motion == ']':
+            if char == ']':
+                push_jump()
+                motion_section_forward(count, end=False)   # ]]
+                g_pending_motion = ""
+                g_count = ""
+                return True
+            elif char == '[':
+                push_jump()
+                motion_section_forward(count, end=True)    # ][
+                g_pending_motion = ""
+                g_count = ""
+                return True
+            else:
+                # Not a valid sequence, cancel and re-process
+                g_pending_motion = ""
+                g_count = ""
+                # Fall through to handle the key normally
 
         elif g_pending_motion == '@':
             # Execute macro
@@ -1959,11 +2418,18 @@ def handle_normal_mode_key(key):
                 for k in g_macros[char]:
                     handle_normal_mode_key(k)
             g_pending_motion = ""
+            g_count = ""
             return True
 
-        elif g_pending_motion in ('d', 'c', 'y', '>', '<', 'gu', 'gU'):
+        elif g_pending_motion in ('d', 'c', 'y', '>', '<', '=', 'gu', 'gU', 'g~'):
             # Text object or motion
-            N10X.Editor.LogTo10XOutput(f"DEBUG: In operator pending motion, char='{char}', g_operator='{g_operator}'\n")
+            if g_debug:
+                N10X.Editor.LogTo10XOutput(f"DEBUG: In operator pending motion, char='{char}', g_operator='{g_operator}'\n")
+
+            # Save cursor position for undo BEFORE any motion (except yank)
+            if g_operator != 'y':
+                save_undo_cursor()
+
             inner = False
             obj = None
 
@@ -1975,15 +2441,27 @@ def handle_normal_mode_key(key):
                 return True
             elif char in 'web':
                 # Word motion
-                N10X.Editor.LogTo10XOutput(f"DEBUG: Word motion '{char}' with operator '{g_operator}'\n")
+                if g_debug:
+                    N10X.Editor.LogTo10XOutput(f"DEBUG: Word motion '{char}' with operator '{g_operator}'\n")
                 start = get_cursor_pos()
+                motion_char = char.upper() if is_shifted else char
                 if char == 'w':
-                    # Special case: cw behaves like ce in Vim (doesn't include trailing whitespace)
+                    # Special case: cw behaves like ce when on a word char, but like w when on whitespace
                     if g_operator == 'c':
-                        if is_shifted:
-                            motion_E(count)
+                        line = get_line(start[1])
+                        char_at_cursor = line[start[0]] if start[0] < len(line.rstrip('\n\r')) else ' '
+                        if is_whitespace(char_at_cursor):
+                            # On whitespace: cw just clears whitespace up to the word
+                            if is_shifted:
+                                motion_W(count)
+                            else:
+                                motion_w(count)
                         else:
-                            motion_e(count)
+                            # On a word: cw acts like ce
+                            if is_shifted:
+                                motion_E(count)
+                            else:
+                                motion_e(count)
                     else:
                         if is_shifted:
                             motion_W(count)
@@ -2000,10 +2478,17 @@ def handle_normal_mode_key(key):
                     else:
                         motion_b(count)
                 end = get_cursor_pos()
-                # For 'e' motion and 'cw' (which uses 'e'), include the character under cursor
-                if char == 'e' or (char == 'w' and g_operator == 'c'):
+                # For 'e' motion and 'cw' when on a word char (which uses 'e'), include the character under cursor
+                if char == 'e':
                     end = (end[0] + 1, end[1])
-                apply_operator_to_range(g_operator, start, end, False)
+                elif char == 'w' and g_operator == 'c':
+                    # Only add +1 if we used motion_e (cursor was on a word char, not whitespace)
+                    line = get_line(start[1])
+                    char_at_cursor = line[start[0]] if start[0] < len(line.rstrip('\n\r')) else ' '
+                    if not is_whitespace(char_at_cursor):
+                        end = (end[0] + 1, end[1])
+                edit_info = {'motion': motion_char, 'count': count}
+                apply_operator_to_range(g_operator, start, end, False, edit_info, skip_undo_save=True)
                 g_operator = ""
                 g_pending_motion = ""
                 g_count = ""
@@ -2012,7 +2497,8 @@ def handle_normal_mode_key(key):
                 start = get_cursor_pos()
                 motion_dollar(count)
                 end = get_cursor_pos()
-                apply_operator_to_range(g_operator, start, (end[0] + 1, end[1]), False)
+                edit_info = {'motion': '$', 'count': count}
+                apply_operator_to_range(g_operator, start, (end[0] + 1, end[1]), False, edit_info, skip_undo_save=True)
                 g_operator = ""
                 g_pending_motion = ""
                 g_count = ""
@@ -2021,7 +2507,8 @@ def handle_normal_mode_key(key):
                 start = get_cursor_pos()
                 motion_0()
                 end = get_cursor_pos()
-                apply_operator_to_range(g_operator, end, start, False)
+                edit_info = {'motion': '0', 'count': count}
+                apply_operator_to_range(g_operator, end, start, False, edit_info, skip_undo_save=True)
                 g_operator = ""
                 g_pending_motion = ""
                 g_count = ""
@@ -2030,7 +2517,8 @@ def handle_normal_mode_key(key):
                 start = get_cursor_pos()
                 motion_caret()
                 end = get_cursor_pos()
-                apply_operator_to_range(g_operator, end, start, False)
+                edit_info = {'motion': '^', 'count': count}
+                apply_operator_to_range(g_operator, end, start, False, edit_info, skip_undo_save=True)
                 g_operator = ""
                 g_pending_motion = ""
                 g_count = ""
@@ -2039,7 +2527,8 @@ def handle_normal_mode_key(key):
                 start = get_cursor_pos()
                 motion_G(int(g_count) if g_count else None)
                 end = get_cursor_pos()
-                apply_operator_to_range(g_operator, start, (len(get_line(end[1])), end[1]), True)
+                edit_info = {'motion': 'G', 'count': count}
+                apply_operator_to_range(g_operator, start, (len(get_line(end[1])), end[1]), True, edit_info, skip_undo_save=True)
                 g_operator = ""
                 g_pending_motion = ""
                 g_count = ""
@@ -2061,7 +2550,8 @@ def handle_normal_mode_key(key):
                 linewise = char in 'jk'
                 if char == 'l':
                     end = (end[0] + 1, end[1])
-                apply_operator_to_range(g_operator, start, end, linewise)
+                edit_info = {'motion': char, 'count': count}
+                apply_operator_to_range(g_operator, start, end, linewise, edit_info, skip_undo_save=True)
                 g_operator = ""
                 g_pending_motion = ""
                 g_count = ""
@@ -2078,7 +2568,10 @@ def handle_normal_mode_key(key):
                 else:
                     g_pending_motion = g_operator + 't'
                 return True
-            elif char == g_operator[-1]:  # dd, cc, yy, >>, <<
+            elif (len(g_operator) == 1 and char == g_operator) or \
+                 (g_operator == 'gu' and char == 'u' and not is_shifted) or \
+                 (g_operator == 'gU' and char == 'u' and is_shifted) or \
+                 (g_operator == 'g~' and char == '~'):  # dd, cc, yy, >>, <<, ==, gugu, gUgU, g~~
                 if g_operator == 'd':
                     operator_dd(count)
                 elif g_operator == 'c':
@@ -2091,20 +2584,41 @@ def handle_normal_mode_key(key):
                 elif g_operator == '<':
                     x, y = get_cursor_pos()
                     apply_operator_to_range('<', (0, y), (0, y + count - 1), True)
+                elif g_operator == '=':
+                    x, y = get_cursor_pos()
+                    apply_operator_to_range('=', (0, y), (len(get_line(y)), y + count - 1), True)
+                elif g_operator == 'gu':
+                    x, y = get_cursor_pos()
+                    apply_operator_to_range('gu', (0, y), (len(get_line(y)), y + count - 1), True)
+                elif g_operator == 'gU':
+                    x, y = get_cursor_pos()
+                    apply_operator_to_range('gU', (0, y), (len(get_line(y)), y + count - 1), True)
+                elif g_operator == 'g~':
+                    x, y = get_cursor_pos()
+                    apply_operator_to_range('g~', (0, y), (len(get_line(y)), y + count - 1), True)
                 g_operator = ""
                 g_pending_motion = ""
                 g_count = ""
+                return True
+            elif char.isdigit() and (g_count or char != '0'):
+                # Accumulate count for motion (e.g., c2w, d3j, c2fe)
+                g_count += char
+                update_status()
                 return True
             g_pending_motion = ""
             return True
 
         elif g_pending_motion.endswith('i') or g_pending_motion.endswith('a'):
-            # Text object
+            # Text object - use get_char_from_key for proper character (e.g., " from Shift+')
             inner = g_pending_motion.endswith('i')
             op = g_pending_motion[:-1]
-            obj_range = get_text_object_range(char, inner)
-            if obj_range:
-                apply_operator_to_range(op, obj_range[0], obj_range[1], False)
+            obj_char = get_char_from_key(key)
+            if obj_char is not None:
+                obj_range = get_text_object_range(obj_char, inner)
+                if obj_range:
+                    text_obj = ('i' if inner else 'a') + obj_char
+                    edit_info = {'motion': text_obj, 'count': count}
+                    apply_operator_to_range(op, obj_range[0], obj_range[1], False, edit_info, skip_undo_save=True)
             g_operator = ""
             g_pending_motion = ""
             g_count = ""
@@ -2116,7 +2630,8 @@ def handle_normal_mode_key(key):
             if char == 'g':
                 start = get_cursor_pos()
                 target = int(g_count) - 1 if g_count else 0
-                apply_operator_to_range(op, (0, target), (0, start[1]), True)
+                edit_info = {'motion': 'gg', 'count': count}
+                apply_operator_to_range(op, (0, target), (0, start[1]), True, edit_info, skip_undo_save=True)
             g_operator = ""
             g_pending_motion = ""
             g_count = ""
@@ -2124,58 +2639,255 @@ def handle_normal_mode_key(key):
 
         elif g_pending_motion.endswith('f'):
             # f motion in operator
-            op = g_pending_motion[:-1]
-            start = get_cursor_pos()
-            motion_f(char, count)
-            end = get_cursor_pos()
-            apply_operator_to_range(op, start, (end[0] + 1, end[1]), False)
-            g_operator = ""
-            g_pending_motion = ""
-            g_count = ""
+            target_char = get_char_from_key(key)
+            if target_char is not None:
+                op = g_pending_motion[:-1]
+                if op != 'y':
+                    save_undo_cursor()
+                start = get_cursor_pos()
+                motion_f(target_char, count)
+                end = get_cursor_pos()
+                edit_info = {'motion': 'f', 'motion_arg': target_char, 'count': count}
+                apply_operator_to_range(op, start, (end[0] + 1, end[1]), False, edit_info, skip_undo_save=True)
+                g_operator = ""
+                g_pending_motion = ""
+                g_count = ""
             return True
 
         elif g_pending_motion.endswith('F'):
-            op = g_pending_motion[:-1]
-            start = get_cursor_pos()
-            motion_F(char, count)
-            end = get_cursor_pos()
-            apply_operator_to_range(op, end, start, False)
-            g_operator = ""
-            g_pending_motion = ""
-            g_count = ""
+            target_char = get_char_from_key(key)
+            if target_char is not None:
+                op = g_pending_motion[:-1]
+                if op != 'y':
+                    save_undo_cursor()
+                start = get_cursor_pos()
+                motion_F(target_char, count)
+                end = get_cursor_pos()
+                edit_info = {'motion': 'F', 'motion_arg': target_char, 'count': count}
+                apply_operator_to_range(op, end, start, False, edit_info, skip_undo_save=True)
+                g_operator = ""
+                g_pending_motion = ""
+                g_count = ""
             return True
 
         elif g_pending_motion.endswith('t'):
-            op = g_pending_motion[:-1]
-            start = get_cursor_pos()
-            motion_t(char, count)
-            end = get_cursor_pos()
-            apply_operator_to_range(op, start, (end[0] + 1, end[1]), False)
-            g_operator = ""
-            g_pending_motion = ""
-            g_count = ""
+            target_char = get_char_from_key(key)
+            if target_char is not None:
+                op = g_pending_motion[:-1]
+                if op != 'y':
+                    save_undo_cursor()
+                start = get_cursor_pos()
+                motion_t(target_char, count)
+                end = get_cursor_pos()
+                edit_info = {'motion': 't', 'motion_arg': target_char, 'count': count}
+                apply_operator_to_range(op, start, (end[0] + 1, end[1]), False, edit_info, skip_undo_save=True)
+                g_operator = ""
+                g_pending_motion = ""
+                g_count = ""
             return True
 
         elif g_pending_motion.endswith('T'):
-            op = g_pending_motion[:-1]
-            start = get_cursor_pos()
-            motion_T(char, count)
-            end = get_cursor_pos()
-            apply_operator_to_range(op, end, start, False)
-            g_operator = ""
-            g_pending_motion = ""
-            g_count = ""
+            target_char = get_char_from_key(key)
+            if target_char is not None:
+                op = g_pending_motion[:-1]
+                if op != 'y':
+                    save_undo_cursor()
+                start = get_cursor_pos()
+                motion_T(target_char, count)
+                end = get_cursor_pos()
+                edit_info = {'motion': 'T', 'motion_arg': target_char, 'count': count}
+                apply_operator_to_range(op, end, start, False, edit_info, skip_undo_save=True)
+                g_operator = ""
+                g_pending_motion = ""
+                g_count = ""
             return True
 
-    # Count prefix
-    if char.isdigit() and (g_count or char != '0'):
+    # ===========================================
+    # Handle keys with Control modifier first
+    # ===========================================
+    if key.control:
+        if char == 'v':
+            enter_visual_block_mode()
+            return True
+
+        if char == 'r':
+            N10X.Editor.Redo()
+            # Restore cursor position from redo stack
+            pos = pop_redo_cursor()
+            if pos:
+                set_cursor_pos(pos[0], pos[1])
+            clear_selection()
+            return True
+
+        if char == 'd':
+            try:
+                visible = N10X.Editor.GetVisibleLineCount()
+                x, y = get_cursor_pos()
+                motion_j(visible // 2)
+                N10X.Editor.ScrollCursorIntoView()
+            except Exception:
+                pass
+            return True
+
+        if char == 'u':
+            try:
+                visible = N10X.Editor.GetVisibleLineCount()
+                motion_k(visible // 2)
+                N10X.Editor.ScrollCursorIntoView()
+            except Exception:
+                pass
+            return True
+
+        if char == 'f':
+            try:
+                visible = N10X.Editor.GetVisibleLineCount()
+                motion_j(visible)
+                N10X.Editor.ScrollCursorIntoView()
+            except Exception:
+                pass
+            return True
+
+        if char == 'b':
+            try:
+                visible = N10X.Editor.GetVisibleLineCount()
+                motion_k(visible)
+                N10X.Editor.ScrollCursorIntoView()
+            except Exception:
+                pass
+            return True
+
+        if char == 'e':
+            try:
+                scroll = N10X.Editor.GetScrollLine()
+                N10X.Editor.SetScrollLine(scroll + count)
+            except Exception:
+                pass
+            return True
+
+        if char == 'a':
+            # Increment number under cursor
+            _change_number_under_cursor(count)
+            return True
+
+        if char == 'x':
+            # Decrement number under cursor
+            _change_number_under_cursor(-count)
+            return True
+
+        if char == 'y':
+            try:
+                scroll = N10X.Editor.GetScrollLine()
+                N10X.Editor.SetScrollLine(max(0, scroll - count))
+            except Exception:
+                pass
+            return True
+
+        if char == 'g':
+            # Show file info
+            try:
+                filename = N10X.Editor.GetCurrentFilename()
+                x, y = get_cursor_pos()
+                line_count = get_line_count()
+                percent = int((y + 1) * 100 / line_count) if line_count > 0 else 0
+                modified = " [Modified]" if N10X.Editor.IsModified() else ""
+                set_status(f'"{filename}"{modified} line {y + 1} of {line_count} --{percent}%-- col {x + 1}')
+            except Exception:
+                pass
+            return True
+
+        if char == 'w':
+            # Window prefix - pass to 10x
+            return False
+
+        if char == 'o':
+            if g_jump_index > 0:
+                g_jump_index -= 1
+                filename, pos = g_jump_list[g_jump_index]
+                current_file = N10X.Editor.GetCurrentFilename()
+                if filename != current_file:
+                    N10X.Editor.OpenFile(filename)
+                set_cursor_pos(pos[0], pos[1])
+                return True
+            # No jump history - pass to 10x
+            return False
+
+        if char == 'i':
+            if g_jump_index < len(g_jump_list) - 1:
+                g_jump_index += 1
+                filename, pos = g_jump_list[g_jump_index]
+                current_file = N10X.Editor.GetCurrentFilename()
+                if filename != current_file:
+                    N10X.Editor.OpenFile(filename)
+                set_cursor_pos(pos[0], pos[1])
+                return True
+            # No forward jump history - pass to 10x
+            return False
+
+        if char == ']':
+            # Go to definition (like ctags jump)
+            push_jump()
+            try:
+                N10X.Editor.ExecuteCommand("GotoSymbolDefinition")
+            except Exception:
+                pass
+            return True
+
+        if char == 't':
+            # Return from tag (go back in jump list)
+            if g_jump_index > 0:
+                g_jump_index -= 1
+                filename, pos = g_jump_list[g_jump_index]
+                current_file = N10X.Editor.GetCurrentFilename()
+                if filename != current_file:
+                    N10X.Editor.OpenFile(filename)
+                set_cursor_pos(pos[0], pos[1])
+                return True
+            # No jump history - pass to 10x
+            return False
+
+        if char == '[':
+            # Ctrl+[ is Escape
+            enter_normal_mode()
+            return True
+
+        # Control key pressed but no handler matched - pass to 10x
+        return False
+
+    # ===========================================
+    # Handle keys with Alt modifier
+    # ===========================================
+    if key.alt:
+        # No explicit Alt bindings - pass to 10x
+        return False
+
+    # ===========================================
+    # Handle plain keys (no Ctrl, no Alt)
+    # Shift variants are handled within individual handlers
+    # ===========================================
+
+    # Count prefix (only unshifted digits - shifted digits are symbols like *, #, $, etc.)
+    if char.isdigit() and not is_shifted and (g_count or char != '0'):
         g_count += char
         update_status()
         return True
 
+    # Handle shifted digit symbols: * (Shift+8), # (Shift+3), % (Shift+5)
+    if is_shifted and char == '8':
+        search_word_under_cursor(1)  # * - search forward
+        return True
+
+    if is_shifted and char == '3':
+        search_word_under_cursor(-1)  # # - search backward
+        return True
+
+    if is_shifted and char == '5':
+        motion_percent()  # % - jump to matching bracket
+        return True
+
     # Operators (shifted versions are shortcuts)
     if char == 'd':
-        N10X.Editor.LogTo10XOutput(f"DEBUG: 'd' pressed, is_shifted={is_shifted}, g_operator={g_operator}, g_pending_motion={g_pending_motion}\n")
+        if g_debug:
+            N10X.Editor.LogTo10XOutput(f"DEBUG: 'd' pressed, is_shifted={is_shifted}, g_operator={g_operator}, g_pending_motion={g_pending_motion}\n")
         if is_shifted:
             # D = delete to end of line (d$)
             start = get_cursor_pos()
@@ -2185,7 +2897,8 @@ def handle_normal_mode_key(key):
         else:
             g_operator = char
             g_pending_motion = char
-            N10X.Editor.LogTo10XOutput(f"DEBUG: Set g_operator={g_operator}, g_pending_motion={g_pending_motion}\n")
+            if g_debug:
+                N10X.Editor.LogTo10XOutput(f"DEBUG: Set g_operator={g_operator}, g_pending_motion={g_pending_motion}\n")
             update_status()
         return True
 
@@ -2219,6 +2932,12 @@ def handle_normal_mode_key(key):
         update_status()
         return True
 
+    if char == '=':
+        g_operator = char
+        g_pending_motion = char
+        update_status()
+        return True
+
     # Simple motions
     if char == 'h':
         if is_shifted:
@@ -2230,6 +2949,7 @@ def handle_normal_mode_key(key):
     if char == 'j':
         if is_shifted:
             # Join lines
+            save_undo_cursor()
             x, y = get_cursor_pos()
             N10X.Editor.PushUndoGroup()
             for _ in range(count):
@@ -2242,13 +2962,15 @@ def handle_normal_mode_key(key):
                     operator_dd(1)
                     set_cursor_pos(len(line.rstrip('\n\r')), y)
             N10X.Editor.PopUndoGroup()
+            finalize_undo_cursor()
         else:
             motion_j(count)
         return True
 
     if char == 'k':
         if is_shifted:
-            motion_k(count)
+            # K - not supported (no documented command for showing documentation)
+            pass
         else:
             motion_k(count)
         return True
@@ -2297,6 +3019,22 @@ def handle_normal_mode_key(key):
         motion_caret()
         return True
 
+    if char == '_':
+        motion_underscore(count)
+        return True
+
+    if char == '+':
+        motion_plus(count)
+        return True
+
+    if char == '-':
+        motion_minus(count)
+        return True
+
+    if char == '|':
+        motion_pipe(count)
+        return True
+
     if char == '$':
         motion_dollar(count)
         return True
@@ -2313,14 +3051,22 @@ def handle_normal_mode_key(key):
         motion_percent()
         return True
 
-    if char == '{':
+    if char == '{' or (char == '[' and is_shifted):
         push_jump()
         motion_brace_backward(count)
         return True
 
-    if char == '}':
+    if char == '}' or (char == ']' and is_shifted):
         push_jump()
         motion_brace_forward(count)
+        return True
+
+    if char == '[' and not is_shifted:
+        g_pending_motion = '['
+        return True
+
+    if char == ']' and not is_shifted:
+        g_pending_motion = ']'
         return True
 
     if char == 'f':
@@ -2337,8 +3083,12 @@ def handle_normal_mode_key(key):
             g_pending_motion = 't'
         return True
 
-    if char == ';':
+    if char == ';' and not is_shifted:
         motion_semicolon(count)
+        return True
+
+    if char == ':' or (char == ';' and is_shifted):
+        enter_command_line_mode(':')
         return True
 
     if char == ',':
@@ -2347,6 +3097,7 @@ def handle_normal_mode_key(key):
 
     # Mode changes
     if char == 'i':
+        g_suppress_next_char = True
         if is_shifted:
             motion_caret()
             enter_insert_mode()
@@ -2355,10 +3106,13 @@ def handle_normal_mode_key(key):
         return True
 
     if char == 'a':
+        g_suppress_next_char = True
         if is_shifted:
-            motion_dollar(1)
-            x, y = get_cursor_pos()
-            set_cursor_pos(x + 1, y)
+            # A - append at end of line, use API directly to bypass normal mode clamping
+            y = get_cursor_pos()[1]
+            line = get_line(y)
+            line_len = len(line.rstrip('\n\r'))
+            N10X.Editor.SetCursorPos((line_len, y), 0)
             enter_insert_mode()
         else:
             x, y = get_cursor_pos()
@@ -2370,28 +3124,31 @@ def handle_normal_mode_key(key):
 
     if char == 'o':
         x, y = get_cursor_pos()
+        line = get_line(y)
+        # Get indentation from current line
+        indent = ""
+        for c in line:
+            if c in ' \t':
+                indent += c
+            else:
+                break
+        # Group the newline insertion and subsequent typing as one undo operation
+        N10X.Editor.PushUndoGroup()
+        g_change_undo_group = True
         if is_shifted:
-            line = get_line(y)
-            indent = ""
-            for c in line:
-                if c in ' \t':
-                    indent += c
-                else:
-                    break
-            N10X.Editor.SetLine(y, indent + '\n' + line)
-            set_cursor_pos(len(indent), y)
+            # O - open line above: move to start of line, insert indent + newline
+            N10X.Editor.SetCursorPos((0, y), 0)
+            N10X.Editor.InsertText(indent + '\n')
+            N10X.Editor.SetCursorPos((len(indent), y), 0)
+            g_suppress_next_char = True
             enter_insert_mode()
         else:
-            line = get_line(y)
-            indent = ""
-            for c in line:
-                if c in ' \t':
-                    indent += c
-                else:
-                    break
-            next_line = get_line(y + 1) if y < get_line_count() - 1 else ""
-            N10X.Editor.SetLine(y, line.rstrip('\n\r') + '\n' + indent)
-            set_cursor_pos(len(indent), y + 1)
+            # o - open line below: move to actual end of line (past last char), insert newline + indent
+            line_len = len(line.rstrip('\n\r'))
+            N10X.Editor.SetCursorPos((line_len, y), 0)  # Use API directly to avoid normal mode clamping
+            N10X.Editor.InsertText('\n' + indent)
+            # Cursor should now be on the new line after the indent
+            g_suppress_next_char = True
             enter_insert_mode()
         return True
 
@@ -2402,36 +3159,21 @@ def handle_normal_mode_key(key):
             enter_visual_mode()
         return True
 
-    if key.control and char == 'v':
-        enter_visual_block_mode()
+    if char == '/' and not is_shifted:
+        # Open 10x find panel for forward search
+        N10X.Editor.SetReverseFind(False)
+        N10X.Editor.ExecuteCommand("FindInFile")
         return True
 
-    if char == ':':
-        if g_use_10x_command_panel:
-            try:
-                N10X.Editor.ExecuteCommand("CommandPanel.Show")
-            except:
-                enter_command_line_mode(':')
-        else:
-            enter_command_line_mode(':')
-        return True
-
-    if char == '/':
-        if g_use_10x_find_panel:
-            try:
-                N10X.Editor.ExecuteCommand("Find.ShowFind")
-            except:
-                enter_command_line_mode('/')
-        else:
-            enter_command_line_mode('/')
-        return True
-
-    if char == '?':
-        enter_command_line_mode('?')
+    if char == '?' or (char == '/' and is_shifted):
+        # Open 10x find panel for reverse search
+        N10X.Editor.SetReverseFind(True)
+        N10X.Editor.ExecuteCommand("FindInFile")
         return True
 
     # Editing commands
     if char == 'x':
+        save_undo_cursor()
         if is_shifted:
             # Delete char before cursor
             x, y = get_cursor_pos()
@@ -2441,6 +3183,7 @@ def handle_normal_mode_key(key):
                 N10X.Editor.SetLine(y, line[:x-1] + line[x:])
                 yank_to_register(deleted)
                 set_cursor_pos(x - 1, y)
+                g_last_edit = {'op': 'd', 'motion': 'X', 'count': count}
         else:
             # Delete char under cursor
             x, y = get_cursor_pos()
@@ -2449,6 +3192,8 @@ def handle_normal_mode_key(key):
                 deleted = line[x]
                 N10X.Editor.SetLine(y, line[:x] + line[x+1:])
                 yank_to_register(deleted)
+                g_last_edit = {'op': 'd', 'motion': 'x', 'count': count}
+        finalize_undo_cursor()
         return True
 
     if char == 'r':
@@ -2459,7 +3204,6 @@ def handle_normal_mode_key(key):
         return True
 
     if char == 's':
-        global g_suppress_next_char, g_change_undo_group
         if is_shifted:
             # Change entire line
             operator_cc(count)
@@ -2474,6 +3218,7 @@ def handle_normal_mode_key(key):
                 N10X.Editor.SetLine(y, line[:x] + line[x+count:])
                 yank_to_register(deleted)
             g_suppress_next_char = True
+            g_current_edit = {'op': 'c', 'motion': 's', 'count': count, 'linewise': False}
             enter_insert_mode()
         return True
 
@@ -2481,22 +3226,29 @@ def handle_normal_mode_key(key):
         # Paste
         text = get_register()
         if text:
+            save_undo_cursor()
             x, y = get_cursor_pos()
             if is_shifted:
-                # Paste before
+                # Paste before (P)
                 if text.endswith('\n'):
-                    # Linewise paste
-                    line = get_line(y)
-                    N10X.Editor.SetLine(y, text + line)
+                    # Linewise paste - insert above current line
+                    set_cursor_pos(0, y)
+                    insert_text(text)
+                    set_cursor_pos(0, y)
                     motion_caret()
                 else:
                     insert_text(text)
             else:
-                # Paste after
+                # Paste after (p)
                 if text.endswith('\n'):
-                    # Linewise paste
+                    # Linewise paste - insert below current line
                     line = get_line(y)
-                    N10X.Editor.SetLine(y, line.rstrip('\n\r') + '\n' + text)
+                    line_len = len(line.rstrip('\n\r'))
+                    # Move to end of line content (use API directly to avoid normal mode clamping)
+                    N10X.Editor.SetCursorPos((line_len, y), 0)
+                    # Insert newline + the text without its trailing newline
+                    text_to_insert = text.rstrip('\n')
+                    insert_text('\n' + text_to_insert)
                     set_cursor_pos(0, y + 1)
                     motion_caret()
                 else:
@@ -2505,29 +3257,31 @@ def handle_normal_mode_key(key):
                     if x < line_len:
                         set_cursor_pos(x + 1, y)
                     insert_text(text)
+            finalize_undo_cursor()
         return True
 
-    # Undo/Redo
+    # Undo
     if char == 'u':
         if is_shifted:
             # Undo line (just undo for now)
             N10X.Editor.Undo()
         else:
             N10X.Editor.Undo()
-        clear_selection()
-        return True
-
-    if key.control and char == 'r':
-        N10X.Editor.Redo()
+            # Restore cursor position from before the edit
+            pos = pop_undo_cursor()
+            if pos:
+                set_cursor_pos(pos[0], pos[1])
         clear_selection()
         return True
 
     # Search
     if char == 'n':
         if is_shifted:
-            search_prev()
+            # N - find previous match
+            N10X.Editor.ExecuteCommand("FindInFilePrev")
         else:
-            search_next()
+            # n - find next match
+            N10X.Editor.ExecuteCommand("FindInFileNext")
         return True
 
     if char == '*':
@@ -2552,14 +3306,10 @@ def handle_normal_mode_key(key):
         g_pending_motion = '"'
         return True
 
-    # Repeat
+    # Repeat last edit
     if char == '.':
-        if g_last_edit:
-            op, text, linewise = g_last_edit
-            if op == 'd':
-                operator_dd(count) if linewise else None
-            elif op == 'c':
-                operator_cc(count) if linewise else None
+        if g_last_edit and isinstance(g_last_edit, dict):
+            _repeat_last_edit(count)
         return True
 
     # Macros
@@ -2583,96 +3333,6 @@ def handle_normal_mode_key(key):
 
     if char == '@':
         g_pending_motion = '@'
-        return True
-
-    # Scroll
-    if key.control and char == 'd':
-        try:
-            visible = N10X.Editor.GetVisibleLineCount()
-            x, y = get_cursor_pos()
-            motion_j(visible // 2)
-            N10X.Editor.ScrollCursorIntoView()
-        except:
-            pass
-        return True
-
-    if key.control and char == 'u':
-        try:
-            visible = N10X.Editor.GetVisibleLineCount()
-            motion_k(visible // 2)
-            N10X.Editor.ScrollCursorIntoView()
-        except:
-            pass
-        return True
-
-    if key.control and char == 'f':
-        try:
-            visible = N10X.Editor.GetVisibleLineCount()
-            motion_j(visible)
-            N10X.Editor.ScrollCursorIntoView()
-        except:
-            pass
-        return True
-
-    if key.control and char == 'b':
-        try:
-            visible = N10X.Editor.GetVisibleLineCount()
-            motion_k(visible)
-            N10X.Editor.ScrollCursorIntoView()
-        except:
-            pass
-        return True
-
-    if key.control and char == 'e':
-        try:
-            scroll = N10X.Editor.GetScrollLine()
-            N10X.Editor.SetScrollLine(scroll + count)
-        except:
-            pass
-        return True
-
-    if key.control and char == 'a':
-        # Increment number under cursor
-        _change_number_under_cursor(count)
-        return True
-
-    if key.control and char == 'x':
-        # Decrement number under cursor
-        _change_number_under_cursor(-count)
-        return True
-
-    if key.control and char == 'y':
-        try:
-            scroll = N10X.Editor.GetScrollLine()
-            N10X.Editor.SetScrollLine(max(0, scroll - count))
-        except:
-            pass
-        return True
-
-    # Window commands
-    if key.control and char == 'w':
-        # Window prefix - for now just pass to 10x
-        return False
-
-    # Jump list
-    if key.control and char == 'o':
-        if g_jump_index > 0:
-            g_jump_index -= 1
-            filename, pos = g_jump_list[g_jump_index]
-            current_file = N10X.Editor.GetCurrentFilename()
-            if filename != current_file:
-                N10X.Editor.OpenFile(filename)
-            set_cursor_pos(pos[0], pos[1])
-        return True
-
-    if key.control and char == 'i':
-        if g_jump_index < len(g_jump_list) - 1:
-            g_jump_index += 1
-            filename, pos = g_jump_list[g_jump_index]
-            current_file = N10X.Editor.GetCurrentFilename()
-            if filename != current_file:
-                N10X.Editor.OpenFile(filename)
-            set_cursor_pos(pos[0], pos[1])
         return True
 
     # Misc
@@ -2717,116 +3377,127 @@ def handle_normal_mode_key(key):
 # Visual Mode Key Handler
 # =============================================================================
 
-def handle_visual_mode_key(key):
-    global g_count, g_operator
+def _visual_motion(motion_func, *args, clear_count=True):
+    """Execute a motion in visual mode and update selection."""
+    global g_count
+    motion_func(*args)
+    update_visual_selection()
+    if clear_count:
+        g_count = ""
+    return True
 
-    char = key.key.lower() if len(key.key) == 1 else key.key
+def handle_visual_mode_key(key):
+    global g_count, g_operator, g_pending_motion, g_mode
+
+    # Get the actual character including shift transformations (e.g., Shift+. = >)
+    actual_char = get_char_from_key(key)
+    # For comparison purposes, use lowercase letter but keep symbols as-is
+    if key.key in SPECIAL_KEY_MAP:
+        char = SPECIAL_KEY_MAP[key.key]
+    elif actual_char and len(actual_char) == 1:
+        # Use actual_char for symbols like < > : etc, but lowercase for letters
+        if actual_char.isalpha():
+            char = actual_char.lower()
+        else:
+            char = actual_char
+    else:
+        char = key.key.lower() if len(key.key) == 1 else key.key
     is_shifted = key.shift
     count = int(g_count) if g_count else 1
 
     # Escape to normal mode
     if char == 'Escape' or (key.control and char == '['):
+        g_pending_motion = ""
         enter_normal_mode()
         return True
 
-    # Count
-    if char.isdigit() and (g_count or char != '0'):
+    # Handle pending motions in visual mode
+    if g_pending_motion == 'v[':
+        motion_section_backward(count, end=(char == ']'))
+        update_visual_selection()
+        g_pending_motion = ""
+        g_count = ""
+        return True
+
+    if g_pending_motion == 'v]':
+        motion_section_forward(count, end=(char == '['))
+        update_visual_selection()
+        g_pending_motion = ""
+        g_count = ""
+        return True
+
+    # Handle f/F/t/T pending motions in visual mode
+    if g_pending_motion in ('vf', 'vF', 'vt', 'vT'):
+        target_char = get_char_from_key(key)
+        if target_char is not None:
+            motion_map = {'f': motion_f, 'F': motion_F, 't': motion_t, 'T': motion_T}
+            motion_map[g_pending_motion[1]](target_char, count)
+            update_visual_selection()
+        g_pending_motion = ""
+        g_count = ""
+        return True
+
+    # Count (only unshifted digits)
+    if char.isdigit() and not is_shifted and (g_count or char != '0'):
         g_count += char
         return True
 
-    # Motions (same as normal mode)
-    if char == 'h':
-        motion_h(count)
-        update_visual_selection()
-        g_count = ""
-        return True
+    # Simple motions with count
+    simple_motions = {'h': motion_h, 'j': motion_j, 'k': motion_k, 'l': motion_l,
+                      '$': motion_dollar, '_': motion_underscore, '+': motion_plus,
+                      '-': motion_minus, '|': motion_pipe}
+    if char in simple_motions:
+        return _visual_motion(simple_motions[char], count)
 
-    if char == 'j':
-        motion_j(count)
-        update_visual_selection()
-        g_count = ""
-        return True
-
-    if char == 'k':
-        motion_k(count)
-        update_visual_selection()
-        g_count = ""
-        return True
-
-    if char == 'l':
-        motion_l(count)
-        update_visual_selection()
-        g_count = ""
-        return True
-
-    if char == 'w':
-        if is_shifted:
-            motion_W(count)
-        else:
-            motion_w(count)
-        update_visual_selection()
-        g_count = ""
-        return True
-
-    if char == 'b':
-        if is_shifted:
-            motion_B(count)
-        else:
-            motion_b(count)
-        update_visual_selection()
-        g_count = ""
-        return True
-
-    if char == 'e':
-        if is_shifted:
-            motion_E(count)
-        else:
-            motion_e(count)
-        update_visual_selection()
-        g_count = ""
-        return True
-
+    # Motions without count argument
     if char == '0':
-        motion_0()
-        update_visual_selection()
-        g_count = ""
-        return True
-
-    if char == '$':
-        motion_dollar(count)
-        update_visual_selection()
-        g_count = ""
-        return True
-
+        return _visual_motion(motion_0)
     if char == '^':
-        motion_caret()
-        update_visual_selection()
-        return True
+        return _visual_motion(motion_caret, clear_count=False)
+    if char == '%' or (is_shifted and char == '5'):
+        return _visual_motion(motion_percent, clear_count=False)
 
+    # Shifted/unshifted motion pairs
+    shift_motion_pairs = {
+        'w': (motion_w, motion_W),
+        'b': (motion_b, motion_B),
+        'e': (motion_e, motion_E),
+    }
+    if char in shift_motion_pairs:
+        motion = shift_motion_pairs[char][1] if is_shifted else shift_motion_pairs[char][0]
+        return _visual_motion(motion, count)
+
+    # g/G motions
     if char == 'g':
-        if is_shifted:
-            motion_G(int(g_count) if g_count else None)
-        else:
-            motion_gg(int(g_count) if g_count else None)
-        update_visual_selection()
-        g_count = ""
+        motion = motion_G if is_shifted else motion_gg
+        return _visual_motion(motion, int(g_count) if g_count else None)
+
+    # f/F/t/T start pending motion
+    if char == 'f':
+        g_pending_motion = 'vF' if is_shifted else 'vf'
+        return True
+    if char == 't':
+        g_pending_motion = 'vT' if is_shifted else 'vt'
         return True
 
-    if char == '%':
-        motion_percent()
-        update_visual_selection()
+    # Repeat motions
+    if char == ';' and not is_shifted:
+        return _visual_motion(motion_semicolon, count)
+    if char == ',':
+        return _visual_motion(motion_comma, count)
+
+    # Brace/bracket motions
+    if char == '{' or (char == '[' and is_shifted):
+        return _visual_motion(motion_brace_backward, count)
+    if char == '}' or (char == ']' and is_shifted):
+        return _visual_motion(motion_brace_forward, count)
+
+    if char == '[' and not is_shifted:
+        g_pending_motion = 'v['
         return True
 
-    if char == '{':
-        motion_brace_backward(count)
-        update_visual_selection()
-        g_count = ""
-        return True
-
-    if char == '}':
-        motion_brace_forward(count)
-        update_visual_selection()
-        g_count = ""
+    if char == ']' and not is_shifted:
+        g_pending_motion = 'v]'
         return True
 
     # Mode switches
@@ -2887,12 +3558,80 @@ def handle_visual_mode_key(key):
         visual_operation('<')
         return True
 
+    if char == '=':
+        visual_operation('=')
+        return True
+
     if char == 'u':
         if is_shifted:
             visual_operation('gU')
         else:
             visual_operation('gu')
         return True
+
+    if char == '~':
+        # Toggle case of selection
+        start = g_visual_start
+        end = get_cursor_pos()
+        if start[1] > end[1] or (start[1] == end[1] and start[0] > end[0]):
+            start, end = end, start
+
+        linewise = g_mode == Mode.VISUAL_LINE
+        if linewise:
+            start = (0, start[1])
+            end_line = get_line(end[1])
+            end = (len(end_line), end[1])
+        else:
+            end = (end[0] + 1, end[1])
+
+        set_selection(start, end)
+        text = get_selection()
+        if text:
+            toggled = text.swapcase()
+            delete_selection()
+            insert_text(toggled)
+        enter_normal_mode()
+        return True
+
+    # Visual block insert/append
+    if g_mode == Mode.VISUAL_BLOCK:
+        if char == 'i' and is_shifted:
+            # I - Insert at start of block on all lines
+            start = g_visual_start
+            end = get_cursor_pos()
+            if start[1] > end[1]:
+                start, end = end, start
+            col = min(start[0], end[0])
+
+            # Add cursors at the start column for each line
+            clear_selection()
+            set_cursor_pos(col, start[1])
+            for line_y in range(start[1] + 1, end[1] + 1):
+                try:
+                    N10X.Editor.AddCursor((col, line_y))
+                except Exception:
+                    pass
+            enter_insert_mode()
+            return True
+
+        if char == 'a' and is_shifted:
+            # A - Append at end of block on all lines
+            start = g_visual_start
+            end = get_cursor_pos()
+            if start[1] > end[1]:
+                start, end = end, start
+            col = max(start[0], end[0]) + 1
+
+            # Add cursors at the end column for each line
+            clear_selection()
+            set_cursor_pos(col, start[1])
+            for line_y in range(start[1] + 1, end[1] + 1):
+                try:
+                    N10X.Editor.AddCursor((col, line_y))
+                except Exception:
+                    pass
+            enter_insert_mode()
+            return True
 
     # Join
     if char == 'j' and is_shifted:
@@ -2924,13 +3663,16 @@ def handle_visual_mode_key(key):
 def handle_insert_mode_key(key):
     global g_exit_sequence, g_last_insert_text
 
-    char = key.key
+    # Use lowercase for single-char comparisons (consistent with handle_normal_mode_key)
+    char = key.key.lower() if len(key.key) == 1 else key.key
 
     # Try user handler first
     result = VimUser.UserHandleInsertModeKey(key)
-    if result == UserHandledResult.HANDLED:
+    # Compare by name to handle module reloading creating different enum classes
+    result_name = result.name if hasattr(result, 'name') else str(result)
+    if result_name == 'HANDLED':
         return True
-    elif result == UserHandledResult.PASS_TO_10X:
+    elif result_name == 'PASS_TO_10X':
         return False
 
     # Escape
@@ -2942,16 +3684,22 @@ def handle_insert_mode_key(key):
     if g_exit_sequence_chars and len(char) == 1:
         g_exit_sequence += char
         if g_exit_sequence == g_exit_sequence_chars:
-            # Delete the typed characters and exit
-            for _ in range(len(g_exit_sequence_chars) - 1):
-                N10X.Editor.Undo()
+            # Delete the typed characters by backspacing
+            x, y = get_cursor_pos()
+            line = get_line(y)
+            # Delete the exit sequence characters that were typed
+            chars_to_delete = len(g_exit_sequence_chars)
+            if x >= chars_to_delete:
+                new_line = line[:x - chars_to_delete] + line[x:]
+                N10X.Editor.SetLine(y, new_line)
+                set_cursor_pos(x - chars_to_delete, y)
             enter_normal_mode()
             return True
         elif not g_exit_sequence_chars.startswith(g_exit_sequence):
             g_exit_sequence = char if g_exit_sequence_chars.startswith(char) else ""
 
     # Ctrl+W - delete word
-    if key.control and char == 'W':
+    if key.control and char == 'w':
         x, y = get_cursor_pos()
         line = get_line(y)
         if x > 0:
@@ -2965,7 +3713,7 @@ def handle_insert_mode_key(key):
         return True
 
     # Ctrl+U - delete to start of line
-    if key.control and char == 'U':
+    if key.control and char == 'u':
         x, y = get_cursor_pos()
         line = get_line(y)
         N10X.Editor.SetLine(y, line[x:])
@@ -2973,11 +3721,11 @@ def handle_insert_mode_key(key):
         return True
 
     # Ctrl+H - backspace
-    if key.control and char == 'H':
+    if key.control and char == 'h':
         return False  # Let 10x handle backspace
 
     # Ctrl+O - one normal mode command
-    if key.control and char == 'O':
+    if key.control and char == 'o':
         # Not implemented - would need state tracking
         return True
 
@@ -3015,10 +3763,12 @@ def handle_replace_mode_key(key):
 # =============================================================================
 
 def handle_command_line_key(key):
-    global g_command_line, g_command_history_index, g_search_history_index
-    global g_search_history
+    global g_command_line, g_command_history_index
 
+    # Determine correct case: 10x sends uppercase, so lowercase if shift not pressed
     char = key.key
+    if len(char) == 1 and char.isalpha() and not key.shift:
+        char = char.lower()
 
     if char == 'Escape' or (key.control and char == '['):
         enter_normal_mode()
@@ -3027,14 +3777,6 @@ def handle_command_line_key(key):
     if char == 'Return' or char == 'Enter':
         if g_command_line_type == ':':
             execute_command(g_command_line)
-        elif g_command_line_type == '/':
-            if g_command_line and (not g_search_history or g_search_history[-1] != g_command_line):
-                g_search_history.append(g_command_line)
-            do_search(g_command_line, 1)
-        elif g_command_line_type == '?':
-            if g_command_line and (not g_search_history or g_search_history[-1] != g_command_line):
-                g_search_history.append(g_command_line)
-            do_search(g_command_line, -1)
         enter_normal_mode()
         return True
 
@@ -3047,60 +3789,41 @@ def handle_command_line_key(key):
         return True
 
     if char == 'Up':
-        # History navigation
-        if g_command_line_type == ':':
-            history = g_command_history
-            idx = g_command_history_index
-            if history and idx < len(history) - 1:
-                idx += 1
-                # Filter if enabled
-                if g_filtered_history and g_command_line:
-                    while idx < len(history) and not history[-(idx+1)].startswith(g_command_line):
-                        idx += 1
-                if idx < len(history):
-                    g_command_history_index = idx
-                    g_command_line = history[-(idx+1)]
-                    set_status(g_command_line_type + g_command_line)
-        else:
-            history = g_search_history
-            idx = g_search_history_index
-            if history and idx < len(history) - 1:
-                idx += 1
-                g_search_history_index = idx
+        # Command history navigation
+        history = g_command_history
+        idx = g_command_history_index
+        if history and idx < len(history) - 1:
+            idx += 1
+            # Filter if enabled
+            if g_filtered_history and g_command_line:
+                while idx < len(history) and not history[-(idx+1)].startswith(g_command_line):
+                    idx += 1
+            if idx < len(history):
+                g_command_history_index = idx
                 g_command_line = history[-(idx+1)]
                 set_status(g_command_line_type + g_command_line)
         return True
 
     if char == 'Down':
-        if g_command_line_type == ':':
-            if g_command_history_index > 0:
-                g_command_history_index -= 1
-                g_command_line = g_command_history[-(g_command_history_index+1)]
-                set_status(g_command_line_type + g_command_line)
-            elif g_command_history_index == 0:
-                g_command_history_index = -1
-                g_command_line = ""
-                set_status(g_command_line_type)
-        else:
-            if g_search_history_index > 0:
-                g_search_history_index -= 1
-                g_command_line = g_search_history[-(g_search_history_index+1)]
-                set_status(g_command_line_type + g_command_line)
-            elif g_search_history_index == 0:
-                g_search_history_index = -1
-                g_command_line = ""
-                set_status(g_command_line_type)
+        if g_command_history_index > 0:
+            g_command_history_index -= 1
+            g_command_line = g_command_history[-(g_command_history_index+1)]
+            set_status(g_command_line_type + g_command_line)
+        elif g_command_history_index == 0:
+            g_command_history_index = -1
+            g_command_line = ""
+            set_status(g_command_line_type)
         return True
 
     # Ctrl+W - delete word
-    if key.control and char == 'W':
+    if key.control and char == 'w':
         words = g_command_line.rsplit(None, 1)
         g_command_line = words[0] if len(words) > 1 else ""
         set_status(g_command_line_type + g_command_line)
         return True
 
     # Ctrl+U - clear line
-    if key.control and char == 'U':
+    if key.control and char == 'u':
         g_command_line = ""
         set_status(g_command_line_type)
         return True
@@ -3124,6 +3847,11 @@ def on_key(key_str, shift, control, alt):
     if not N10X.Editor.TextEditorHasFocus():
         return False
 
+    # Ignore modifier-only key events (Shift, Control, Alt pressed alone)
+    if key_str in ('Shift', 'Control', 'Alt', 'LeftShift', 'RightShift',
+                   'LeftControl', 'RightControl', 'LeftAlt', 'RightAlt'):
+        return True
+
     if g_debug:
         N10X.Editor.LogTo10XOutput(f"on_key: '{key_str}' shift={shift} ctrl={control} alt={alt}\n")
 
@@ -3134,9 +3862,16 @@ def on_key(key_str, shift, control, alt):
 
     # In insert mode, only handle Escape and Ctrl combinations
     if g_mode == Mode.INSERT:
+        global g_last_insert_text
         if control:
             key = Key(key_str, shift, control, alt)
             return handle_insert_mode_key(key)
+        # Track backspace for dot repeat
+        if key_str in ('Backspace', 'Back') and g_last_insert_text:
+            g_last_insert_text = g_last_insert_text[:-1]
+        # Track Enter/Return for dot repeat
+        elif key_str in ('Return', 'Enter'):
+            g_last_insert_text += '\n'
         # Let on_char_key handle regular typing in insert mode
         return False
 
@@ -3150,7 +3885,7 @@ def on_key(key_str, shift, control, alt):
             set_cursor_pos(0, y + 1)
             motion_caret()
             return True
-        elif g_mode in (Mode.VISUAL, Mode.VISUAL_LINE, Mode.VISUAL_BLOCK):
+        elif in_visual_mode():
             x, y = get_cursor_pos()
             set_cursor_pos(0, y + 1)
             motion_caret()
@@ -3163,7 +3898,7 @@ def on_key(key_str, shift, control, alt):
         return handle_command_line_key(key)
     elif g_mode == Mode.REPLACE:
         return handle_replace_mode_key(key)
-    elif g_mode in (Mode.VISUAL, Mode.VISUAL_LINE, Mode.VISUAL_BLOCK):
+    elif in_visual_mode():
         return handle_visual_mode_key(key)
 
     return False
@@ -3185,8 +3920,10 @@ def on_char_key(char):
         g_suppress_next_char = False
         return True
 
-    # In insert mode, let 10x handle typing
+    # In insert mode, track text for dot repeat, then let 10x handle typing
     if g_mode == Mode.INSERT:
+        global g_last_insert_text
+        g_last_insert_text += char
         return False
 
     # For non-insert modes, on_key handles everything (it has shift info)
@@ -3199,50 +3936,15 @@ def on_char_key(char):
 # =============================================================================
 
 def is_vim_enabled():
-    try:
-        setting = N10X.Editor.GetSetting("Vim")
-        return setting.lower() in ("true", "1", "yes")
-    except:
-        return False
+    return get_setting_bool("Vim", False)
 
 def load_settings():
-    global g_exit_sequence_chars, g_use_10x_command_panel, g_use_10x_find_panel
-    global g_sneak_enabled, g_filtered_history, g_show_scope_name
+    global g_exit_sequence_chars, g_filtered_history
 
-    try:
-        g_exit_sequence_chars = N10X.Editor.GetSetting("VimExitInsertModeCharSequence") or ""
-    except:
-        g_exit_sequence_chars = ""
-
-    try:
-        val = N10X.Editor.GetSetting("VimUse10xCommandPanel")
-        g_use_10x_command_panel = val.lower() in ("true", "1", "yes")
-    except:
-        g_use_10x_command_panel = False
-
-    try:
-        val = N10X.Editor.GetSetting("VimUse10xFindPanel")
-        g_use_10x_find_panel = val.lower() in ("true", "1", "yes")
-    except:
-        g_use_10x_find_panel = False
-
-    try:
-        val = N10X.Editor.GetSetting("VimSneakEnabled")
-        g_sneak_enabled = val.lower() in ("true", "1", "yes")
-    except:
-        g_sneak_enabled = False
-
-    try:
-        val = N10X.Editor.GetSetting("VimCommandlineFilteredHistory")
-        g_filtered_history = val.lower() not in ("false", "0", "no")
-    except:
-        g_filtered_history = True
-
-    try:
-        val = N10X.Editor.GetSetting("VimDisplayCurrentScopeName")
-        g_show_scope_name = val.lower() in ("true", "1", "yes")
-    except:
-        g_show_scope_name = False
+    g_exit_sequence_chars = get_setting_str("VimExitInsertModeCharSequence", "")
+    # Filtered history defaults to True - only disable if explicitly set to false
+    val = get_setting_str("VimCommandlineFilteredHistory", "true")
+    g_filtered_history = val.lower() not in ("false", "0", "no")
 
 def on_settings_changed():
     load_settings()
@@ -3250,37 +3952,34 @@ def on_settings_changed():
 def initialize():
     global g_initialized
 
+    if not is_vim_enabled():
+        return
+
     if g_initialized:
         return
 
     g_initialized = True
     load_settings()
-
-    if is_vim_enabled():
-        enter_normal_mode()
+    enter_normal_mode()
 
     # Remove any existing callbacks first (in case of script reload)
     try:
         N10X.Editor.RemoveOnInterceptKeyFunction(on_key)
-    except:
+    except Exception:
         pass
     try:
         N10X.Editor.RemoveOnInterceptCharKeyFunction(on_char_key)
-    except:
+    except Exception:
         pass
-    try:
-        N10X.Editor.RemoveOnSettingsChangedFunction(on_settings_changed)
-    except:
-        pass
-
     # Register callbacks
-    try:
-        N10X.Editor.AddOnInterceptCharKeyFunction(on_char_key)
-        N10X.Editor.AddOnInterceptKeyFunction(on_key)
-        N10X.Editor.AddOnSettingsChangedFunction(on_settings_changed)
-    except Exception as e:
-        print(f"Vim: Failed to register callbacks: {e}")
+    N10X.Editor.AddOnInterceptCharKeyFunction(on_char_key)
+    N10X.Editor.AddOnInterceptKeyFunction(on_key)
+    N10X.Editor.AddOnSettingsChangedFunction(on_settings_changed)
 
-# Prevent being registered multiple times as VimUser.py imports Vim.py
+# IMPORTANT: Do not remove this __name__ guard. It is required due to how 10x
+# loads VimUser.py and Vim.py - VimUser.py imports Vim.py, and without this guard
+# the callbacks would be registered multiple times.
+# NOTE: We must use CallOnMainThread because GetSetting cannot be called from
+# the script loading thread - it will raise "Error calling GetSetting from thread".
 if __name__ == "__main__":
-    initialize()
+    N10X.Editor.CallOnMainThread(initialize)
