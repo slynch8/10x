@@ -96,6 +96,7 @@ g_exit_sequence = ""
 g_exit_sequence_chars = ""
 g_initialized = False
 g_filtered_history = True
+g_use_10x_find_panel = True
 g_command_history = []
 g_command_history_index = -1
 g_last_visual_start = (0, 0)
@@ -106,6 +107,8 @@ g_suppress_next_char = False  # Suppress char after operator enters insert mode
 g_change_undo_group = False   # Track if we're in a change operation undo group
 g_undo_cursor_stack = []      # Stack of cursor positions for undo
 g_redo_cursor_stack = []      # Stack of cursor positions for redo
+g_pending_undo_before = None  # Temporary storage for "before" position during edits
+g_find_panel_was_open = False  # Track find panel state for cursor positioning
 
 # =============================================================================
 # Utility Functions
@@ -151,8 +154,6 @@ COMMAND_ALIASES = {
 def in_visual_mode():
     """Check if currently in any visual mode."""
     return g_mode in (Mode.VISUAL, Mode.VISUAL_LINE, Mode.VISUAL_BLOCK)
-
-g_pending_undo_before = None  # Temporary storage for "before" position
 
 def save_undo_cursor():
     """Save current cursor position as the 'before' position for an edit."""
@@ -477,17 +478,22 @@ def push_jump():
         g_jump_index = len(g_jump_list) - 1
 
 def yank_to_register(text, linewise=False):
-    global g_registers
+    global g_registers, g_current_register
     reg = g_current_register
     if linewise and not text.endswith('\n'):
         text = text + '\n'
     g_registers[reg] = text
     g_registers["0"] = text
     g_registers["\""] = text
+    # Reset register selection after use
+    g_current_register = "\""
 
 def get_register(reg=None):
+    global g_current_register
     if reg is None:
         reg = g_current_register
+    # Reset register selection after use
+    g_current_register = "\""
     if reg == "+" or reg == "*":
         # System clipboard - try to get from clipboard via 10x
         try:
@@ -1793,6 +1799,33 @@ def _repeat_last_edit(repeat_count=1):
 # Search
 # =============================================================================
 
+def move_cursor_to_selection_start():
+    """Move cursor to the start of the current selection (for search results)."""
+    try:
+        start = N10X.Editor.GetSelectionStart()
+        if start:
+            start_x, start_y = start
+            set_cursor_pos(start_x, start_y)
+    except Exception:
+        pass
+
+def on_update():
+    """Called every frame to check for find panel state changes."""
+    global g_find_panel_was_open
+
+    if not is_vim_enabled():
+        return
+
+    # Check if find panel just closed (search was performed)
+    find_panel_open = safe_call(N10X.Editor.IsFindPanelOpen, default=False) or \
+                      safe_call(N10X.Editor.IsFindReplacePanelOpen, default=False)
+
+    if g_find_panel_was_open and not find_panel_open:
+        # Find panel just closed - move cursor to start of found word
+        move_cursor_to_selection_start()
+
+    g_find_panel_was_open = find_panel_open
+
 def search_word_under_cursor(direction=1):
     """Search for the word under cursor (* and # commands)."""
     word = get_word_at_cursor()
@@ -1801,6 +1834,7 @@ def search_word_under_cursor(direction=1):
         reverse = (direction == -1)
         N10X.Editor.SetFindText(word, False, True, False, reverse)
         N10X.Editor.ExecuteCommand("FindInFileNext")
+        move_cursor_to_selection_start()
         set_status(f"/{word}" if direction == 1 else f"?{word}")
 
 # =============================================================================
@@ -2169,13 +2203,57 @@ def visual_operation(op):
     enter_normal_mode()
 
 # =============================================================================
+# Key Dispatch Helper (for macro replay)
+# =============================================================================
+
+def dispatch_key(key):
+    """Dispatch a key to the appropriate handler based on current mode."""
+    if g_mode == Mode.INSERT:
+        # First check if it's a special key (Escape, Ctrl combos, etc.)
+        result = handle_insert_mode_key(key)
+        if result:
+            return True
+        # For regular characters in insert mode, actually insert them
+        char = get_char_from_key(key)
+        if char and len(char) == 1 and not key.control and not key.alt:
+            N10X.Editor.InsertText(char)
+            return True
+        # Handle special keys like Backspace, Enter
+        if key.key in ('Backspace', 'Back'):
+            x, y = get_cursor_pos()
+            if x > 0:
+                line = get_line(y)
+                N10X.Editor.SetLine(y, line[:x-1] + line[x:])
+                set_cursor_pos(x - 1, y)
+            return True
+        if key.key in ('Return', 'Enter'):
+            x, y = get_cursor_pos()
+            line = get_line(y)
+            N10X.Editor.SetLine(y, line[:x])
+            # Insert new line below
+            N10X.Editor.SetCursorPos((len(line[:x]), y), 0)
+            N10X.Editor.InsertText('\n' + line[x:].rstrip('\n\r'))
+            set_cursor_pos(0, y + 1)
+            return True
+        return False
+    elif g_mode == Mode.COMMAND_LINE:
+        return handle_command_line_key(key)
+    elif g_mode == Mode.REPLACE:
+        return handle_replace_mode_key(key)
+    elif in_visual_mode():
+        return handle_visual_mode_key(key)
+    else:
+        return handle_normal_mode_key(key)
+
+# =============================================================================
 # Normal Mode Key Handler
 # =============================================================================
 
 def handle_normal_mode_key(key):
     global g_count, g_operator, g_pending_motion, g_current_register
-    global g_recording_macro, g_macro_keys, g_macros
+    global g_recording_macro, g_macro_keys, g_macros, g_mode
     global g_suppress_next_char, g_change_undo_group, g_current_edit, g_last_edit
+    global g_jump_index, g_jump_list
 
     # Get the actual character including shift transformations (e.g., Shift+. = >)
     actual_char = get_char_from_key(key)
@@ -2191,6 +2269,7 @@ def handle_normal_mode_key(key):
     else:
         char = key.key.lower() if len(key.key) == 1 else key.key
     is_shifted = key.shift
+
 
     if g_debug:
         N10X.Editor.LogTo10XOutput(f"DEBUG handle_normal_mode_key: char='{char}' is_shifted={is_shifted} g_operator='{g_operator}' g_pending_motion='{g_pending_motion}'\n")
@@ -2370,6 +2449,28 @@ def handle_normal_mode_key(key):
             elif char == 'b':
                 visible = N10X.Editor.GetVisibleLineCount()
                 N10X.Editor.SetScrollLine(max(0, y - visible + 1))
+            # Folding commands (shifted versions first)
+            elif char == 'c' and is_shifted:
+                # zC - close all folds recursively at cursor
+                N10X.Editor.ExecuteCommand("CollapseAllRegionsRecursive")
+            elif char == 'o' and is_shifted:
+                # zO - open all folds recursively at cursor
+                N10X.Editor.ExecuteCommand("ExpandAllRegionsRecursive")
+            elif char == 'm' and is_shifted:
+                # zM - close all folds
+                N10X.Editor.ExecuteCommand("CollapseAllRegions")
+            elif char == 'r' and is_shifted:
+                # zR - open all folds
+                N10X.Editor.ExecuteCommand("ExpandAllRegions")
+            elif char == 'c':
+                # zc - close fold at cursor
+                N10X.Editor.ExecuteCommand("CollapseRegion")
+            elif char == 'o':
+                # zo - open fold at cursor
+                N10X.Editor.ExecuteCommand("ExpandRegion")
+            elif char == 'a':
+                # za - toggle fold at cursor
+                N10X.Editor.ExecuteCommand("ToggleCollapseExpandRegion")
             g_pending_motion = ""
             g_count = ""
             return True
@@ -2414,11 +2515,31 @@ def handle_normal_mode_key(key):
 
         elif g_pending_motion == '@':
             # Execute macro
-            if char in g_macros:
-                for k in g_macros[char]:
-                    handle_normal_mode_key(k)
+            register = char
+            repeat_count = count  # Save count before clearing
+            # Clear pending motion BEFORE replaying to avoid keys being misinterpreted
             g_pending_motion = ""
             g_count = ""
+            if register in g_macros:
+                # Wrap entire macro replay in undo group
+                N10X.Editor.PushUndoGroup()
+                try:
+                    for _ in range(repeat_count):
+                        for k in g_macros[register]:
+                            dispatch_key(k)
+                finally:
+                    N10X.Editor.PopUndoGroup()
+            else:
+                set_status(f"No macro recorded in @{register}")
+            return True
+
+        elif g_pending_motion == 'q_start':
+            # Start recording macro
+            if char.isalpha():
+                g_recording_macro = char
+                g_macro_keys = []
+                set_status(f"Recording @{char}...")
+            g_pending_motion = ""
             return True
 
         elif g_pending_motion in ('d', 'c', 'y', '>', '<', '=', 'gu', 'gU', 'g~'):
@@ -2871,18 +2992,6 @@ def handle_normal_mode_key(key):
         update_status()
         return True
 
-    # Handle shifted digit symbols: * (Shift+8), # (Shift+3), % (Shift+5)
-    if is_shifted and char == '8':
-        search_word_under_cursor(1)  # * - search forward
-        return True
-
-    if is_shifted and char == '3':
-        search_word_under_cursor(-1)  # # - search backward
-        return True
-
-    if is_shifted and char == '5':
-        motion_percent()  # % - jump to matching bracket
-        return True
 
     # Operators (shifted versions are shortcuts)
     if char == 'd':
@@ -3160,15 +3269,21 @@ def handle_normal_mode_key(key):
         return True
 
     if char == '/' and not is_shifted:
-        # Open 10x find panel for forward search
-        N10X.Editor.SetReverseFind(False)
-        N10X.Editor.ExecuteCommand("FindInFile")
+        # Forward search
+        if g_use_10x_find_panel:
+            N10X.Editor.SetReverseFind(False)
+            N10X.Editor.ExecuteCommand("FindInFile")
+        else:
+            enter_command_line_mode('/')
         return True
 
     if char == '?' or (char == '/' and is_shifted):
-        # Open 10x find panel for reverse search
-        N10X.Editor.SetReverseFind(True)
-        N10X.Editor.ExecuteCommand("FindInFile")
+        # Reverse search
+        if g_use_10x_find_panel:
+            N10X.Editor.SetReverseFind(True)
+            N10X.Editor.ExecuteCommand("FindInFile")
+        else:
+            enter_command_line_mode('?')
         return True
 
     # Editing commands
@@ -3281,7 +3396,13 @@ def handle_normal_mode_key(key):
             N10X.Editor.ExecuteCommand("FindInFilePrev")
         else:
             # n - find next match
+            # Move cursor right first to avoid finding the same word
+            x, y = get_cursor_pos()
+            line = get_line(y)
+            if x < len(line.rstrip('\n\r')):
+                set_cursor_pos(x + 1, y)
             N10X.Editor.ExecuteCommand("FindInFileNext")
+        move_cursor_to_selection_start()
         return True
 
     if char == '*':
@@ -3315,20 +3436,12 @@ def handle_normal_mode_key(key):
     # Macros
     if char == 'q':
         if g_recording_macro:
-            g_macros[g_recording_macro] = g_macro_keys[:-1]  # Exclude the q that stopped
+            g_macros[g_recording_macro] = list(g_macro_keys)  # q is already excluded by recording check
             set_status(f"Recorded macro @{g_recording_macro}")
             g_recording_macro = ""
             g_macro_keys = []
         else:
             g_pending_motion = 'q_start'
-        return True
-
-    if g_pending_motion == 'q_start':
-        if char.isalpha():
-            g_recording_macro = char
-            g_macro_keys = []
-            set_status(f"Recording @{char}...")
-        g_pending_motion = ""
         return True
 
     if char == '@':
@@ -3388,6 +3501,10 @@ def _visual_motion(motion_func, *args, clear_count=True):
 
 def handle_visual_mode_key(key):
     global g_count, g_operator, g_pending_motion, g_mode
+
+    # Recording macros - also capture visual mode keys
+    if g_recording_macro:
+        g_macro_keys.append(key)
 
     # Get the actual character including shift transformations (e.g., Shift+. = >)
     actual_char = get_char_from_key(key)
@@ -3454,7 +3571,7 @@ def handle_visual_mode_key(key):
         return _visual_motion(motion_0)
     if char == '^':
         return _visual_motion(motion_caret, clear_count=False)
-    if char == '%' or (is_shifted and char == '5'):
+    if char == '%':
         return _visual_motion(motion_percent, clear_count=False)
 
     # Shifted/unshifted motion pairs
@@ -3666,6 +3783,8 @@ def handle_insert_mode_key(key):
     # Use lowercase for single-char comparisons (consistent with handle_normal_mode_key)
     char = key.key.lower() if len(key.key) == 1 else key.key
 
+    # Note: macro recording for insert mode is done in on_key before this is called
+
     # Try user handler first
     result = VimUser.UserHandleInsertModeKey(key)
     # Compare by name to handle module reloading creating different enum classes
@@ -3740,6 +3859,10 @@ def handle_insert_mode_key(key):
 # =============================================================================
 
 def handle_replace_mode_key(key):
+    # Recording macros - also capture replace mode keys
+    if g_recording_macro:
+        g_macro_keys.append(key)
+
     char = key.key
 
     if char == 'Escape' or (key.control and char == '['):
@@ -3765,10 +3888,14 @@ def handle_replace_mode_key(key):
 def handle_command_line_key(key):
     global g_command_line, g_command_history_index
 
-    # Determine correct case: 10x sends uppercase, so lowercase if shift not pressed
-    char = key.key
-    if len(char) == 1 and char.isalpha() and not key.shift:
-        char = char.lower()
+    # Recording macros - also capture command line keys
+    if g_recording_macro:
+        g_macro_keys.append(key)
+
+    # Get the actual character including shift transformations (e.g., Shift+1 = !)
+    char = get_char_from_key(key)
+    if char is None:
+        char = key.key  # Fallback for special keys like Escape, Enter, etc.
 
     if char == 'Escape' or (key.control and char == '['):
         enter_normal_mode()
@@ -3777,6 +3904,18 @@ def handle_command_line_key(key):
     if char == 'Return' or char == 'Enter':
         if g_command_line_type == ':':
             execute_command(g_command_line)
+        elif g_command_line_type == '/':
+            # Forward search
+            if g_command_line:
+                N10X.Editor.SetFindText(g_command_line, False, False, False, False)
+                N10X.Editor.ExecuteCommand("FindInFileNext")
+                move_cursor_to_selection_start()
+        elif g_command_line_type == '?':
+            # Reverse search
+            if g_command_line:
+                N10X.Editor.SetFindText(g_command_line, False, False, False, True)
+                N10X.Editor.ExecuteCommand("FindInFilePrev")
+                move_cursor_to_selection_start()
         enter_normal_mode()
         return True
 
@@ -3857,12 +3996,20 @@ def on_key(key_str, shift, control, alt):
 
     # Escape always returns to normal mode
     if key_str == 'Escape':
+        # Record Escape for macros when in insert/replace mode
+        if g_recording_macro and g_mode in (Mode.INSERT, Mode.REPLACE):
+            key = Key(key_str, shift, control, alt)
+            g_macro_keys.append(key)
         enter_normal_mode()
         return True
 
     # In insert mode, only handle Escape and Ctrl combinations
     if g_mode == Mode.INSERT:
         global g_last_insert_text
+        # Record keys for macro even in insert mode
+        if g_recording_macro:
+            key = Key(key_str, shift, control, alt)
+            g_macro_keys.append(key)
         if control:
             key = Key(key_str, shift, control, alt)
             return handle_insert_mode_key(key)
@@ -3939,12 +4086,15 @@ def is_vim_enabled():
     return get_setting_bool("Vim", False)
 
 def load_settings():
-    global g_exit_sequence_chars, g_filtered_history
+    global g_exit_sequence_chars, g_filtered_history, g_use_10x_find_panel
 
     g_exit_sequence_chars = get_setting_str("VimExitInsertModeCharSequence", "")
     # Filtered history defaults to True - only disable if explicitly set to false
     val = get_setting_str("VimCommandlineFilteredHistory", "true")
     g_filtered_history = val.lower() not in ("false", "0", "no")
+    # Use 10x find panel for / and ? searches (default True for backward compatibility)
+    val = get_setting_str("VimUse10xFindPanel", "true")
+    g_use_10x_find_panel = val.lower() not in ("false", "0", "no")
 
 def on_settings_changed():
     load_settings()
@@ -3971,10 +4121,15 @@ def initialize():
         N10X.Editor.RemoveOnInterceptCharKeyFunction(on_char_key)
     except Exception:
         pass
+    try:
+        N10X.Editor.RemoveUpdateFunction(on_update)
+    except Exception:
+        pass
     # Register callbacks
     N10X.Editor.AddOnInterceptCharKeyFunction(on_char_key)
     N10X.Editor.AddOnInterceptKeyFunction(on_key)
     N10X.Editor.AddOnSettingsChangedFunction(on_settings_changed)
+    N10X.Editor.AddUpdateFunction(on_update)
 
 # IMPORTANT: Do not remove this __name__ guard. It is required due to how 10x
 # loads VimUser.py and Vim.py - VimUser.py imports Vim.py, and without this guard
