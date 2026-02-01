@@ -92,6 +92,7 @@ g_last_f_char = ""
 g_last_f_direction = 1
 g_last_t_mode = False  # True for t/T, False for f/F
 g_insert_start_pos = (0, 0)
+g_pre_insert_pos = (0, 0)  # Position before any cursor movement for insert (e.g., before 'a' moves right)
 g_exit_sequence = ""
 g_exit_sequence_chars = ""
 g_initialized = False
@@ -105,8 +106,8 @@ g_last_visual_mode = Mode.VISUAL
 g_debug = False
 g_suppress_next_char = False  # Suppress char after operator enters insert mode
 g_change_undo_group = False   # Track if we're in a change operation undo group
-g_undo_cursor_stack = []      # Stack of cursor positions for undo
-g_redo_cursor_stack = []      # Stack of cursor positions for redo
+g_undo_cursor_stacks = {}     # Per-file stacks of cursor positions for undo (keyed by filename)
+g_redo_cursor_stacks = {}     # Per-file stacks of cursor positions for redo (keyed by filename)
 g_pending_undo_before = None  # Temporary storage for "before" position during edits
 g_find_panel_was_open = False  # Track find panel state for cursor positioning
 
@@ -155,45 +156,62 @@ def in_visual_mode():
     """Check if currently in any visual mode."""
     return g_mode in (Mode.VISUAL, Mode.VISUAL_LINE, Mode.VISUAL_BLOCK)
 
+def _get_current_filename():
+    """Get current filename for per-file stack tracking."""
+    try:
+        return N10X.Editor.GetCurrentFilename() or ""
+    except Exception:
+        return ""
+
 def save_undo_cursor():
     """Save current cursor position as the 'before' position for an edit."""
-    global g_pending_undo_before, g_redo_cursor_stack
+    global g_pending_undo_before, g_redo_cursor_stacks
     pos = safe_call(N10X.Editor.GetCursorPos, 0, default=(0, 0))
     if pos:
         g_pending_undo_before = (pos[0], pos[1])
-        # Clear redo stack since new edits invalidate redo history
-        g_redo_cursor_stack = []
+        # Clear redo stack for this file since new edits invalidate redo history
+        filename = _get_current_filename()
+        g_redo_cursor_stacks[filename] = []
 
 def finalize_undo_cursor():
     """Save the 'after' position and commit (before, after) pair to undo stack."""
-    global g_undo_cursor_stack, g_pending_undo_before
+    global g_undo_cursor_stacks, g_pending_undo_before
     if g_pending_undo_before is None:
         return
     after_pos = safe_call(N10X.Editor.GetCursorPos, 0, default=(0, 0))
     if after_pos:
-        g_undo_cursor_stack.append((g_pending_undo_before, (after_pos[0], after_pos[1])))
+        filename = _get_current_filename()
+        if filename not in g_undo_cursor_stacks:
+            g_undo_cursor_stacks[filename] = []
+        g_undo_cursor_stacks[filename].append((g_pending_undo_before, (after_pos[0], after_pos[1])))
         # Limit stack size to prevent memory issues
-        if len(g_undo_cursor_stack) > 1000:
-            g_undo_cursor_stack = g_undo_cursor_stack[-500:]
+        if len(g_undo_cursor_stacks[filename]) > 1000:
+            g_undo_cursor_stacks[filename] = g_undo_cursor_stacks[filename][-500:]
     g_pending_undo_before = None
 
 def pop_undo_cursor():
     """Pop (before, after) for undo, push full pair to redo stack, return 'before'."""
-    global g_undo_cursor_stack, g_redo_cursor_stack
-    if g_undo_cursor_stack:
-        before_pos, after_pos = g_undo_cursor_stack.pop()
-        # Push full (before, after) to redo stack
-        g_redo_cursor_stack.append((before_pos, after_pos))
+    global g_undo_cursor_stacks, g_redo_cursor_stacks
+    filename = _get_current_filename()
+    if filename in g_undo_cursor_stacks and g_undo_cursor_stacks[filename]:
+        before_pos, after_pos = g_undo_cursor_stacks[filename].pop()
+        # Push full (before, after) to redo stack for this file
+        if filename not in g_redo_cursor_stacks:
+            g_redo_cursor_stacks[filename] = []
+        g_redo_cursor_stacks[filename].append((before_pos, after_pos))
         return before_pos
     return None
 
 def pop_redo_cursor():
     """Pop (before, after) for redo, push back to undo stack, return 'after'."""
-    global g_undo_cursor_stack, g_redo_cursor_stack
-    if g_redo_cursor_stack:
-        before_pos, after_pos = g_redo_cursor_stack.pop()
-        # Push same (before, after) back to undo stack
-        g_undo_cursor_stack.append((before_pos, after_pos))
+    global g_undo_cursor_stacks, g_redo_cursor_stacks
+    filename = _get_current_filename()
+    if filename in g_redo_cursor_stacks and g_redo_cursor_stacks[filename]:
+        before_pos, after_pos = g_redo_cursor_stacks[filename].pop()
+        # Push same (before, after) back to undo stack for this file
+        if filename not in g_undo_cursor_stacks:
+            g_undo_cursor_stacks[filename] = []
+        g_undo_cursor_stacks[filename].append((before_pos, after_pos))
         return after_pos
     return None
 
@@ -334,7 +352,8 @@ def delete_selection():
         N10X.Editor.PopUndoGroup()
 
     # Position cursor at start of deleted region
-    set_cursor_pos(start_x, start_y)
+    # Use API directly to avoid normal mode clamping (line may now be shorter)
+    safe_call(N10X.Editor.SetCursorPos, (start_x, start_y), 0)
 
     return sel
 
@@ -471,11 +490,14 @@ def push_jump():
     pos = get_cursor_pos()
     filename = N10X.Editor.GetCurrentFilename()
     if filename:
-        g_jump_list = g_jump_list[:g_jump_index + 1]
+        # Truncate any forward history when making a new jump
+        if g_jump_index < len(g_jump_list):
+            g_jump_list = g_jump_list[:g_jump_index + 1]
         g_jump_list.append((filename, pos))
         if len(g_jump_list) > 100:
             g_jump_list = g_jump_list[-100:]
-        g_jump_index = len(g_jump_list) - 1
+        # Point past the end - we're at a new position not in the list
+        g_jump_index = len(g_jump_list)
 
 def yank_to_register(text, linewise=False):
     global g_registers, g_current_register
@@ -485,6 +507,8 @@ def yank_to_register(text, linewise=False):
     g_registers[reg] = text
     g_registers["0"] = text
     g_registers["\""] = text
+    # Note: System clipboard (+/*) is handled in apply_operator_to_range
+    # by calling Copy command while text is selected
     # Reset register selection after use
     g_current_register = "\""
 
@@ -532,6 +556,7 @@ def enter_mode(mode):
     global g_mode, g_visual_start, g_insert_start_pos, g_last_insert_text
     global g_count, g_operator, g_pending_motion, g_current_register, g_exit_sequence
     global g_last_visual_start, g_last_visual_end, g_last_visual_mode
+    global g_change_undo_group, g_current_edit, g_last_edit
 
     old_mode = g_mode
     g_mode = mode
@@ -558,10 +583,9 @@ def enter_mode(mode):
             N10X.Editor.ClearMultiCursors()
         except Exception:
             pass
-        # Adjust cursor if coming from insert mode
+        # Adjust cursor if coming from insert or replace mode
         if old_mode == Mode.INSERT:
             # Close undo group if we were in a change operation
-            global g_change_undo_group, g_current_edit, g_last_edit
             if g_change_undo_group:
                 N10X.Editor.PopUndoGroup()
                 g_change_undo_group = False
@@ -572,9 +596,21 @@ def enter_mode(mode):
                 g_current_edit = None
             x, y = get_cursor_pos()
             line = get_line(y)
-            if x > 0 and x >= len(line.rstrip('\n\r')):
-                set_cursor_pos(x - 1, y)
+            line_len = len(line.rstrip('\n\r'))
+            # If nothing was typed, restore to pre-insert position
+            if not g_last_insert_text and g_pre_insert_pos[1] == y:
+                set_cursor_pos(g_pre_insert_pos[0], g_pre_insert_pos[1])
+            # Otherwise, ensure cursor isn't past end of line
+            elif x > 0 and x >= line_len:
+                set_cursor_pos(max(0, line_len - 1), y)
             # Finalize undo cursor position (after position adjustment)
+            finalize_undo_cursor()
+        elif old_mode == Mode.REPLACE:
+            # Close undo group from replace mode
+            if g_change_undo_group:
+                N10X.Editor.PopUndoGroup()
+                g_change_undo_group = False
+            # Finalize undo cursor position
             finalize_undo_cursor()
 
     set_cursor_style()
@@ -583,8 +619,9 @@ def enter_mode(mode):
 def enter_normal_mode():
     enter_mode(Mode.NORMAL)
 
-def enter_insert_mode():
-    save_undo_cursor()
+def enter_insert_mode(skip_undo_save=False):
+    if not skip_undo_save:
+        save_undo_cursor()
     enter_mode(Mode.INSERT)
 
 def enter_visual_mode():
@@ -1456,6 +1493,9 @@ def apply_operator_to_range(op, start, end, linewise=False, edit_info=None, skip
     if start_y > end_y or (start_y == end_y and start_x > end_x):
         start_x, start_y, end_x, end_y = end_x, end_y, start_x, start_y
 
+    # For yank, save the x position before linewise modification (for cursor restoration)
+    yank_restore_x = start_x
+
     if linewise:
         start_x = 0
         end_line = get_line(end_y)
@@ -1503,14 +1543,22 @@ def apply_operator_to_range(op, start, end, linewise=False, edit_info=None, skip
         # since we're about to enter insert mode and may need to be at end of line
         N10X.Editor.SetCursorPos((start_x, start_y), 0)
         g_suppress_next_char = True  # Don't insert the motion key
-        enter_insert_mode()
+        # Skip undo save - cursor was already saved before the motion
+        enter_insert_mode(skip_undo_save=True)
         # Store current edit, will be finalized when leaving insert mode
         g_current_edit = edit_info
 
     elif op == 'y':  # yank
+        # If yanking to system clipboard, use 10x Copy command while text is selected
+        if g_current_register in ("+", "*"):
+            try:
+                N10X.Editor.ExecuteCommand("Copy")
+            except Exception:
+                pass
         yank_to_register(text, linewise)
         clear_selection()
-        set_cursor_pos(start_x, start_y)
+        # Restore cursor to original x position (before linewise modification set it to 0)
+        set_cursor_pos(yank_restore_x, start_y)
         set_status(f"Yanked {len(text)} characters")
         # Yank is not repeatable with dot
 
@@ -1537,16 +1585,16 @@ def apply_operator_to_range(op, start, end, linewise=False, edit_info=None, skip
         motion_caret()
 
     elif op == 'gu':  # lowercase
-        clear_selection()
         new_text = text.lower()
-        set_selection((start_x, start_y), (end_x, end_y))
+        # Selection is already set, delete it and insert the new text
+        delete_selection()
         insert_text(new_text)
         set_cursor_pos(start_x, start_y)
 
     elif op == 'gU':  # uppercase
-        clear_selection()
         new_text = text.upper()
-        set_selection((start_x, start_y), (end_x, end_y))
+        # Selection is already set, delete it and insert the new text
+        delete_selection()
         insert_text(new_text)
         set_cursor_pos(start_x, start_y)
 
@@ -1556,9 +1604,9 @@ def apply_operator_to_range(op, start, end, linewise=False, edit_info=None, skip
         set_status("Auto-indent not supported")
 
     elif op == 'g~':  # toggle case
-        clear_selection()
         new_text = text.swapcase()
-        set_selection((start_x, start_y), (end_x, end_y))
+        # Selection is already set, delete it and insert the new text
+        delete_selection()
         insert_text(new_text)
         set_cursor_pos(start_x, start_y)
 
@@ -1578,7 +1626,8 @@ def operator_yy(count=1):
     x, y = get_cursor_pos()
     end_y = min(y + count - 1, get_line_count() - 1)
     end_line = get_line(end_y)
-    apply_operator_to_range('y', (0, y), (len(end_line), end_y), linewise=True)
+    # Pass (x, y) to preserve original cursor x position for restoration
+    apply_operator_to_range('y', (x, y), (len(end_line), end_y), linewise=True)
 
 def operator_cc(count=1):
     x, y = get_cursor_pos()
@@ -2253,7 +2302,7 @@ def handle_normal_mode_key(key):
     global g_count, g_operator, g_pending_motion, g_current_register
     global g_recording_macro, g_macro_keys, g_macros, g_mode
     global g_suppress_next_char, g_change_undo_group, g_current_edit, g_last_edit
-    global g_jump_index, g_jump_list
+    global g_jump_index, g_jump_list, g_pre_insert_pos
 
     # Get the actual character including shift transformations (e.g., Shift+. = >)
     actual_char = get_char_from_key(key)
@@ -2921,13 +2970,26 @@ def handle_normal_mode_key(key):
             return False
 
         if char == 'o':
-            if g_jump_index > 0:
-                g_jump_index -= 1
-                filename, pos = g_jump_list[g_jump_index]
-                current_file = N10X.Editor.GetCurrentFilename()
-                if filename != current_file:
-                    N10X.Editor.OpenFile(filename)
-                set_cursor_pos(pos[0], pos[1])
+            if g_jump_list:
+                # If we're past the end (at a new position after a jump),
+                # save current position first so Ctrl+I can return here
+                if g_jump_index >= len(g_jump_list):
+                    push_jump()
+                    # Now index is past end again, set it to second-to-last
+                    # so we jump to the entry before the one we just pushed
+                    g_jump_index = len(g_jump_list) - 2
+                elif g_jump_index > 0:
+                    g_jump_index -= 1
+                else:
+                    # Already at the beginning, can't go back further
+                    return True
+
+                if g_jump_index >= 0 and g_jump_index < len(g_jump_list):
+                    filename, pos = g_jump_list[g_jump_index]
+                    current_file = N10X.Editor.GetCurrentFilename()
+                    if filename != current_file:
+                        N10X.Editor.OpenFile(filename)
+                    set_cursor_pos(pos[0], pos[1])
                 return True
             # No jump history - pass to 10x
             return False
@@ -3207,6 +3269,7 @@ def handle_normal_mode_key(key):
     # Mode changes
     if char == 'i':
         g_suppress_next_char = True
+        g_pre_insert_pos = get_cursor_pos()
         if is_shifted:
             motion_caret()
             enter_insert_mode()
@@ -3216,6 +3279,7 @@ def handle_normal_mode_key(key):
 
     if char == 'a':
         g_suppress_next_char = True
+        g_pre_insert_pos = get_cursor_pos()  # Save position BEFORE moving for append
         if is_shifted:
             # A - append at end of line, use API directly to bypass normal mode clamping
             y = get_cursor_pos()[1]
@@ -3241,6 +3305,8 @@ def handle_normal_mode_key(key):
                 indent += c
             else:
                 break
+        # Save cursor position for undo BEFORE any edits
+        save_undo_cursor()
         # Group the newline insertion and subsequent typing as one undo operation
         N10X.Editor.PushUndoGroup()
         g_change_undo_group = True
@@ -3250,7 +3316,7 @@ def handle_normal_mode_key(key):
             N10X.Editor.InsertText(indent + '\n')
             N10X.Editor.SetCursorPos((len(indent), y), 0)
             g_suppress_next_char = True
-            enter_insert_mode()
+            enter_insert_mode(skip_undo_save=True)
         else:
             # o - open line below: move to actual end of line (past last char), insert newline + indent
             line_len = len(line.rstrip('\n\r'))
@@ -3258,7 +3324,7 @@ def handle_normal_mode_key(key):
             N10X.Editor.InsertText('\n' + indent)
             # Cursor should now be on the new line after the indent
             g_suppress_next_char = True
-            enter_insert_mode()
+            enter_insert_mode(skip_undo_save=True)
         return True
 
     if char == 'v':
@@ -3313,6 +3379,10 @@ def handle_normal_mode_key(key):
 
     if char == 'r':
         if is_shifted:
+            # R - enter replace mode with undo grouping
+            save_undo_cursor()
+            N10X.Editor.PushUndoGroup()
+            g_change_undo_group = True
             enter_mode(Mode.REPLACE)
         else:
             g_pending_motion = 'r'
@@ -3326,6 +3396,8 @@ def handle_normal_mode_key(key):
             # Substitute character - delete and enter insert mode
             x, y = get_cursor_pos()
             line = get_line(y)
+            # Save cursor position for undo BEFORE any edits
+            save_undo_cursor()
             N10X.Editor.PushUndoGroup()
             g_change_undo_group = True
             if x < len(line.rstrip('\n\r')):
@@ -3334,7 +3406,7 @@ def handle_normal_mode_key(key):
                 yank_to_register(deleted)
             g_suppress_next_char = True
             g_current_edit = {'op': 'c', 'motion': 's', 'count': count, 'linewise': False}
-            enter_insert_mode()
+            enter_insert_mode(skip_undo_save=True)
         return True
 
     if char == 'p':
@@ -3483,6 +3555,10 @@ def handle_normal_mode_key(key):
             set_cursor_pos(x + 1, y)
         return True
 
+    # Pass through function keys and other special keys to 10x
+    if key.key.startswith('F') and key.key[1:].isdigit():
+        return False
+
     g_count = ""
     return True
 
@@ -3500,7 +3576,7 @@ def _visual_motion(motion_func, *args, clear_count=True):
     return True
 
 def handle_visual_mode_key(key):
-    global g_count, g_operator, g_pending_motion, g_mode
+    global g_count, g_operator, g_pending_motion, g_mode, g_visual_start, g_current_register
 
     # Recording macros - also capture visual mode keys
     if g_recording_macro:
@@ -3552,6 +3628,17 @@ def handle_visual_mode_key(key):
             update_visual_selection()
         g_pending_motion = ""
         g_count = ""
+        return True
+
+    # Handle register selection pending motion
+    if g_pending_motion == '"':
+        g_current_register = char
+        g_pending_motion = ""
+        return True
+
+    # Register selection
+    if char == '"':
+        g_pending_motion = '"'
         return True
 
     # Count (only unshifted digits)
@@ -3770,6 +3857,10 @@ def handle_visual_mode_key(key):
         enter_normal_mode()
         return True
 
+    # Pass through function keys and other special keys to 10x
+    if key.key.startswith('F') and key.key[1:].isdigit():
+        return False
+
     g_count = ""
     return True
 
@@ -3798,24 +3889,6 @@ def handle_insert_mode_key(key):
     if char == 'Escape' or (key.control and char == '['):
         enter_normal_mode()
         return True
-
-    # Check exit sequence (e.g., "jk")
-    if g_exit_sequence_chars and len(char) == 1:
-        g_exit_sequence += char
-        if g_exit_sequence == g_exit_sequence_chars:
-            # Delete the typed characters by backspacing
-            x, y = get_cursor_pos()
-            line = get_line(y)
-            # Delete the exit sequence characters that were typed
-            chars_to_delete = len(g_exit_sequence_chars)
-            if x >= chars_to_delete:
-                new_line = line[:x - chars_to_delete] + line[x:]
-                N10X.Editor.SetLine(y, new_line)
-                set_cursor_pos(x - chars_to_delete, y)
-            enter_normal_mode()
-            return True
-        elif not g_exit_sequence_chars.startswith(g_exit_sequence):
-            g_exit_sequence = char if g_exit_sequence_chars.startswith(char) else ""
 
     # Ctrl+W - delete word
     if key.control and char == 'w':
@@ -3973,6 +4046,10 @@ def handle_command_line_key(key):
         set_status(g_command_line_type + g_command_line)
         return True
 
+    # Pass through function keys and other special keys to 10x
+    if key.key.startswith('F') and key.key[1:].isdigit():
+        return False
+
     return True
 
 # =============================================================================
@@ -4069,7 +4146,27 @@ def on_char_key(char):
 
     # In insert mode, track text for dot repeat, then let 10x handle typing
     if g_mode == Mode.INSERT:
-        global g_last_insert_text
+        global g_last_insert_text, g_exit_sequence
+        # Check exit sequence (e.g., "jk") on actual typed characters.
+        if g_exit_sequence_chars and len(char) == 1:
+            g_exit_sequence += char
+            if g_exit_sequence == g_exit_sequence_chars:
+                # Current char is not inserted yet; remove prior sequence chars.
+                chars_to_delete = len(g_exit_sequence_chars) - 1
+                if chars_to_delete > 0:
+                    x, y = get_cursor_pos()
+                    line = get_line(y)
+                    if x >= chars_to_delete:
+                        new_line = line[:x - chars_to_delete] + line[x:]
+                        N10X.Editor.SetLine(y, new_line)
+                        set_cursor_pos(x - chars_to_delete, y)
+                    if g_last_insert_text:
+                        g_last_insert_text = g_last_insert_text[:-chars_to_delete]
+                enter_normal_mode()
+                return True
+            if not g_exit_sequence_chars.startswith(g_exit_sequence):
+                g_exit_sequence = char if g_exit_sequence_chars.startswith(char) else ""
+
         g_last_insert_text += char
         return False
 
