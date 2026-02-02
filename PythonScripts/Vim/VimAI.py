@@ -77,6 +77,7 @@ g_pending_motion = ""
 g_command_line = ""
 g_command_line_type = ""  # ":"
 g_registers = {"\"": "", "0": ""}  # Default and yank registers
+g_registers_linewise = {"\"": False, "0": False}
 g_current_register = "\""
 g_marks = {}
 g_last_edit = None  # For . repeat: {'op', 'motion', 'motion_arg', 'count', 'linewise', 'text_obj', 'text_obj_arg'}
@@ -110,6 +111,10 @@ g_undo_cursor_stacks = {}     # Per-file stacks of cursor positions for undo (ke
 g_redo_cursor_stacks = {}     # Per-file stacks of cursor positions for redo (keyed by filename)
 g_pending_undo_before = None  # Temporary storage for "before" position during edits
 g_find_panel_was_open = False  # Track find panel state for cursor positioning
+g_mouse_visual_suppress_frames = 0  # Suppress mouse->visual conversion for a few updates
+g_mouse_visual_active = False  # True when visual mode was entered via mouse selection
+g_clear_selection_once = False  # Clear selection once (e.g., after goto definition)
+g_pending_window_cmd = False  # Ctrl+W prefix for window commands
 
 # =============================================================================
 # Utility Functions
@@ -293,6 +298,10 @@ def get_selection():
     return safe_call(N10X.Editor.GetSelection, default="") or ""
 
 def set_selection(start, end):
+    global g_mouse_visual_suppress_frames
+    # Internal selection updates in normal mode should not trigger mouse-visual.
+    if g_mode == Mode.NORMAL:
+        g_mouse_visual_suppress_frames = 2
     safe_call(N10X.Editor.SetSelection, start, end, 0)
 
 def clear_selection():
@@ -500,13 +509,16 @@ def push_jump():
         g_jump_index = len(g_jump_list)
 
 def yank_to_register(text, linewise=False):
-    global g_registers, g_current_register
+    global g_registers, g_registers_linewise, g_current_register
     reg = g_current_register
     if linewise and not text.endswith('\n'):
         text = text + '\n'
     g_registers[reg] = text
     g_registers["0"] = text
     g_registers["\""] = text
+    g_registers_linewise[reg] = linewise
+    g_registers_linewise["0"] = linewise
+    g_registers_linewise["\""] = linewise
     # Note: System clipboard (+/*) is handled in apply_operator_to_range
     # by calling Copy command while text is selected
     # Reset register selection after use
@@ -548,6 +560,15 @@ def get_register(reg=None):
         return g_registers.get("\"", "")
     return g_registers.get(reg, "")
 
+def get_register_linewise(reg=None):
+    if reg is None:
+        reg = g_current_register
+    # Default to stored flag; fallback to newline heuristic for unknown regs.
+    if reg in g_registers_linewise:
+        return g_registers_linewise.get(reg, False)
+    text = get_register(reg)
+    return text.endswith('\n') if text else False
+
 # =============================================================================
 # Mode Management
 # =============================================================================
@@ -556,10 +577,14 @@ def enter_mode(mode):
     global g_mode, g_visual_start, g_insert_start_pos, g_last_insert_text
     global g_count, g_operator, g_pending_motion, g_current_register, g_exit_sequence
     global g_last_visual_start, g_last_visual_end, g_last_visual_mode
-    global g_change_undo_group, g_current_edit, g_last_edit
+    global g_change_undo_group, g_current_edit, g_last_edit, g_mouse_visual_active, g_pending_window_cmd
 
     old_mode = g_mode
     g_mode = mode
+    if mode != Mode.VISUAL:
+        g_mouse_visual_active = False
+    if mode != Mode.NORMAL:
+        g_pending_window_cmd = False
     g_count = ""
     g_operator = ""
     g_pending_motion = ""
@@ -1587,15 +1612,19 @@ def apply_operator_to_range(op, start, end, linewise=False, edit_info=None, skip
     elif op == 'gu':  # lowercase
         new_text = text.lower()
         # Selection is already set, delete it and insert the new text
+        N10X.Editor.PushUndoGroup()
         delete_selection()
         insert_text(new_text)
+        N10X.Editor.PopUndoGroup()
         set_cursor_pos(start_x, start_y)
 
     elif op == 'gU':  # uppercase
         new_text = text.upper()
         # Selection is already set, delete it and insert the new text
+        N10X.Editor.PushUndoGroup()
         delete_selection()
         insert_text(new_text)
+        N10X.Editor.PopUndoGroup()
         set_cursor_pos(start_x, start_y)
 
     elif op == '=':  # auto-indent
@@ -1606,8 +1635,10 @@ def apply_operator_to_range(op, start, end, linewise=False, edit_info=None, skip
     elif op == 'g~':  # toggle case
         new_text = text.swapcase()
         # Selection is already set, delete it and insert the new text
+        N10X.Editor.PushUndoGroup()
         delete_selection()
         insert_text(new_text)
+        N10X.Editor.PopUndoGroup()
         set_cursor_pos(start_x, start_y)
 
     # Finalize undo cursor for operations that don't enter insert mode
@@ -1860,7 +1891,8 @@ def move_cursor_to_selection_start():
 
 def on_update():
     """Called every frame to check for find panel state changes."""
-    global g_find_panel_was_open
+    global g_find_panel_was_open, g_mouse_visual_suppress_frames, g_mouse_visual_active, g_visual_start
+    global g_clear_selection_once
 
     if not is_vim_enabled():
         return
@@ -1872,8 +1904,37 @@ def on_update():
     if g_find_panel_was_open and not find_panel_open:
         # Find panel just closed - move cursor to start of found word
         move_cursor_to_selection_start()
+        g_mouse_visual_suppress_frames = 2
 
     g_find_panel_was_open = find_panel_open
+
+    if g_mouse_visual_suppress_frames > 0:
+        g_mouse_visual_suppress_frames -= 1
+
+    selection = _get_active_selection()
+    if g_clear_selection_once and selection:
+        start, end = selection
+        clear_selection()
+        # Place cursor at start of the would-have-been selection.
+        set_cursor_pos(start[0], start[1])
+        g_clear_selection_once = False
+        g_mouse_visual_suppress_frames = 2
+        selection = None
+    if g_mode == Mode.NORMAL:
+        if g_operator or g_pending_motion:
+            return
+        if g_mouse_visual_suppress_frames == 0 and selection and not find_panel_open:
+            _enter_visual_from_selection(selection[0], selection[1])
+    elif in_visual_mode() and g_mouse_visual_active:
+        if not selection:
+            enter_normal_mode()
+            return
+        # Keep visual anchors in sync if selection is adjusted via mouse.
+        start, end = selection
+        g_visual_start = start
+        if get_cursor_pos() != end:
+            safe_call(N10X.Editor.SetCursorPos, end, 0)
+        update_visual_selection()
 
 def search_word_under_cursor(direction=1):
     """Search for the word under cursor (* and # commands)."""
@@ -2201,6 +2262,29 @@ def execute_command(cmd):
 # Visual Mode
 # =============================================================================
 
+def _get_active_selection():
+    """Return (start, end) if there is an active selection, otherwise None."""
+    try:
+        start = N10X.Editor.GetSelectionStart()
+        end = N10X.Editor.GetSelectionEnd()
+    except Exception:
+        return None
+
+    if not start or not end:
+        return None
+    if start == end:
+        return None
+    return (start, end)
+
+def _enter_visual_from_selection(start, end):
+    """Enter visual mode using an existing (mouse) selection."""
+    global g_visual_start, g_mouse_visual_active
+    enter_mode(Mode.VISUAL)
+    g_visual_start = start
+    safe_call(N10X.Editor.SetCursorPos, end, 0)
+    update_visual_selection()
+    g_mouse_visual_active = True
+
 def update_visual_selection():
     if g_mode not in (Mode.VISUAL, Mode.VISUAL_LINE, Mode.VISUAL_BLOCK):
         return
@@ -2249,6 +2333,9 @@ def visual_operation(op):
         end = (end[0] + 1, end[1])
 
     apply_operator_to_range(op, start, end, linewise)
+    if op == 'c':
+        # apply_operator_to_range('c', ...) already enters insert mode
+        return
     enter_normal_mode()
 
 # =============================================================================
@@ -2302,7 +2389,8 @@ def handle_normal_mode_key(key):
     global g_count, g_operator, g_pending_motion, g_current_register
     global g_recording_macro, g_macro_keys, g_macros, g_mode
     global g_suppress_next_char, g_change_undo_group, g_current_edit, g_last_edit
-    global g_jump_index, g_jump_list, g_pre_insert_pos
+    global g_jump_index, g_jump_list, g_pre_insert_pos, g_mouse_visual_suppress_frames, g_clear_selection_once
+    global g_pending_window_cmd
 
     # Get the actual character including shift transformations (e.g., Shift+. = >)
     actual_char = get_char_from_key(key)
@@ -2322,6 +2410,20 @@ def handle_normal_mode_key(key):
 
     if g_debug:
         N10X.Editor.LogTo10XOutput(f"DEBUG handle_normal_mode_key: char='{char}' is_shifted={is_shifted} g_operator='{g_operator}' g_pending_motion='{g_pending_motion}'\n")
+
+    if g_pending_window_cmd:
+        g_pending_window_cmd = False
+        if char in ('h', 'j', 'k', 'l'):
+            cmd = {
+                'h': "MovePanelFocusLeft",
+                'j': "MovePanelFocusDown",
+                'k': "MovePanelFocusUp",
+                'l': "MovePanelFocusRight",
+            }.get(char)
+            if cmd:
+                safe_call(N10X.Editor.ExecuteCommand, cmd)
+                return True
+        # If not a window command, fall through and handle as normal
 
     # Recording macros
     if g_recording_macro and char != 'q':
@@ -2448,6 +2550,29 @@ def handle_normal_mode_key(key):
 
         elif g_pending_motion == "'":
             # Jump to mark
+            if char == "'":
+                # '' - jump to previous location (linewise)
+                if g_jump_list:
+                    if g_jump_index >= len(g_jump_list):
+                        push_jump()
+                        g_jump_index = len(g_jump_list) - 2
+                    elif g_jump_index > 0:
+                        g_jump_index -= 1
+                    else:
+                        g_pending_motion = ""
+                        g_count = ""
+                        return True
+
+                    if 0 <= g_jump_index < len(g_jump_list):
+                        filename, pos = g_jump_list[g_jump_index]
+                        current_file = N10X.Editor.GetCurrentFilename()
+                        if filename != current_file:
+                            N10X.Editor.OpenFile(filename)
+                        set_cursor_pos(pos[0], pos[1])
+                        motion_caret()
+                g_pending_motion = ""
+                g_count = ""
+                return True
             if char in g_marks:
                 filename, pos = g_marks[char]
                 current_file = N10X.Editor.GetCurrentFilename()
@@ -2648,6 +2773,10 @@ def handle_normal_mode_key(key):
                     else:
                         motion_b(count)
                 end = get_cursor_pos()
+                # For yank with w/W, avoid including the newline when motion crosses lines.
+                if g_operator == 'y' and char in ('w', 'W') and end[1] > start[1]:
+                    line = get_line(start[1])
+                    end = (len(line.rstrip('\n\r')), start[1])
                 # For 'e' motion and 'cw' when on a word char (which uses 'e'), include the character under cursor
                 if char == 'e':
                     end = (end[0] + 1, end[1])
@@ -2966,8 +3095,9 @@ def handle_normal_mode_key(key):
             return True
 
         if char == 'w':
-            # Window prefix - pass to 10x
-            return False
+            # Window prefix (Ctrl+W)
+            g_pending_window_cmd = True
+            return True
 
         if char == 'o':
             if g_jump_list:
@@ -3013,6 +3143,8 @@ def handle_normal_mode_key(key):
                 N10X.Editor.ExecuteCommand("GotoSymbolDefinition")
             except Exception:
                 pass
+            g_mouse_visual_suppress_frames = 5
+            g_clear_selection_once = True
             return True
 
         if char == 't':
@@ -3279,15 +3411,16 @@ def handle_normal_mode_key(key):
 
     if char == 'a':
         g_suppress_next_char = True
-        g_pre_insert_pos = get_cursor_pos()  # Save position BEFORE moving for append
         if is_shifted:
             # A - append at end of line, use API directly to bypass normal mode clamping
             y = get_cursor_pos()[1]
             line = get_line(y)
             line_len = len(line.rstrip('\n\r'))
+            g_pre_insert_pos = (max(0, line_len - 1), y)
             N10X.Editor.SetCursorPos((line_len, y), 0)
             enter_insert_mode()
         else:
+            g_pre_insert_pos = get_cursor_pos()  # Save position BEFORE moving for append
             x, y = get_cursor_pos()
             line = get_line(y)
             if x < len(line.rstrip('\n\r')):
@@ -3415,9 +3548,10 @@ def handle_normal_mode_key(key):
         if text:
             save_undo_cursor()
             x, y = get_cursor_pos()
+            linewise = get_register_linewise()
             if is_shifted:
                 # Paste before (P)
-                if text.endswith('\n'):
+                if linewise:
                     # Linewise paste - insert above current line
                     set_cursor_pos(0, y)
                     insert_text(text)
@@ -3427,7 +3561,7 @@ def handle_normal_mode_key(key):
                     insert_text(text)
             else:
                 # Paste after (p)
-                if text.endswith('\n'):
+                if linewise:
                     # Linewise paste - insert below current line
                     line = get_line(y)
                     line_len = len(line.rstrip('\n\r'))
@@ -3659,6 +3793,22 @@ def handle_visual_mode_key(key):
     if char == '^':
         return _visual_motion(motion_caret, clear_count=False)
     if char == '%':
+        if g_mode == Mode.VISUAL_LINE:
+            x, y = get_cursor_pos()
+            line = get_line(y)
+            brace_x = None
+            for i, c in enumerate(line):
+                if c == '{' or c == '}':
+                    brace_x = i
+                    break
+            if brace_x is not None:
+                set_cursor_pos(brace_x, y)
+                motion_percent()
+                update_visual_selection()
+                g_count = ""
+                return True
+            # Restore cursor if no brace found
+            set_cursor_pos(x, y)
         return _visual_motion(motion_percent, clear_count=False)
 
     # Shifted/unshifted motion pairs
