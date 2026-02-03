@@ -594,6 +594,9 @@ def enter_mode(mode):
     if mode == Mode.INSERT:
         g_insert_start_pos = get_cursor_pos()
         g_last_insert_text = ""
+    elif mode == Mode.REPLACE:
+        g_insert_start_pos = get_cursor_pos()
+        g_last_insert_text = ""
     elif mode in (Mode.VISUAL, Mode.VISUAL_LINE, Mode.VISUAL_BLOCK):
         g_visual_start = get_cursor_pos()
     elif mode == Mode.NORMAL:
@@ -635,6 +638,13 @@ def enter_mode(mode):
             if g_change_undo_group:
                 N10X.Editor.PopUndoGroup()
                 g_change_undo_group = False
+            # Finalize the edit for dot repeat
+            if g_current_edit is not None:
+                g_current_edit['insert_text'] = g_last_insert_text
+                if g_current_edit.get('motion') == 's':
+                    g_current_edit['count'] = len(g_last_insert_text)
+                g_last_edit = g_current_edit
+                g_current_edit = None
             # Finalize undo cursor position
             finalize_undo_cursor()
 
@@ -1842,6 +1852,7 @@ def _repeat_last_edit(repeat_count=1):
         return
     elif motion == 's':
         # Substitute character(s) under cursor
+        N10X.Editor.PushUndoGroup()
         x, y = get_cursor_pos()
         line = get_line(y)
         line_len = len(line.rstrip('\n\r'))
@@ -1852,6 +1863,8 @@ def _repeat_last_edit(repeat_count=1):
             N10X.Editor.SetLine(y, line[:x] + line[x + del_count:])
         if insert_text_content:
             insert_text(insert_text_content)
+        N10X.Editor.PopUndoGroup()
+        finalize_undo_cursor()
         return
     else:
         return  # Unknown motion
@@ -2429,14 +2442,15 @@ def handle_normal_mode_key(key):
     if g_recording_macro and char != 'q':
         g_macro_keys.append(key)
 
-    # Try user handler first
-    result = VimUser.UserHandleCommandModeKey(key)
-    # Compare by name to handle module reloading creating different enum classes
-    result_name = result.name if hasattr(result, 'name') else str(result)
-    if result_name == 'HANDLED':
-        return True
-    elif result_name == 'PASS_TO_10X':
-        return False
+    # Try user handler first (skip when waiting for a pending motion target)
+    if not g_pending_motion:
+        result = VimUser.UserHandleCommandModeKey(key)
+        # Compare by name to handle module reloading creating different enum classes
+        result_name = result.name if hasattr(result, 'name') else str(result)
+        if result_name == 'HANDLED':
+            return True
+        elif result_name == 'PASS_TO_10X':
+            return False
 
     count = int(g_count) if g_count else 1
 
@@ -2543,6 +2557,10 @@ def handle_normal_mode_key(key):
                 if x < len(line.rstrip('\n\r')):
                     new_line = line[:x] + target_char + line[x+1:]
                     N10X.Editor.SetLine(y, new_line)
+                    # Vim keeps cursor on the replaced character.
+                    set_cursor_pos(x, y)
+                    # Record for dot-repeat as a 1-char substitute.
+                    g_last_edit = {'op': 'c', 'motion': 's', 'count': 1, 'linewise': False, 'insert_text': target_char}
                 finalize_undo_cursor()
             g_pending_motion = ""
             g_count = ""
@@ -3516,6 +3534,7 @@ def handle_normal_mode_key(key):
             save_undo_cursor()
             N10X.Editor.PushUndoGroup()
             g_change_undo_group = True
+            g_current_edit = {'op': 'c', 'motion': 's', 'count': 0, 'linewise': False}
             enter_mode(Mode.REPLACE)
         else:
             g_pending_motion = 'r'
@@ -4082,11 +4101,16 @@ def handle_insert_mode_key(key):
 # =============================================================================
 
 def handle_replace_mode_key(key):
+    global g_last_insert_text
     # Recording macros - also capture replace mode keys
     if g_recording_macro:
         g_macro_keys.append(key)
 
-    char = key.key
+    # Use actual character including shift transformations (e.g., Shift+1 = !).
+    # This also normalizes letter case based on shift state.
+    char = get_char_from_key(key)
+    if char is None:
+        char = key.key
 
     if char == 'Escape' or (key.control and char == '['):
         enter_normal_mode()
@@ -4100,6 +4124,7 @@ def handle_replace_mode_key(key):
             set_cursor_pos(x + 1, y)
         else:
             insert_text(char)
+        g_last_insert_text += char
         return True
 
     return False
