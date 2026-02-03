@@ -1786,16 +1786,15 @@ def _repeat_last_edit(repeat_count=1):
         motion_T(motion_arg, use_count)
         end = get_cursor_pos()
         start, end = end, start
-    elif motion.startswith('i') or motion.startswith('a'):
-        # Text object
+    elif len(motion) > 1 and (motion.startswith('i') or motion.startswith('a')):
+        # Text object (e.g., 'iw', 'a"', etc.) - must be 2+ chars to distinguish from insert/append
         inner = motion.startswith('i')
-        obj_char = motion[1] if len(motion) > 1 else None
-        if obj_char:
-            obj_range = get_text_object_range(obj_char, inner)
-            if obj_range:
-                start, end = obj_range
-            else:
-                return  # No matching text object found
+        obj_char = motion[1]
+        obj_range = get_text_object_range(obj_char, inner)
+        if obj_range:
+            start, end = obj_range
+        else:
+            return  # No matching text object found
     elif motion == 'gg':
         target = use_count - 1 if use_count else 0
         end = (0, target)
@@ -1864,6 +1863,114 @@ def _repeat_last_edit(repeat_count=1):
         if insert_text_content:
             insert_text(insert_text_content)
         N10X.Editor.PopUndoGroup()
+        finalize_undo_cursor()
+        return
+    elif motion == 'r':
+        # Replace character (from 'r' command) - cursor stays in place
+        x, y = get_cursor_pos()
+        line = get_line(y)
+        if x < len(line.rstrip('\n\r')) and insert_text_content:
+            new_line = line[:x] + insert_text_content + line[x+1:]
+            N10X.Editor.SetLine(y, new_line)
+            set_cursor_pos(x, y)
+        finalize_undo_cursor()
+        return
+    elif motion == 'i':
+        # Insert at cursor
+        x, y = get_cursor_pos()
+        line = get_line(y)
+        if insert_text_content:
+            new_line = line[:x] + insert_text_content + line[x:]
+            N10X.Editor.SetLine(y, new_line)
+            # Position cursor at end of inserted text - 1 (vim normal mode)
+            set_cursor_pos(x + len(insert_text_content) - 1, y)
+        finalize_undo_cursor()
+        return
+    elif motion == 'I':
+        # Insert at first non-blank
+        x, y = get_cursor_pos()
+        line = get_line(y)
+        indent = 0
+        for c in line:
+            if c in ' \t':
+                indent += 1
+            else:
+                break
+        if insert_text_content:
+            new_line = line[:indent] + insert_text_content + line[indent:]
+            N10X.Editor.SetLine(y, new_line)
+            # Position cursor at end of inserted text - 1 (vim normal mode)
+            set_cursor_pos(indent + len(insert_text_content) - 1, y)
+        finalize_undo_cursor()
+        return
+    elif motion == 'a':
+        # Append after cursor
+        x, y = get_cursor_pos()
+        line = get_line(y)
+        line_len = len(line.rstrip('\n\r'))
+        # Move cursor one position to the right (like 'a' does)
+        insert_x = min(x + 1, line_len)
+        if insert_text_content:
+            new_line = line[:insert_x] + insert_text_content + line[insert_x:]
+            N10X.Editor.SetLine(y, new_line)
+            # Position cursor at end of inserted text - 1 (vim normal mode)
+            set_cursor_pos(insert_x + len(insert_text_content) - 1, y)
+        finalize_undo_cursor()
+        return
+    elif motion == 'A':
+        # Append at end of line
+        x, y = get_cursor_pos()
+        line = get_line(y)
+        line_len = len(line.rstrip('\n\r'))
+        if insert_text_content:
+            new_line = line[:line_len] + insert_text_content + line[line_len:]
+            N10X.Editor.SetLine(y, new_line)
+            # Position cursor at end of inserted text - 1 (vim normal mode)
+            set_cursor_pos(line_len + len(insert_text_content) - 1, y)
+        finalize_undo_cursor()
+        return
+    elif motion == 'o':
+        # Open line below
+        x, y = get_cursor_pos()
+        line = get_line(y)
+        # Get indentation from current line
+        indent = ""
+        for c in line:
+            if c in ' \t':
+                indent += c
+            else:
+                break
+        line_len = len(line.rstrip('\n\r'))
+        # Position at end of line and insert newline + indent + text
+        N10X.Editor.SetCursorPos((line_len, y), 0)
+        N10X.Editor.InsertText('\n' + indent + (insert_text_content or ''))
+        # Position cursor at end of inserted text on new line
+        new_y = y + 1
+        if insert_text_content:
+            set_cursor_pos(len(indent) + len(insert_text_content) - 1, new_y)
+        else:
+            set_cursor_pos(len(indent), new_y)
+        finalize_undo_cursor()
+        return
+    elif motion == 'O':
+        # Open line above
+        x, y = get_cursor_pos()
+        line = get_line(y)
+        # Get indentation from current line
+        indent = ""
+        for c in line:
+            if c in ' \t':
+                indent += c
+            else:
+                break
+        # Position at start of line and insert indent + text + newline
+        N10X.Editor.SetCursorPos((0, y), 0)
+        N10X.Editor.InsertText(indent + (insert_text_content or '') + '\n')
+        # Position cursor at end of inserted text on the new line (which is at y)
+        if insert_text_content:
+            set_cursor_pos(len(indent) + len(insert_text_content) - 1, y)
+        else:
+            set_cursor_pos(len(indent), y)
         finalize_undo_cursor()
         return
     else:
@@ -2559,8 +2666,8 @@ def handle_normal_mode_key(key):
                     N10X.Editor.SetLine(y, new_line)
                     # Vim keeps cursor on the replaced character.
                     set_cursor_pos(x, y)
-                    # Record for dot-repeat as a 1-char substitute.
-                    g_last_edit = {'op': 'c', 'motion': 's', 'count': 1, 'linewise': False, 'insert_text': target_char}
+                    # Record for dot-repeat as a replace operation.
+                    g_last_edit = {'op': 'c', 'motion': 'r', 'count': 1, 'linewise': False, 'insert_text': target_char}
                 finalize_undo_cursor()
             g_pending_motion = ""
             g_count = ""
@@ -3422,8 +3529,10 @@ def handle_normal_mode_key(key):
         g_pre_insert_pos = get_cursor_pos()
         if is_shifted:
             motion_caret()
+            g_current_edit = {'op': 'i', 'motion': 'I', 'count': 1, 'linewise': False}
             enter_insert_mode()
         else:
+            g_current_edit = {'op': 'i', 'motion': 'i', 'count': 1, 'linewise': False}
             enter_insert_mode()
         return True
 
@@ -3436,13 +3545,16 @@ def handle_normal_mode_key(key):
             line_len = len(line.rstrip('\n\r'))
             g_pre_insert_pos = (max(0, line_len - 1), y)
             N10X.Editor.SetCursorPos((line_len, y), 0)
+            g_current_edit = {'op': 'i', 'motion': 'A', 'count': 1, 'linewise': False}
             enter_insert_mode()
         else:
             g_pre_insert_pos = get_cursor_pos()  # Save position BEFORE moving for append
             x, y = get_cursor_pos()
             line = get_line(y)
-            if x < len(line.rstrip('\n\r')):
-                set_cursor_pos(x + 1, y)
+            line_len = len(line.rstrip('\n\r'))
+            # Use API directly to bypass normal mode clamping (allows cursor past last char)
+            N10X.Editor.SetCursorPos((min(x + 1, line_len), y), 0)
+            g_current_edit = {'op': 'i', 'motion': 'a', 'count': 1, 'linewise': False}
             enter_insert_mode()
         return True
 
@@ -3467,6 +3579,7 @@ def handle_normal_mode_key(key):
             N10X.Editor.InsertText(indent + '\n')
             N10X.Editor.SetCursorPos((len(indent), y), 0)
             g_suppress_next_char = True
+            g_current_edit = {'op': 'i', 'motion': 'O', 'count': 1, 'linewise': False}
             enter_insert_mode(skip_undo_save=True)
         else:
             # o - open line below: move to actual end of line (past last char), insert newline + indent
@@ -3475,6 +3588,7 @@ def handle_normal_mode_key(key):
             N10X.Editor.InsertText('\n' + indent)
             # Cursor should now be on the new line after the indent
             g_suppress_next_char = True
+            g_current_edit = {'op': 'i', 'motion': 'o', 'count': 1, 'linewise': False}
             enter_insert_mode(skip_undo_save=True)
         return True
 
@@ -3594,8 +3708,8 @@ def handle_normal_mode_key(key):
                 else:
                     line = get_line(y)
                     line_len = len(line.rstrip('\n\r'))
-                    if x < line_len:
-                        set_cursor_pos(x + 1, y)
+                    # Use API directly to bypass normal mode clamping
+                    N10X.Editor.SetCursorPos((min(x + 1, line_len), y), 0)
                     insert_text(text)
             finalize_undo_cursor()
         return True
