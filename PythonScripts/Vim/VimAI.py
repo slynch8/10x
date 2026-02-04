@@ -128,6 +128,16 @@ SPECIAL_KEY_MAP = {
     'OemQuestion': '/',
     'Oem2': '/',
     'Divide': '/',
+    'Oem1': ';',
+    'Oem7': "'",
+    'OemComma': ',',
+    'OemPeriod': '.',
+    'OemMinus': '-',
+    'OemPlus': '=',
+    'Oem3': '`',
+    'Oem4': '[',
+    'Oem5': '\\',
+    'Oem6': ']',
 }
 
 # Map of shifted characters (US keyboard layout)
@@ -255,7 +265,10 @@ def get_char_from_key(key):
 
     # Handle special key names
     if key_str in SPECIAL_KEY_MAP:
-        return SPECIAL_KEY_MAP[key_str]
+        char = SPECIAL_KEY_MAP[key_str]
+        if key.shift and char in SHIFT_CHAR_MAP:
+            return SHIFT_CHAR_MAP[char]
+        return char
 
     # Handle single character keys
     if len(key_str) == 1:
@@ -270,6 +283,21 @@ def get_char_from_key(key):
 
     return None
 
+def normalize_key_char(key):
+    """Normalize a key to a comparison-friendly character or key name."""
+    actual_char = get_char_from_key(key)
+    if actual_char and len(actual_char) == 1:
+        return actual_char.lower() if actual_char.isalpha() else actual_char
+    return key.key.lower() if len(key.key) == 1 else key.key
+
+def is_function_key(key):
+    """Return True if key is an F-key (F1..F24 style)."""
+    return key.key.startswith('F') and key.key[1:].isdigit()
+
+def is_escape_key(key, char):
+    """Return True if this key should exit to normal mode."""
+    return char == 'Escape' or (key.control and char == '[')
+
 def get_line(y):
     return safe_call(N10X.Editor.GetLine, y, default="") or ""
 
@@ -279,6 +307,34 @@ def get_line_count():
 def get_cursor_pos():
     pos = safe_call(N10X.Editor.GetCursorPos, 0, default=(0, 0))
     return (pos[0], pos[1]) if pos else (0, 0)
+
+def ordered_range(start, end):
+    """Return (start, end) ordered top-left to bottom-right."""
+    if start[1] > end[1] or (start[1] == end[1] and start[0] > end[0]):
+        return end, start
+    return start, end
+
+def get_count(default=1):
+    """Parse the current count prefix or return default."""
+    return int(g_count) if g_count else default
+
+def clear_count():
+    """Clear the current count prefix."""
+    global g_count
+    g_count = ""
+
+def clear_pending_motion(clear_count_flag=True):
+    """Clear any pending motion (and optionally the count)."""
+    global g_pending_motion
+    g_pending_motion = ""
+    if clear_count_flag:
+        clear_count()
+
+def reset_operator_state(clear_count_flag=True):
+    """Clear operator and pending motion (and optionally the count)."""
+    global g_operator
+    g_operator = ""
+    clear_pending_motion(clear_count_flag)
 
 def set_cursor_pos(x, y, extend_selection=False):
     line_count = get_line_count()
@@ -328,9 +384,7 @@ def delete_selection():
     start_x, start_y = start
     end_x, end_y = end
 
-    # Ensure start is before end
-    if start_y > end_y or (start_y == end_y and start_x > end_x):
-        start_x, start_y, end_x, end_y = end_x, end_y, start_x, start_y
+    (start_x, start_y), (end_x, end_y) = ordered_range((start_x, start_y), (end_x, end_y))
 
     clear_selection()
 
@@ -365,6 +419,21 @@ def delete_selection():
     safe_call(N10X.Editor.SetCursorPos, (start_x, start_y), 0)
 
     return sel
+
+def get_visual_range(include_cursor=True, linewise=None):
+    """Return (start, end, linewise) for current visual selection."""
+    start = g_visual_start
+    end = get_cursor_pos()
+    start, end = ordered_range(start, end)
+    if linewise is None:
+        linewise = g_mode == Mode.VISUAL_LINE
+    if linewise:
+        start = (0, start[1])
+        end_line = get_line(end[1])
+        end = (len(end_line), end[1])
+    elif include_cursor:
+        end = (end[0] + 1, end[1])
+    return start, end, linewise
 
 def get_word_at_cursor():
     x, y = get_cursor_pos()
@@ -1524,9 +1593,7 @@ def apply_operator_to_range(op, start, end, linewise=False, edit_info=None, skip
     start_x, start_y = start
     end_x, end_y = end
 
-    # Ensure start is before end
-    if start_y > end_y or (start_y == end_y and start_x > end_x):
-        start_x, start_y, end_x, end_y = end_x, end_y, start_x, start_y
+    (start_x, start_y), (end_x, end_y) = ordered_range((start_x, start_y), (end_x, end_y))
 
     # For yank, save the x position before linewise modification (for cursor restoration)
     yank_restore_x = start_x
@@ -2434,23 +2501,7 @@ def update_visual_selection():
 def visual_operation(op):
     if g_mode not in (Mode.VISUAL, Mode.VISUAL_LINE, Mode.VISUAL_BLOCK):
         return
-
-    start = g_visual_start
-    end = get_cursor_pos()
-
-    # Ensure start < end
-    if start[1] > end[1] or (start[1] == end[1] and start[0] > end[0]):
-        start, end = end, start
-
-    linewise = g_mode == Mode.VISUAL_LINE
-
-    if linewise:
-        start = (0, start[1])
-        end_line = get_line(end[1])
-        end = (len(end_line), end[1])
-    else:
-        # Include character under cursor
-        end = (end[0] + 1, end[1])
+    start, end, linewise = get_visual_range()
 
     apply_operator_to_range(op, start, end, linewise)
     if op == 'c':
@@ -2464,15 +2515,17 @@ def visual_operation(op):
 
 def dispatch_key(key):
     """Dispatch a key to the appropriate handler based on current mode."""
+    global g_last_insert_text
     if g_mode == Mode.INSERT:
         # First check if it's a special key (Escape, Ctrl combos, etc.)
-        result = handle_insert_mode_key(key)
+        result = handle_insert_mode_key(key, track_insert_text=False)
         if result:
             return True
         # For regular characters in insert mode, actually insert them
         char = get_char_from_key(key)
         if char and len(char) == 1 and not key.control and not key.alt:
             N10X.Editor.InsertText(char)
+            g_last_insert_text += char
             return True
         # Handle special keys like Backspace, Enter
         if key.key in ('Backspace', 'Back'):
@@ -2481,6 +2534,8 @@ def dispatch_key(key):
                 line = get_line(y)
                 N10X.Editor.SetLine(y, line[:x-1] + line[x:])
                 set_cursor_pos(x - 1, y)
+                if g_last_insert_text:
+                    g_last_insert_text = g_last_insert_text[:-1]
             return True
         if key.key in ('Return', 'Enter'):
             x, y = get_cursor_pos()
@@ -2490,6 +2545,7 @@ def dispatch_key(key):
             N10X.Editor.SetCursorPos((len(line[:x]), y), 0)
             N10X.Editor.InsertText('\n' + line[x:].rstrip('\n\r'))
             set_cursor_pos(0, y + 1)
+            g_last_insert_text += '\n'
             return True
         return False
     elif g_mode == Mode.COMMAND_LINE:
@@ -2513,18 +2569,7 @@ def handle_normal_mode_key(key):
     global g_pending_window_cmd
 
     # Get the actual character including shift transformations (e.g., Shift+. = >)
-    actual_char = get_char_from_key(key)
-    # For comparison purposes, use lowercase letter but keep symbols as-is
-    if key.key in SPECIAL_KEY_MAP:
-        char = SPECIAL_KEY_MAP[key.key]
-    elif actual_char and len(actual_char) == 1:
-        # Use actual_char for symbols like < > : etc, but lowercase for letters
-        if actual_char.isalpha():
-            char = actual_char.lower()
-        else:
-            char = actual_char
-    else:
-        char = key.key.lower() if len(key.key) == 1 else key.key
+    char = normalize_key_char(key)
     is_shifted = key.shift
 
 
@@ -2559,7 +2604,7 @@ def handle_normal_mode_key(key):
         elif result_name == 'PASS_TO_10X':
             return False
 
-    count = int(g_count) if g_count else 1
+    count = get_count()
 
     # Handle pending motion for operators
     if g_pending_motion:
@@ -2580,8 +2625,7 @@ def handle_normal_mode_key(key):
                     motion_T(target_char, count)
                 end = get_cursor_pos()  # Get position AFTER motion
                 pending = g_pending_motion
-                g_pending_motion = ""
-                g_count = ""
+                clear_pending_motion()
                 if g_operator:
                     # Apply operator to the motion range
                     if pending in ('f', 't'):
@@ -2650,8 +2694,7 @@ def handle_normal_mode_key(key):
                     N10X.Editor.ExecuteCommand("FindFile")
                 except Exception:
                     pass
-            g_pending_motion = ""
-            g_count = ""
+            clear_pending_motion()
             return True
 
         elif g_pending_motion == 'r':
@@ -2669,8 +2712,7 @@ def handle_normal_mode_key(key):
                     # Record for dot-repeat as a replace operation.
                     g_last_edit = {'op': 'c', 'motion': 'r', 'count': 1, 'linewise': False, 'insert_text': target_char}
                 finalize_undo_cursor()
-            g_pending_motion = ""
-            g_count = ""
+            clear_pending_motion()
             return True
 
         elif g_pending_motion == "'":
@@ -2684,8 +2726,7 @@ def handle_normal_mode_key(key):
                     elif g_jump_index > 0:
                         g_jump_index -= 1
                     else:
-                        g_pending_motion = ""
-                        g_count = ""
+                        clear_pending_motion()
                         return True
 
                     if 0 <= g_jump_index < len(g_jump_list):
@@ -2695,8 +2736,7 @@ def handle_normal_mode_key(key):
                             N10X.Editor.OpenFile(filename)
                         set_cursor_pos(pos[0], pos[1])
                         motion_caret()
-                g_pending_motion = ""
-                g_count = ""
+                clear_pending_motion()
                 return True
             if char in g_marks:
                 filename, pos = g_marks[char]
@@ -2706,8 +2746,7 @@ def handle_normal_mode_key(key):
                 push_jump()
                 set_cursor_pos(pos[0], pos[1])
                 motion_caret()
-            g_pending_motion = ""
-            g_count = ""
+            clear_pending_motion()
             return True
 
         elif g_pending_motion == '`':
@@ -2719,8 +2758,7 @@ def handle_normal_mode_key(key):
                     N10X.Editor.OpenFile(filename)
                 push_jump()
                 set_cursor_pos(pos[0], pos[1])
-            g_pending_motion = ""
-            g_count = ""
+            clear_pending_motion()
             return True
 
         elif g_pending_motion == 'm':
@@ -2729,8 +2767,7 @@ def handle_normal_mode_key(key):
                 filename = N10X.Editor.GetCurrentFilename()
                 g_marks[char] = (filename, get_cursor_pos())
                 set_status(f"Mark '{char}' set")
-            g_pending_motion = ""
-            g_count = ""
+            clear_pending_motion()
             return True
 
         elif g_pending_motion == '"':
@@ -2770,46 +2807,39 @@ def handle_normal_mode_key(key):
             elif char == 'a':
                 # za - toggle fold at cursor
                 N10X.Editor.ExecuteCommand("ToggleCollapseExpandRegion")
-            g_pending_motion = ""
-            g_count = ""
+            clear_pending_motion()
             return True
 
         elif g_pending_motion == '[':
             if char == '[':
                 push_jump()
                 motion_section_backward(count, end=False)  # [[
-                g_pending_motion = ""
-                g_count = ""
+                clear_pending_motion()
                 return True
             elif char == ']':
                 push_jump()
                 motion_section_backward(count, end=True)   # []
-                g_pending_motion = ""
-                g_count = ""
+                clear_pending_motion()
                 return True
             else:
                 # Not a valid sequence, cancel and re-process
-                g_pending_motion = ""
-                g_count = ""
+                clear_pending_motion()
                 # Fall through to handle the key normally
 
         elif g_pending_motion == ']':
             if char == ']':
                 push_jump()
                 motion_section_forward(count, end=False)   # ]]
-                g_pending_motion = ""
-                g_count = ""
+                clear_pending_motion()
                 return True
             elif char == '[':
                 push_jump()
                 motion_section_forward(count, end=True)    # ][
-                g_pending_motion = ""
-                g_count = ""
+                clear_pending_motion()
                 return True
             else:
                 # Not a valid sequence, cancel and re-process
-                g_pending_motion = ""
-                g_count = ""
+                clear_pending_motion()
                 # Fall through to handle the key normally
 
         elif g_pending_motion == '@':
@@ -2817,8 +2847,7 @@ def handle_normal_mode_key(key):
             register = char
             repeat_count = count  # Save count before clearing
             # Clear pending motion BEFORE replaying to avoid keys being misinterpreted
-            g_pending_motion = ""
-            g_count = ""
+            clear_pending_motion()
             if register in g_macros:
                 # Wrap entire macro replay in undo group
                 N10X.Editor.PushUndoGroup()
@@ -2913,9 +2942,7 @@ def handle_normal_mode_key(key):
                         end = (end[0] + 1, end[1])
                 edit_info = {'motion': motion_char, 'count': count}
                 apply_operator_to_range(g_operator, start, end, False, edit_info, skip_undo_save=True)
-                g_operator = ""
-                g_pending_motion = ""
-                g_count = ""
+                reset_operator_state()
                 return True
             elif char == '$':
                 start = get_cursor_pos()
@@ -2923,9 +2950,7 @@ def handle_normal_mode_key(key):
                 end = get_cursor_pos()
                 edit_info = {'motion': '$', 'count': count}
                 apply_operator_to_range(g_operator, start, (end[0] + 1, end[1]), False, edit_info, skip_undo_save=True)
-                g_operator = ""
-                g_pending_motion = ""
-                g_count = ""
+                reset_operator_state()
                 return True
             elif char == '0':
                 start = get_cursor_pos()
@@ -2933,9 +2958,7 @@ def handle_normal_mode_key(key):
                 end = get_cursor_pos()
                 edit_info = {'motion': '0', 'count': count}
                 apply_operator_to_range(g_operator, end, start, False, edit_info, skip_undo_save=True)
-                g_operator = ""
-                g_pending_motion = ""
-                g_count = ""
+                reset_operator_state()
                 return True
             elif char == '^':
                 start = get_cursor_pos()
@@ -2943,9 +2966,7 @@ def handle_normal_mode_key(key):
                 end = get_cursor_pos()
                 edit_info = {'motion': '^', 'count': count}
                 apply_operator_to_range(g_operator, end, start, False, edit_info, skip_undo_save=True)
-                g_operator = ""
-                g_pending_motion = ""
-                g_count = ""
+                reset_operator_state()
                 return True
             elif char == 'g' and is_shifted:
                 start = get_cursor_pos()
@@ -2953,9 +2974,7 @@ def handle_normal_mode_key(key):
                 end = get_cursor_pos()
                 edit_info = {'motion': 'G', 'count': count}
                 apply_operator_to_range(g_operator, start, (len(get_line(end[1])), end[1]), True, edit_info, skip_undo_save=True)
-                g_operator = ""
-                g_pending_motion = ""
-                g_count = ""
+                reset_operator_state()
                 return True
             elif char == 'g' and not is_shifted:
                 g_pending_motion = g_operator + 'g'
@@ -2976,9 +2995,7 @@ def handle_normal_mode_key(key):
                     end = (end[0] + 1, end[1])
                 edit_info = {'motion': char, 'count': count}
                 apply_operator_to_range(g_operator, start, end, linewise, edit_info, skip_undo_save=True)
-                g_operator = ""
-                g_pending_motion = ""
-                g_count = ""
+                reset_operator_state()
                 return True
             elif char == 'f':
                 if is_shifted:
@@ -3021,8 +3038,7 @@ def handle_normal_mode_key(key):
                     x, y = get_cursor_pos()
                     apply_operator_to_range('g~', (0, y), (len(get_line(y)), y + count - 1), True)
                 g_operator = ""
-                g_pending_motion = ""
-                g_count = ""
+                clear_pending_motion()
                 return True
             elif char.isdigit() and (g_count or char != '0'):
                 # Accumulate count for motion (e.g., c2w, d3j, c2fe)
@@ -3043,9 +3059,7 @@ def handle_normal_mode_key(key):
                     text_obj = ('i' if inner else 'a') + obj_char
                     edit_info = {'motion': text_obj, 'count': count}
                     apply_operator_to_range(op, obj_range[0], obj_range[1], False, edit_info, skip_undo_save=True)
-            g_operator = ""
-            g_pending_motion = ""
-            g_count = ""
+            reset_operator_state()
             return True
 
         elif g_pending_motion.endswith('g'):
@@ -3056,9 +3070,7 @@ def handle_normal_mode_key(key):
                 target = int(g_count) - 1 if g_count else 0
                 edit_info = {'motion': 'gg', 'count': count}
                 apply_operator_to_range(op, (0, target), (0, start[1]), True, edit_info, skip_undo_save=True)
-            g_operator = ""
-            g_pending_motion = ""
-            g_count = ""
+            reset_operator_state()
             return True
 
         elif g_pending_motion.endswith('f'):
@@ -3073,9 +3085,7 @@ def handle_normal_mode_key(key):
                 end = get_cursor_pos()
                 edit_info = {'motion': 'f', 'motion_arg': target_char, 'count': count}
                 apply_operator_to_range(op, start, (end[0] + 1, end[1]), False, edit_info, skip_undo_save=True)
-                g_operator = ""
-                g_pending_motion = ""
-                g_count = ""
+                reset_operator_state()
             return True
 
         elif g_pending_motion.endswith('F'):
@@ -3089,9 +3099,7 @@ def handle_normal_mode_key(key):
                 end = get_cursor_pos()
                 edit_info = {'motion': 'F', 'motion_arg': target_char, 'count': count}
                 apply_operator_to_range(op, end, start, False, edit_info, skip_undo_save=True)
-                g_operator = ""
-                g_pending_motion = ""
-                g_count = ""
+                reset_operator_state()
             return True
 
         elif g_pending_motion.endswith('t'):
@@ -3105,9 +3113,7 @@ def handle_normal_mode_key(key):
                 end = get_cursor_pos()
                 edit_info = {'motion': 't', 'motion_arg': target_char, 'count': count}
                 apply_operator_to_range(op, start, (end[0] + 1, end[1]), False, edit_info, skip_undo_save=True)
-                g_operator = ""
-                g_pending_motion = ""
-                g_count = ""
+                reset_operator_state()
             return True
 
         elif g_pending_motion.endswith('T'):
@@ -3121,9 +3127,7 @@ def handle_normal_mode_key(key):
                 end = get_cursor_pos()
                 edit_info = {'motion': 'T', 'motion_arg': target_char, 'count': count}
                 apply_operator_to_range(op, end, start, False, edit_info, skip_undo_save=True)
-                g_operator = ""
-                g_pending_motion = ""
-                g_count = ""
+                reset_operator_state()
             return True
 
     # ===========================================
@@ -3440,7 +3444,7 @@ def handle_normal_mode_key(key):
 
     if char == '0':
         motion_0()
-        g_count = ""
+        clear_count()
         return True
 
     if char == '^':
@@ -3470,7 +3474,7 @@ def handle_normal_mode_key(key):
     if char == 'g':
         if is_shifted:
             motion_G(int(g_count) if g_count else None)
-            g_count = ""
+            clear_count()
         else:
             g_pending_motion = 'g'
         return True
@@ -3677,11 +3681,11 @@ def handle_normal_mode_key(key):
 
     if char == 'p':
         # Paste
+        linewise = get_register_linewise()
         text = get_register()
         if text:
             save_undo_cursor()
             x, y = get_cursor_pos()
-            linewise = get_register_linewise()
             if is_shifted:
                 # Paste before (P)
                 if linewise:
@@ -3823,23 +3827,22 @@ def handle_normal_mode_key(key):
         return True
 
     # Pass through function keys and other special keys to 10x
-    if key.key.startswith('F') and key.key[1:].isdigit():
+    if is_function_key(key):
         return False
 
-    g_count = ""
+    clear_count()
     return True
 
 # =============================================================================
 # Visual Mode Key Handler
 # =============================================================================
 
-def _visual_motion(motion_func, *args, clear_count=True):
+def _visual_motion(motion_func, *args, clear_count_flag=True):
     """Execute a motion in visual mode and update selection."""
-    global g_count
     motion_func(*args)
     update_visual_selection()
-    if clear_count:
-        g_count = ""
+    if clear_count_flag:
+        clear_count()
     return True
 
 def handle_visual_mode_key(key):
@@ -3850,23 +3853,12 @@ def handle_visual_mode_key(key):
         g_macro_keys.append(key)
 
     # Get the actual character including shift transformations (e.g., Shift+. = >)
-    actual_char = get_char_from_key(key)
-    # For comparison purposes, use lowercase letter but keep symbols as-is
-    if key.key in SPECIAL_KEY_MAP:
-        char = SPECIAL_KEY_MAP[key.key]
-    elif actual_char and len(actual_char) == 1:
-        # Use actual_char for symbols like < > : etc, but lowercase for letters
-        if actual_char.isalpha():
-            char = actual_char.lower()
-        else:
-            char = actual_char
-    else:
-        char = key.key.lower() if len(key.key) == 1 else key.key
+    char = normalize_key_char(key)
     is_shifted = key.shift
-    count = int(g_count) if g_count else 1
+    count = get_count()
 
     # Escape to normal mode
-    if char == 'Escape' or (key.control and char == '['):
+    if is_escape_key(key, char):
         g_pending_motion = ""
         enter_normal_mode()
         return True
@@ -3875,15 +3867,13 @@ def handle_visual_mode_key(key):
     if g_pending_motion == 'v[':
         motion_section_backward(count, end=(char == ']'))
         update_visual_selection()
-        g_pending_motion = ""
-        g_count = ""
+        clear_pending_motion()
         return True
 
     if g_pending_motion == 'v]':
         motion_section_forward(count, end=(char == '['))
         update_visual_selection()
-        g_pending_motion = ""
-        g_count = ""
+        clear_pending_motion()
         return True
 
     # Handle f/F/t/T pending motions in visual mode
@@ -3893,14 +3883,13 @@ def handle_visual_mode_key(key):
             motion_map = {'f': motion_f, 'F': motion_F, 't': motion_t, 'T': motion_T}
             motion_map[g_pending_motion[1]](target_char, count)
             update_visual_selection()
-        g_pending_motion = ""
-        g_count = ""
+        clear_pending_motion()
         return True
 
     # Handle register selection pending motion
     if g_pending_motion == '"':
         g_current_register = char
-        g_pending_motion = ""
+        clear_pending_motion(clear_count_flag=False)
         return True
 
     # Register selection
@@ -3924,7 +3913,7 @@ def handle_visual_mode_key(key):
     if char == '0':
         return _visual_motion(motion_0)
     if char == '^':
-        return _visual_motion(motion_caret, clear_count=False)
+        return _visual_motion(motion_caret, clear_count_flag=False)
     if char == '%':
         if g_mode == Mode.VISUAL_LINE:
             x, y = get_cursor_pos()
@@ -3938,11 +3927,11 @@ def handle_visual_mode_key(key):
                 set_cursor_pos(brace_x, y)
                 motion_percent()
                 update_visual_selection()
-                g_count = ""
+                clear_count()
                 return True
             # Restore cursor if no brace found
             set_cursor_pos(x, y)
-        return _visual_motion(motion_percent, clear_count=False)
+        return _visual_motion(motion_percent, clear_count_flag=False)
 
     # Shifted/unshifted motion pairs
     shift_motion_pairs = {
@@ -4058,19 +4047,7 @@ def handle_visual_mode_key(key):
 
     if char == '~':
         # Toggle case of selection
-        start = g_visual_start
-        end = get_cursor_pos()
-        if start[1] > end[1] or (start[1] == end[1] and start[0] > end[0]):
-            start, end = end, start
-
-        linewise = g_mode == Mode.VISUAL_LINE
-        if linewise:
-            start = (0, start[1])
-            end_line = get_line(end[1])
-            end = (len(end_line), end[1])
-        else:
-            end = (end[0] + 1, end[1])
-
+        start, end, _linewise = get_visual_range()
         set_selection(start, end)
         text = get_selection()
         if text:
@@ -4086,8 +4063,7 @@ def handle_visual_mode_key(key):
             # I - Insert at start of block on all lines
             start = g_visual_start
             end = get_cursor_pos()
-            if start[1] > end[1]:
-                start, end = end, start
+            start, end = ordered_range(start, end)
             col = min(start[0], end[0])
 
             # Add cursors at the start column for each line
@@ -4105,8 +4081,7 @@ def handle_visual_mode_key(key):
             # A - Append at end of block on all lines
             start = g_visual_start
             end = get_cursor_pos()
-            if start[1] > end[1]:
-                start, end = end, start
+            start, end = ordered_range(start, end)
             col = max(start[0], end[0]) + 1
 
             # Add cursors at the end column for each line
@@ -4124,8 +4099,7 @@ def handle_visual_mode_key(key):
     if char == 'j' and is_shifted:
         start = g_visual_start
         end = get_cursor_pos()
-        if start[1] > end[1]:
-            start, end = end, start
+        start, end = ordered_range(start, end)
         N10X.Editor.PushUndoGroup()
         for _ in range(end[1] - start[1]):
             set_cursor_pos(0, start[1])
@@ -4141,21 +4115,25 @@ def handle_visual_mode_key(key):
         return True
 
     # Pass through function keys and other special keys to 10x
-    if key.key.startswith('F') and key.key[1:].isdigit():
+    if is_function_key(key):
         return False
 
-    g_count = ""
+    clear_count()
     return True
 
 # =============================================================================
 # Insert Mode Key Handler
 # =============================================================================
 
-def handle_insert_mode_key(key):
+def handle_insert_mode_key(key, track_insert_text=True):
     global g_exit_sequence, g_last_insert_text
 
     # Use lowercase for single-char comparisons (consistent with handle_normal_mode_key)
-    char = key.key.lower() if len(key.key) == 1 else key.key
+    char = get_char_from_key(key)
+    if char is None:
+        char = key.key
+    if len(char) == 1 and char.isalpha():
+        char = char.lower()
 
     # Note: macro recording for insert mode is done in on_key before this is called
 
@@ -4169,7 +4147,7 @@ def handle_insert_mode_key(key):
         return False
 
     # Escape
-    if char == 'Escape' or (key.control and char == '['):
+    if is_escape_key(key, char):
         enter_normal_mode()
         return True
 
@@ -4204,8 +4182,8 @@ def handle_insert_mode_key(key):
         # Not implemented - would need state tracking
         return True
 
-    # Track inserted text for . repeat
-    if len(char) == 1 and not key.control and not key.alt:
+    # Track inserted text for . repeat (only when requested)
+    if track_insert_text and len(char) == 1 and not key.control and not key.alt:
         g_last_insert_text += char
 
     return False  # Let 10x handle normal typing
@@ -4226,7 +4204,7 @@ def handle_replace_mode_key(key):
     if char is None:
         char = key.key
 
-    if char == 'Escape' or (key.control and char == '['):
+    if is_escape_key(key, char):
         enter_normal_mode()
         return True
 
@@ -4259,7 +4237,7 @@ def handle_command_line_key(key):
     if char is None:
         char = key.key  # Fallback for special keys like Escape, Enter, etc.
 
-    if char == 'Escape' or (key.control and char == '['):
+    if is_escape_key(key, char):
         enter_normal_mode()
         return True
 
@@ -4336,7 +4314,7 @@ def handle_command_line_key(key):
         return True
 
     # Pass through function keys and other special keys to 10x
-    if key.key.startswith('F') and key.key[1:].isdigit():
+    if is_function_key(key):
         return False
 
     return True
