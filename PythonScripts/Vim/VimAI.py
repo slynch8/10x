@@ -78,6 +78,7 @@ g_command_line = ""
 g_command_line_type = ""  # ":"
 g_registers = {"\"": "", "0": ""}  # Default and yank registers
 g_registers_linewise = {"\"": False, "0": False}
+g_registers_blockwise = {"\"": False, "0": False}
 g_current_register = "\""
 g_marks = {}
 g_last_edit = None  # For . repeat: {'op', 'motion', 'motion_arg', 'count', 'linewise', 'text_obj', 'text_obj_arg'}
@@ -115,6 +116,7 @@ g_mouse_visual_suppress_frames = 0  # Suppress mouse->visual conversion for a fe
 g_mouse_visual_active = False  # True when visual mode was entered via mouse selection
 g_clear_selection_once = False  # Clear selection once (e.g., after goto definition)
 g_pending_window_cmd = False  # Ctrl+W prefix for window commands
+g_desired_col = None  # Preferred column for vertical motions (j/k)
 
 # =============================================================================
 # Utility Functions
@@ -336,7 +338,8 @@ def reset_operator_state(clear_count_flag=True):
     g_operator = ""
     clear_pending_motion(clear_count_flag)
 
-def set_cursor_pos(x, y, extend_selection=False):
+def set_cursor_pos(x, y, extend_selection=False, preserve_desired=False):
+    global g_desired_col
     line_count = get_line_count()
     y = max(0, min(y, line_count - 1))
     line = get_line(y)
@@ -349,6 +352,8 @@ def set_cursor_pos(x, y, extend_selection=False):
         safe_call(N10X.Editor.SetCursorPosSelect, (x, y))
     else:
         safe_call(N10X.Editor.SetCursorPos, (x, y), 0)
+    if not preserve_desired:
+        g_desired_col = x
 
 def get_selection():
     return safe_call(N10X.Editor.GetSelection, default="") or ""
@@ -577,17 +582,22 @@ def push_jump():
         # Point past the end - we're at a new position not in the list
         g_jump_index = len(g_jump_list)
 
-def yank_to_register(text, linewise=False):
-    global g_registers, g_registers_linewise, g_current_register
+def yank_to_register(text, linewise=False, blockwise=False):
+    global g_registers, g_registers_linewise, g_registers_blockwise, g_current_register
     reg = g_current_register
     if linewise and not text.endswith('\n'):
         text = text + '\n'
     g_registers[reg] = text
     g_registers["0"] = text
     g_registers["\""] = text
+    if blockwise:
+        linewise = False
     g_registers_linewise[reg] = linewise
     g_registers_linewise["0"] = linewise
     g_registers_linewise["\""] = linewise
+    g_registers_blockwise[reg] = blockwise
+    g_registers_blockwise["0"] = blockwise
+    g_registers_blockwise["\""] = blockwise
     # Note: System clipboard (+/*) is handled in apply_operator_to_range
     # by calling Copy command while text is selected
     # Reset register selection after use
@@ -638,6 +648,11 @@ def get_register_linewise(reg=None):
     text = get_register(reg)
     return text.endswith('\n') if text else False
 
+def get_register_blockwise(reg=None):
+    if reg is None:
+        reg = g_current_register
+    return g_registers_blockwise.get(reg, False)
+
 # =============================================================================
 # Mode Management
 # =============================================================================
@@ -647,6 +662,7 @@ def enter_mode(mode):
     global g_count, g_operator, g_pending_motion, g_current_register, g_exit_sequence
     global g_last_visual_start, g_last_visual_end, g_last_visual_mode
     global g_change_undo_group, g_current_edit, g_last_edit, g_mouse_visual_active, g_pending_window_cmd
+    global g_desired_col
 
     old_mode = g_mode
     g_mode = mode
@@ -700,6 +716,8 @@ def enter_mode(mode):
             # Otherwise, ensure cursor isn't past end of line
             elif x > 0 and x >= line_len:
                 set_cursor_pos(max(0, line_len - 1), y)
+            # Update preferred column after leaving insert mode
+            g_desired_col = get_cursor_pos()[0]
             # Finalize undo cursor position (after position adjustment)
             finalize_undo_cursor()
         elif old_mode == Mode.REPLACE:
@@ -714,6 +732,8 @@ def enter_mode(mode):
                     g_current_edit['count'] = len(g_last_insert_text)
                 g_last_edit = g_current_edit
                 g_current_edit = None
+            # Update preferred column after leaving replace mode
+            g_desired_col = get_cursor_pos()[0]
             # Finalize undo cursor position
             finalize_undo_cursor()
 
@@ -763,11 +783,19 @@ def motion_l(count=1):
 
 def motion_j(count=1):
     x, y = get_cursor_pos()
-    set_cursor_pos(x, y + count, in_visual_mode())
+    global g_desired_col
+    if g_desired_col is None:
+        g_desired_col = x
+    target_x = g_desired_col
+    set_cursor_pos(target_x, y + count, in_visual_mode(), preserve_desired=True)
 
 def motion_k(count=1):
     x, y = get_cursor_pos()
-    set_cursor_pos(x, y - count, in_visual_mode())
+    global g_desired_col
+    if g_desired_col is None:
+        g_desired_col = x
+    target_x = g_desired_col
+    set_cursor_pos(target_x, y - count, in_visual_mode(), preserve_desired=True)
 
 def motion_0():
     x, y = get_cursor_pos()
@@ -2553,7 +2581,7 @@ def _apply_visual_block_operation(op):
 
     # Yank result for d/c/y and case ops
     if op in ('d', 'c', 'y', 'gu', 'gU', 'g~'):
-        yank_to_register('\n'.join(yanked_lines), linewise=False)
+        yank_to_register('\n'.join(yanked_lines), linewise=False, blockwise=True)
 
     # Position cursor at block start
     if op != 'y':
@@ -3774,11 +3802,43 @@ def handle_normal_mode_key(key):
     if char == 'p':
         # Paste
         linewise = get_register_linewise()
+        blockwise = get_register_blockwise()
         text = get_register()
         if text:
             save_undo_cursor()
             x, y = get_cursor_pos()
-            if is_shifted:
+            if blockwise:
+                base_col = x if is_shifted else x + 1
+                lines = text.split('\n')
+                N10X.Editor.PushUndoGroup()
+                try:
+                    for i, segment in enumerate(lines):
+                        ty = y + i
+                        while ty >= get_line_count():
+                            # Extend file with a new empty line
+                            last_y = get_line_count() - 1
+                            last_line = get_line(last_y)
+                            last_len = len(last_line.rstrip('\n\r'))
+                            N10X.Editor.SetCursorPos((last_len, last_y), 0)
+                            insert_text('\n')
+                        line = get_line(ty)
+                        line_no_nl = line.rstrip('\n\r')
+                        line_suffix = line[len(line_no_nl):]
+                        line_len = len(line_no_nl)
+                        if base_col > line_len:
+                            pad = ' ' * (base_col - line_len)
+                            new_line = line_no_nl + pad + segment + line_suffix
+                        else:
+                            new_line = line_no_nl[:base_col] + segment + line_no_nl[base_col:] + line_suffix
+                        N10X.Editor.SetLine(ty, new_line)
+                finally:
+                    N10X.Editor.PopUndoGroup()
+                # Position cursor at start of pasted block
+                target_col = base_col
+                line = get_line(y)
+                line_len = len(line.rstrip('\n\r'))
+                N10X.Editor.SetCursorPos((min(target_col, line_len), y), 0)
+            elif is_shifted:
                 # Paste before (P)
                 if linewise:
                     # Linewise paste - insert above current line
@@ -4455,6 +4515,9 @@ def on_key(key_str, shift, control, alt):
         # Track Enter/Return for dot repeat
         elif key_str in ('Return', 'Enter'):
             g_last_insert_text += '\n'
+        # Track Tab for dot repeat (Tab doesn't fire on_char_key)
+        elif key_str == 'Tab':
+            g_last_insert_text += '\t'
         # Let on_char_key handle regular typing in insert mode
         return False
 
