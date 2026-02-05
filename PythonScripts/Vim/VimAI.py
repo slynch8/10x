@@ -2498,9 +2498,101 @@ def update_visual_selection():
 
     set_selection(start, end)
 
+def _apply_visual_block_operation(op):
+    """Apply an operator to a visual block selection."""
+    global g_change_undo_group
+
+    # Compute block bounds
+    x1, y1 = g_visual_start
+    x2, y2 = get_cursor_pos()
+    top = min(y1, y2)
+    bottom = max(y1, y2)
+    left = min(x1, x2)
+    right = max(x1, x2)
+    right_exclusive = right + 1
+
+    # Save cursor for undo (except for yank which doesn't modify)
+    if op != 'y':
+        save_undo_cursor()
+
+    # Gather text for yank (block-wise)
+    yanked_lines = []
+
+    if op in ('d', 'c', 'gu', 'gU', 'g~'):
+        N10X.Editor.PushUndoGroup()
+
+    for y in range(top, bottom + 1):
+        line = get_line(y)
+        line_no_nl = line.rstrip('\n\r')
+        line_suffix = line[len(line_no_nl):]
+        line_len = len(line_no_nl)
+
+        if left >= line_len:
+            yanked_lines.append("")
+            continue
+
+        del_end = min(right_exclusive, line_len)
+        segment = line_no_nl[left:del_end]
+        yanked_lines.append(segment)
+
+        if op in ('d', 'c'):
+            new_line = line_no_nl[:left] + line_no_nl[del_end:] + line_suffix
+            N10X.Editor.SetLine(y, new_line)
+        elif op == 'gu':
+            new_line = line_no_nl[:left] + segment.lower() + line_no_nl[del_end:] + line_suffix
+            N10X.Editor.SetLine(y, new_line)
+        elif op == 'gU':
+            new_line = line_no_nl[:left] + segment.upper() + line_no_nl[del_end:] + line_suffix
+            N10X.Editor.SetLine(y, new_line)
+        elif op == 'g~':
+            new_line = line_no_nl[:left] + segment.swapcase() + line_no_nl[del_end:] + line_suffix
+            N10X.Editor.SetLine(y, new_line)
+
+    if op in ('d', 'gu', 'gU', 'g~'):
+        N10X.Editor.PopUndoGroup()
+
+    # Yank result for d/c/y and case ops
+    if op in ('d', 'c', 'y', 'gu', 'gU', 'g~'):
+        yank_to_register('\n'.join(yanked_lines), linewise=False)
+
+    # Position cursor at block start
+    if op != 'y':
+        line = get_line(top)
+        line_len = len(line.rstrip('\n\r'))
+        N10X.Editor.SetCursorPos((min(left, line_len), top), 0)
+
+    if op == 'c':
+        # Enter insert mode with a cursor on each line in the block
+        clear_selection()
+        try:
+            N10X.Editor.ClearMultiCursors()
+        except Exception:
+            pass
+        set_cursor_pos(min(left, len(get_line(top).rstrip('\n\r'))), top)
+        for y in range(top + 1, bottom + 1):
+            try:
+                line_len = len(get_line(y).rstrip('\n\r'))
+                N10X.Editor.AddCursor((min(left, line_len), y))
+            except Exception:
+                pass
+        g_change_undo_group = True
+        enter_insert_mode(skip_undo_save=True)
+        return
+
+    # Finalize undo cursor for operations that don't enter insert mode
+    if op != 'y':
+        finalize_undo_cursor()
+
 def visual_operation(op):
     if g_mode not in (Mode.VISUAL, Mode.VISUAL_LINE, Mode.VISUAL_BLOCK):
         return
+    if g_mode == Mode.VISUAL_BLOCK and op in ('d', 'c', 'y', 'gu', 'gU', 'g~'):
+        _apply_visual_block_operation(op)
+        if op == 'c':
+            return
+        enter_normal_mode()
+        return
+
     start, end, linewise = get_visual_range()
 
     apply_operator_to_range(op, start, end, linewise)
