@@ -232,6 +232,16 @@ def pop_redo_cursor():
         return after_pos
     return None
 
+def push_redo_cursor(before_pos, after_pos):
+    """Push a (before, after) pair directly onto the redo stack."""
+    global g_redo_cursor_stacks
+    filename = _get_current_filename()
+    if filename not in g_redo_cursor_stacks:
+        g_redo_cursor_stacks[filename] = []
+    g_redo_cursor_stacks[filename].append((before_pos, after_pos))
+    if len(g_redo_cursor_stacks[filename]) > 1000:
+        g_redo_cursor_stacks[filename] = g_redo_cursor_stacks[filename][-500:]
+
 def safe_call(func, *args, default=None, **kwargs):
     """Call a function safely, returning default on any exception."""
     try:
@@ -370,6 +380,17 @@ def clear_selection():
 
 def insert_text(text):
     safe_call(N10X.Editor.InsertText, text)
+
+def get_inserted_text_end_pos(start_pos, text):
+    """Return cursor position for the last inserted character after inserting text."""
+    if not text:
+        return start_pos
+    lines = text.split('\n')
+    if len(lines) == 1:
+        return (start_pos[0] + len(text) - 1, start_pos[1])
+    end_y = start_pos[1] + len(lines) - 1
+    end_x = max(0, len(lines[-1]) - 1)
+    return (end_x, end_y)
 
 def delete_selection():
     """Delete the currently selected text and return what was deleted."""
@@ -518,9 +539,11 @@ def _change_number_under_cursor(delta):
 
         # Replace in line
         new_line = line[:num_start] + new_num_str + line[num_end:]
+        save_undo_cursor()
         N10X.Editor.SetLine(y, new_line)
         # Position cursor at end of number
         set_cursor_pos(num_start + len(new_num_str) - 1, y)
+        finalize_undo_cursor()
     except ValueError:
         pass
 
@@ -568,10 +591,24 @@ def update_status():
         status += f" recording @{g_recording_macro}"
     set_status(status)
 
+def _get_callback_store():
+    store = getattr(N10X, "_vim_ai_callbacks", None)
+    if store is None:
+        store = {}
+        setattr(N10X, "_vim_ai_callbacks", store)
+    return store
+
 def push_jump():
     global g_jump_list, g_jump_index
     pos = get_cursor_pos()
     filename = N10X.Editor.GetCurrentFilename()
+    push_jump_pos(pos, filename)
+
+def push_jump_pos(pos, filename=None):
+    """Push a jump list entry for a specific position."""
+    global g_jump_list, g_jump_index
+    if filename is None:
+        filename = N10X.Editor.GetCurrentFilename()
     if filename:
         # Truncate any forward history when making a new jump
         if g_jump_index < len(g_jump_list):
@@ -615,6 +652,7 @@ def get_register(reg=None):
             # Use a workaround: save cursor, paste, get selection, undo
             # This is a hack but 10x doesn't expose clipboard API directly
             x, y = get_cursor_pos()
+            before_pos = (x, y)
             N10X.Editor.ExecuteCommand("Paste")
             # Get the pasted text
             new_x, new_y = get_cursor_pos()
@@ -633,6 +671,8 @@ def get_register(reg=None):
                         lines.append(get_line(i))
                 text = ''.join(lines)
             N10X.Editor.Undo()
+            # Mirror the undo entry as a redo cursor position to keep stacks in sync.
+            push_redo_cursor(before_pos, (new_x, new_y))
             return text
         except Exception:
             pass
@@ -2104,6 +2144,25 @@ def move_cursor_to_selection_start():
     except Exception:
         pass
 
+def move_cursor_to_found_selection_or_restore(before_pos, before_sel_start=None, before_sel_end=None):
+    """Move to selection start if a new find result exists; otherwise restore cursor."""
+    after_sel_start = safe_call(N10X.Editor.GetSelectionStart, default=None)
+    after_sel_end = safe_call(N10X.Editor.GetSelectionEnd, default=None)
+    if not after_sel_start or not after_sel_end or after_sel_start == after_sel_end:
+        set_cursor_pos(before_pos[0], before_pos[1])
+        return False
+    same_selection = (before_sel_start == after_sel_start and before_sel_end == after_sel_end)
+    if same_selection:
+        cur = get_cursor_pos()
+        (sx, sy), (ex, ey) = ordered_range(after_sel_start, after_sel_end)
+        in_selection = (sy < cur[1] or (sy == cur[1] and cur[0] >= sx)) and \
+                       (ey > cur[1] or (ey == cur[1] and cur[0] <= ex))
+        if not in_selection:
+            set_cursor_pos(before_pos[0], before_pos[1])
+            return False
+    move_cursor_to_selection_start()
+    return True
+
 def on_update():
     """Called every frame to check for find panel state changes."""
     global g_find_panel_was_open, g_mouse_visual_suppress_frames, g_mouse_visual_active, g_visual_start
@@ -2155,11 +2214,14 @@ def search_word_under_cursor(direction=1):
     """Search for the word under cursor (* and # commands)."""
     word = get_word_at_cursor()
     if word:
-        push_jump()
+        before_pos = get_cursor_pos()
+        before_sel_start = safe_call(N10X.Editor.GetSelectionStart, default=None)
+        before_sel_end = safe_call(N10X.Editor.GetSelectionEnd, default=None)
         reverse = (direction == -1)
         N10X.Editor.SetFindText(word, False, True, False, reverse)
         N10X.Editor.ExecuteCommand("FindInFileNext")
-        move_cursor_to_selection_start()
+        if move_cursor_to_found_selection_or_restore(before_pos, before_sel_start, before_sel_end):
+            push_jump_pos(before_pos)
         set_status(f"/{word}" if direction == 1 else f"?{word}")
 
 # =============================================================================
@@ -2239,11 +2301,10 @@ def execute_command(cmd):
                     end = int(end_num)
                     # Execute command on range
                     if cmd_char == 'd':
-                        N10X.Editor.PushUndoGroup()
-                        for _ in range(end - start + 1):
-                            set_cursor_pos(0, start - 1)
-                            operator_dd(1)
-                        N10X.Editor.PopUndoGroup()
+                        start_y = max(0, start - 1)
+                        end_y = min(end - 1, get_line_count() - 1)
+                        end_line = get_line(end_y)
+                        apply_operator_to_range('d', (0, start_y), (len(end_line), end_y), linewise=True)
                         return
             except Exception:
                 pass
@@ -2387,8 +2448,8 @@ def execute_command(cmd):
             replace_all = 'g' in flags
             case_insensitive = 'i' in flags
 
-            N10X.Editor.PushUndoGroup()
             count_replaced = 0
+            replacements = []
 
             re_flags = re.IGNORECASE if case_insensitive else 0
             try:
@@ -2432,15 +2493,22 @@ def execute_command(cmd):
                     line = get_line(line_y)
                     new_line = do_replace(line)
                     if new_line != line:
-                        N10X.Editor.SetLine(line_y, new_line)
+                        replacements.append((line_y, new_line))
             else:
                 x, y = get_cursor_pos()
                 line = get_line(y)
                 new_line = do_replace(line)
                 if new_line != line:
-                    N10X.Editor.SetLine(y, new_line)
+                    replacements.append((y, new_line))
 
-            N10X.Editor.PopUndoGroup()
+            if replacements:
+                save_undo_cursor()
+                N10X.Editor.PushUndoGroup()
+                for line_y, new_line in replacements:
+                    N10X.Editor.SetLine(line_y, new_line)
+                N10X.Editor.PopUndoGroup()
+                finalize_undo_cursor()
+
             set_status(f"Substituted {count_replaced} occurrence(s)")
 
     elif command in ('make', 'build'):
@@ -2779,14 +2847,22 @@ def handle_normal_mode_key(key):
             elif char == 'j' and is_shifted:
                 # Join lines without spaces (gJ)
                 x, y = get_cursor_pos()
+                did_join = False
                 for _ in range(count):
                     line = get_line(y)
                     next_line = get_line(y + 1) if y < get_line_count() - 1 else ""
                     if next_line:
+                        if not did_join:
+                            save_undo_cursor()
+                            N10X.Editor.PushUndoGroup()
+                            did_join = True
                         N10X.Editor.SetLine(y, line.rstrip('\n\r') + next_line.lstrip())
                         N10X.Editor.SetCursorPos((0, y + 1), 0)
-                        operator_dd(1)
+                        N10X.Editor.ExecuteCommand("DeleteLine")
                         set_cursor_pos(len(line.rstrip('\n\r')), y)
+                if did_join:
+                    N10X.Editor.PopUndoGroup()
+                    finalize_undo_cursor()
             elif char == 'u' and is_shifted:
                 # gU - uppercase operator
                 g_operator = 'gU'
@@ -2821,17 +2897,18 @@ def handle_normal_mode_key(key):
             # Replace character
             target_char = get_char_from_key(key)
             if target_char is not None:
-                save_undo_cursor()
                 x, y = get_cursor_pos()
                 line = get_line(y)
                 if x < len(line.rstrip('\n\r')):
+                    save_undo_cursor()
                     new_line = line[:x] + target_char + line[x+1:]
                     N10X.Editor.SetLine(y, new_line)
                     # Vim keeps cursor on the replaced character.
                     set_cursor_pos(x, y)
                     # Record for dot-repeat as a replace operation.
                     g_last_edit = {'op': 'c', 'motion': 'r', 'count': 1, 'linewise': False, 'insert_text': target_char}
-                finalize_undo_cursor()
+                if g_pending_undo_before is not None:
+                    finalize_undo_cursor()
             clear_pending_motion()
             return True
 
@@ -3259,11 +3336,13 @@ def handle_normal_mode_key(key):
             return True
 
         if char == 'r':
-            N10X.Editor.Redo()
-            # Restore cursor position from redo stack
-            pos = pop_redo_cursor()
-            if pos:
-                set_cursor_pos(pos[0], pos[1])
+            redo_count = max(1, count)
+            for _ in range(redo_count):
+                N10X.Editor.Redo()
+                # Restore cursor position from redo stack
+                pos = pop_redo_cursor()
+                if pos:
+                    set_cursor_pos(pos[0], pos[1])
             clear_selection()
             return True
 
@@ -3501,20 +3580,24 @@ def handle_normal_mode_key(key):
     if char == 'j':
         if is_shifted:
             # Join lines
-            save_undo_cursor()
             x, y = get_cursor_pos()
-            N10X.Editor.PushUndoGroup()
+            did_join = False
             for _ in range(count):
                 line = get_line(y)
                 next_line = get_line(y + 1) if y < get_line_count() - 1 else ""
                 if next_line:
+                    if not did_join:
+                        save_undo_cursor()
+                        N10X.Editor.PushUndoGroup()
+                        did_join = True
                     new_line = line.rstrip('\n\r') + ' ' + next_line.lstrip()
                     N10X.Editor.SetLine(y, new_line)
                     set_cursor_pos(0, y + 1)
-                    operator_dd(1)
+                    N10X.Editor.ExecuteCommand("DeleteLine")
                     set_cursor_pos(len(line.rstrip('\n\r')), y)
-            N10X.Editor.PopUndoGroup()
-            finalize_undo_cursor()
+            if did_join:
+                N10X.Editor.PopUndoGroup()
+                finalize_undo_cursor()
         else:
             motion_j(count)
         return True
@@ -3743,11 +3826,11 @@ def handle_normal_mode_key(key):
 
     # Editing commands
     if char == 'x':
-        save_undo_cursor()
         if is_shifted:
             # Delete char before cursor
             x, y = get_cursor_pos()
             if x > 0:
+                save_undo_cursor()
                 line = get_line(y)
                 deleted = line[x-1]
                 N10X.Editor.SetLine(y, line[:x-1] + line[x:])
@@ -3759,11 +3842,13 @@ def handle_normal_mode_key(key):
             x, y = get_cursor_pos()
             line = get_line(y)
             if x < len(line.rstrip('\n\r')):
+                save_undo_cursor()
                 deleted = line[x]
                 N10X.Editor.SetLine(y, line[:x] + line[x+1:])
                 yank_to_register(deleted)
                 g_last_edit = {'op': 'd', 'motion': 'x', 'count': count}
-        finalize_undo_cursor()
+        if g_pending_undo_before is not None:
+            finalize_undo_cursor()
         return True
 
     if char == 'r':
@@ -3848,6 +3933,8 @@ def handle_normal_mode_key(key):
                     motion_caret()
                 else:
                     insert_text(text)
+                    end_x, end_y = get_inserted_text_end_pos((x, y), text)
+                    set_cursor_pos(end_x, end_y)
             else:
                 # Paste after (p)
                 if linewise:
@@ -3865,17 +3952,19 @@ def handle_normal_mode_key(key):
                     line = get_line(y)
                     line_len = len(line.rstrip('\n\r'))
                     # Use API directly to bypass normal mode clamping
-                    N10X.Editor.SetCursorPos((min(x + 1, line_len), y), 0)
+                    insert_x = min(x + 1, line_len)
+                    N10X.Editor.SetCursorPos((insert_x, y), 0)
                     insert_text(text)
+                    end_x, end_y = get_inserted_text_end_pos((insert_x, y), text)
+                    set_cursor_pos(end_x, end_y)
             finalize_undo_cursor()
         return True
 
     # Undo
     if char == 'u':
-        if is_shifted:
+        undo_count = max(1, count)
+        for _ in range(undo_count):
             # Undo line (just undo for now)
-            N10X.Editor.Undo()
-        else:
             N10X.Editor.Undo()
             # Restore cursor position from before the edit
             pos = pop_undo_cursor()
@@ -3886,6 +3975,9 @@ def handle_normal_mode_key(key):
 
     # Search
     if char == 'n':
+        before_pos = get_cursor_pos()
+        before_sel_start = safe_call(N10X.Editor.GetSelectionStart, default=None)
+        before_sel_end = safe_call(N10X.Editor.GetSelectionEnd, default=None)
         if is_shifted:
             # N - find previous match
             N10X.Editor.ExecuteCommand("FindInFilePrev")
@@ -3897,7 +3989,7 @@ def handle_normal_mode_key(key):
             if x < len(line.rstrip('\n\r')):
                 set_cursor_pos(x + 1, y)
             N10X.Editor.ExecuteCommand("FindInFileNext")
-        move_cursor_to_selection_start()
+        move_cursor_to_found_selection_or_restore(before_pos, before_sel_start, before_sel_end)
         return True
 
     if char == '*':
@@ -3974,8 +4066,10 @@ def handle_normal_mode_key(key):
                 new_c = c.lower()
             else:
                 new_c = c.upper()
+            save_undo_cursor()
             N10X.Editor.SetLine(y, line[:x] + new_c + line[x+1:])
             set_cursor_pos(x + 1, y)
+            finalize_undo_cursor()
         return True
 
     # Pass through function keys and other special keys to 10x
@@ -4204,8 +4298,12 @@ def handle_visual_mode_key(key):
         text = get_selection()
         if text:
             toggled = text.swapcase()
+            save_undo_cursor()
+            N10X.Editor.PushUndoGroup()
             delete_selection()
             insert_text(toggled)
+            N10X.Editor.PopUndoGroup()
+            finalize_undo_cursor()
         enter_normal_mode()
         return True
 
@@ -4252,17 +4350,23 @@ def handle_visual_mode_key(key):
         start = g_visual_start
         end = get_cursor_pos()
         start, end = ordered_range(start, end)
-        N10X.Editor.PushUndoGroup()
+        did_join = False
         for _ in range(end[1] - start[1]):
             set_cursor_pos(0, start[1])
             line = get_line(start[1])
             next_line = get_line(start[1] + 1)
             if next_line:
+                if not did_join:
+                    save_undo_cursor()
+                    N10X.Editor.PushUndoGroup()
+                    did_join = True
                 new_line = line.rstrip('\n\r') + ' ' + next_line.lstrip()
                 N10X.Editor.SetLine(start[1], new_line)
                 set_cursor_pos(0, start[1] + 1)
-                operator_dd(1)
-        N10X.Editor.PopUndoGroup()
+                N10X.Editor.ExecuteCommand("DeleteLine")
+        if did_join:
+            N10X.Editor.PopUndoGroup()
+            finalize_undo_cursor()
         enter_normal_mode()
         return True
 
@@ -4399,15 +4503,21 @@ def handle_command_line_key(key):
         elif g_command_line_type == '/':
             # Forward search
             if g_command_line:
+                before_pos = get_cursor_pos()
+                before_sel_start = safe_call(N10X.Editor.GetSelectionStart, default=None)
+                before_sel_end = safe_call(N10X.Editor.GetSelectionEnd, default=None)
                 N10X.Editor.SetFindText(g_command_line, False, False, False, False)
                 N10X.Editor.ExecuteCommand("FindInFileNext")
-                move_cursor_to_selection_start()
+                move_cursor_to_found_selection_or_restore(before_pos, before_sel_start, before_sel_end)
         elif g_command_line_type == '?':
             # Reverse search
             if g_command_line:
+                before_pos = get_cursor_pos()
+                before_sel_start = safe_call(N10X.Editor.GetSelectionStart, default=None)
+                before_sel_end = safe_call(N10X.Editor.GetSelectionEnd, default=None)
                 N10X.Editor.SetFindText(g_command_line, False, False, False, True)
                 N10X.Editor.ExecuteCommand("FindInFilePrev")
-                move_cursor_to_selection_start()
+                move_cursor_to_found_selection_or_restore(before_pos, before_sel_start, before_sel_end)
         enter_normal_mode()
         return True
 
@@ -4632,23 +4742,40 @@ def initialize():
     enter_normal_mode()
 
     # Remove any existing callbacks first (in case of script reload)
-    try:
-        N10X.Editor.RemoveOnInterceptKeyFunction(on_key)
-    except Exception:
-        pass
-    try:
-        N10X.Editor.RemoveOnInterceptCharKeyFunction(on_char_key)
-    except Exception:
-        pass
-    try:
-        N10X.Editor.RemoveUpdateFunction(on_update)
-    except Exception:
-        pass
+    callbacks = _get_callback_store()
+    prev_on_key = callbacks.get("on_key")
+    if prev_on_key:
+        try:
+            N10X.Editor.RemoveOnInterceptKeyFunction(prev_on_key)
+        except Exception:
+            pass
+    prev_on_char_key = callbacks.get("on_char_key")
+    if prev_on_char_key:
+        try:
+            N10X.Editor.RemoveOnInterceptCharKeyFunction(prev_on_char_key)
+        except Exception:
+            pass
+    prev_on_settings_changed = callbacks.get("on_settings_changed")
+    if prev_on_settings_changed:
+        try:
+            N10X.Editor.RemoveOnSettingsChangedFunction(prev_on_settings_changed)
+        except Exception:
+            pass
+    prev_on_update = callbacks.get("on_update")
+    if prev_on_update:
+        try:
+            N10X.Editor.RemoveUpdateFunction(prev_on_update)
+        except Exception:
+            pass
     # Register callbacks
     N10X.Editor.AddOnInterceptCharKeyFunction(on_char_key)
     N10X.Editor.AddOnInterceptKeyFunction(on_key)
     N10X.Editor.AddOnSettingsChangedFunction(on_settings_changed)
     N10X.Editor.AddUpdateFunction(on_update)
+    callbacks["on_key"] = on_key
+    callbacks["on_char_key"] = on_char_key
+    callbacks["on_settings_changed"] = on_settings_changed
+    callbacks["on_update"] = on_update
 
 # IMPORTANT: Do not remove this __name__ guard. It is required due to how 10x
 # loads VimUser.py and Vim.py - VimUser.py imports Vim.py, and without this guard
