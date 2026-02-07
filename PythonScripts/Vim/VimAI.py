@@ -365,6 +365,13 @@ def set_cursor_pos(x, y, extend_selection=False, preserve_desired=False):
     if not preserve_desired:
         g_desired_col = x
 
+def set_cursor_pos_raw(pos, update_desired=True):
+    """Set cursor position directly (no clamping), optionally updating desired column."""
+    global g_desired_col
+    safe_call(N10X.Editor.SetCursorPos, pos, 0)
+    if update_desired:
+        g_desired_col = pos[0]
+
 def get_selection():
     return safe_call(N10X.Editor.GetSelection, default="") or ""
 
@@ -394,6 +401,7 @@ def get_inserted_text_end_pos(start_pos, text):
 
 def delete_selection():
     """Delete the currently selected text and return what was deleted."""
+    global g_desired_col
     sel = get_selection()
     if not sel:
         return ""
@@ -443,6 +451,7 @@ def delete_selection():
     # Position cursor at start of deleted region
     # Use API directly to avoid normal mode clamping (line may now be shorter)
     safe_call(N10X.Editor.SetCursorPos, (start_x, start_y), 0)
+    g_desired_col = start_x
 
     return sel
 
@@ -1711,7 +1720,7 @@ def apply_operator_to_range(op, start, end, linewise=False, edit_info=None, skip
         delete_selection()
         # Reposition cursor using API directly to bypass normal mode clamping,
         # since we're about to enter insert mode and may need to be at end of line
-        N10X.Editor.SetCursorPos((start_x, start_y), 0)
+        set_cursor_pos_raw((start_x, start_y))
         g_suppress_next_char = True  # Don't insert the motion key
         # Skip undo save - cursor was already saved before the motion
         enter_insert_mode(skip_undo_save=True)
@@ -2077,7 +2086,7 @@ def _repeat_last_edit(repeat_count=1):
                 break
         line_len = len(line.rstrip('\n\r'))
         # Position at end of line and insert newline + indent + text
-        N10X.Editor.SetCursorPos((line_len, y), 0)
+        set_cursor_pos_raw((line_len, y))
         N10X.Editor.InsertText('\n' + indent + (insert_text_content or ''))
         # Position cursor at end of inserted text on new line
         new_y = y + 1
@@ -2099,7 +2108,7 @@ def _repeat_last_edit(repeat_count=1):
             else:
                 break
         # Position at start of line and insert indent + text + newline
-        N10X.Editor.SetCursorPos((0, y), 0)
+        set_cursor_pos_raw((0, y))
         N10X.Editor.InsertText(indent + (insert_text_content or '') + '\n')
         # Position cursor at end of inserted text on the new line (which is at y)
         if insert_text_content:
@@ -2655,7 +2664,7 @@ def _apply_visual_block_operation(op):
     if op != 'y':
         line = get_line(top)
         line_len = len(line.rstrip('\n\r'))
-        N10X.Editor.SetCursorPos((min(left, line_len), top), 0)
+        set_cursor_pos_raw((min(left, line_len), top))
 
     if op == 'c':
         # Enter insert mode with a cursor on each line in the block
@@ -2730,7 +2739,7 @@ def dispatch_key(key):
             line = get_line(y)
             N10X.Editor.SetLine(y, line[:x])
             # Insert new line below
-            N10X.Editor.SetCursorPos((len(line[:x]), y), 0)
+            set_cursor_pos_raw((len(line[:x]), y), update_desired=False)
             N10X.Editor.InsertText('\n' + line[x:].rstrip('\n\r'))
             set_cursor_pos(0, y + 1)
             g_last_insert_text += '\n'
@@ -2800,20 +2809,30 @@ def handle_normal_mode_key(key):
             target_char = get_char_from_key(key)
             if target_char is not None:
                 # Save undo cursor BEFORE motion if there's an operator
+                saved_undo = False
                 if g_operator and g_operator != 'y':
                     save_undo_cursor()
+                    saved_undo = True
                 start = get_cursor_pos()  # Save position BEFORE motion
                 if g_pending_motion == 'f':
-                    motion_f(target_char, count)
+                    moved = motion_f(target_char, count)
                 elif g_pending_motion == 'F':
-                    motion_F(target_char, count)
+                    moved = motion_F(target_char, count)
                 elif g_pending_motion == 't':
-                    motion_t(target_char, count)
+                    moved = motion_t(target_char, count)
                 elif g_pending_motion == 'T':
-                    motion_T(target_char, count)
+                    moved = motion_T(target_char, count)
+                else:
+                    moved = False
                 end = get_cursor_pos()  # Get position AFTER motion
                 pending = g_pending_motion
                 clear_pending_motion()
+                if not moved:
+                    if saved_undo:
+                        global g_pending_undo_before
+                        g_pending_undo_before = None
+                    g_operator = ""
+                    return True
                 if g_operator:
                     # Apply operator to the motion range
                     if pending in ('f', 't'):
@@ -2857,7 +2876,7 @@ def handle_normal_mode_key(key):
                             N10X.Editor.PushUndoGroup()
                             did_join = True
                         N10X.Editor.SetLine(y, line.rstrip('\n\r') + next_line.lstrip())
-                        N10X.Editor.SetCursorPos((0, y + 1), 0)
+                        set_cursor_pos_raw((0, y + 1), update_desired=False)
                         N10X.Editor.ExecuteCommand("DeleteLine")
                         set_cursor_pos(len(line.rstrip('\n\r')), y)
                 if did_join:
@@ -3275,11 +3294,19 @@ def handle_normal_mode_key(key):
             target_char = get_char_from_key(key)
             if target_char is not None:
                 op = g_pending_motion[:-1]
+                saved_undo = False
                 if op != 'y':
                     save_undo_cursor()
+                    saved_undo = True
                 start = get_cursor_pos()
-                motion_f(target_char, count)
+                moved = motion_f(target_char, count)
                 end = get_cursor_pos()
+                if not moved:
+                    if saved_undo:
+                        global g_pending_undo_before
+                        g_pending_undo_before = None
+                    reset_operator_state()
+                    return True
                 edit_info = {'motion': 'f', 'motion_arg': target_char, 'count': count}
                 apply_operator_to_range(op, start, (end[0] + 1, end[1]), False, edit_info, skip_undo_save=True)
                 reset_operator_state()
@@ -3289,11 +3316,19 @@ def handle_normal_mode_key(key):
             target_char = get_char_from_key(key)
             if target_char is not None:
                 op = g_pending_motion[:-1]
+                saved_undo = False
                 if op != 'y':
                     save_undo_cursor()
+                    saved_undo = True
                 start = get_cursor_pos()
-                motion_F(target_char, count)
+                moved = motion_F(target_char, count)
                 end = get_cursor_pos()
+                if not moved:
+                    if saved_undo:
+                        global g_pending_undo_before
+                        g_pending_undo_before = None
+                    reset_operator_state()
+                    return True
                 edit_info = {'motion': 'F', 'motion_arg': target_char, 'count': count}
                 apply_operator_to_range(op, end, start, False, edit_info, skip_undo_save=True)
                 reset_operator_state()
@@ -3303,11 +3338,19 @@ def handle_normal_mode_key(key):
             target_char = get_char_from_key(key)
             if target_char is not None:
                 op = g_pending_motion[:-1]
+                saved_undo = False
                 if op != 'y':
                     save_undo_cursor()
+                    saved_undo = True
                 start = get_cursor_pos()
-                motion_t(target_char, count)
+                moved = motion_t(target_char, count)
                 end = get_cursor_pos()
+                if not moved:
+                    if saved_undo:
+                        global g_pending_undo_before
+                        g_pending_undo_before = None
+                    reset_operator_state()
+                    return True
                 edit_info = {'motion': 't', 'motion_arg': target_char, 'count': count}
                 apply_operator_to_range(op, start, (end[0] + 1, end[1]), False, edit_info, skip_undo_save=True)
                 reset_operator_state()
@@ -3317,11 +3360,19 @@ def handle_normal_mode_key(key):
             target_char = get_char_from_key(key)
             if target_char is not None:
                 op = g_pending_motion[:-1]
+                saved_undo = False
                 if op != 'y':
                     save_undo_cursor()
+                    saved_undo = True
                 start = get_cursor_pos()
-                motion_T(target_char, count)
+                moved = motion_T(target_char, count)
                 end = get_cursor_pos()
+                if not moved:
+                    if saved_undo:
+                        global g_pending_undo_before
+                        g_pending_undo_before = None
+                    reset_operator_state()
+                    return True
                 edit_info = {'motion': 'T', 'motion_arg': target_char, 'count': count}
                 apply_operator_to_range(op, end, start, False, edit_info, skip_undo_save=True)
                 reset_operator_state()
@@ -3751,7 +3802,7 @@ def handle_normal_mode_key(key):
             line = get_line(y)
             line_len = len(line.rstrip('\n\r'))
             g_pre_insert_pos = (max(0, line_len - 1), y)
-            N10X.Editor.SetCursorPos((line_len, y), 0)
+            set_cursor_pos_raw((line_len, y), update_desired=False)
             g_current_edit = {'op': 'i', 'motion': 'A', 'count': 1, 'linewise': False}
             enter_insert_mode()
         else:
@@ -3760,7 +3811,7 @@ def handle_normal_mode_key(key):
             line = get_line(y)
             line_len = len(line.rstrip('\n\r'))
             # Use API directly to bypass normal mode clamping (allows cursor past last char)
-            N10X.Editor.SetCursorPos((min(x + 1, line_len), y), 0)
+            set_cursor_pos_raw((min(x + 1, line_len), y), update_desired=False)
             g_current_edit = {'op': 'i', 'motion': 'a', 'count': 1, 'linewise': False}
             enter_insert_mode()
         return True
@@ -3782,16 +3833,16 @@ def handle_normal_mode_key(key):
         g_change_undo_group = True
         if is_shifted:
             # O - open line above: move to start of line, insert indent + newline
-            N10X.Editor.SetCursorPos((0, y), 0)
+            set_cursor_pos_raw((0, y), update_desired=False)
             N10X.Editor.InsertText(indent + '\n')
-            N10X.Editor.SetCursorPos((len(indent), y), 0)
+            set_cursor_pos_raw((len(indent), y), update_desired=False)
             g_suppress_next_char = True
             g_current_edit = {'op': 'i', 'motion': 'O', 'count': 1, 'linewise': False}
             enter_insert_mode(skip_undo_save=True)
         else:
             # o - open line below: move to actual end of line (past last char), insert newline + indent
             line_len = len(line.rstrip('\n\r'))
-            N10X.Editor.SetCursorPos((line_len, y), 0)  # Use API directly to avoid normal mode clamping
+            set_cursor_pos_raw((line_len, y), update_desired=False)  # Use API directly to avoid normal mode clamping
             N10X.Editor.InsertText('\n' + indent)
             # Cursor should now be on the new line after the indent
             g_suppress_next_char = True
@@ -3904,7 +3955,7 @@ def handle_normal_mode_key(key):
                             last_y = get_line_count() - 1
                             last_line = get_line(last_y)
                             last_len = len(last_line.rstrip('\n\r'))
-                            N10X.Editor.SetCursorPos((last_len, last_y), 0)
+                            set_cursor_pos_raw((last_len, last_y), update_desired=False)
                             insert_text('\n')
                         line = get_line(ty)
                         line_no_nl = line.rstrip('\n\r')
@@ -3922,7 +3973,7 @@ def handle_normal_mode_key(key):
                 target_col = base_col
                 line = get_line(y)
                 line_len = len(line.rstrip('\n\r'))
-                N10X.Editor.SetCursorPos((min(target_col, line_len), y), 0)
+                set_cursor_pos_raw((min(target_col, line_len), y))
             elif is_shifted:
                 # Paste before (P)
                 if linewise:
@@ -3942,7 +3993,7 @@ def handle_normal_mode_key(key):
                     line = get_line(y)
                     line_len = len(line.rstrip('\n\r'))
                     # Move to end of line content (use API directly to avoid normal mode clamping)
-                    N10X.Editor.SetCursorPos((line_len, y), 0)
+                    set_cursor_pos_raw((line_len, y), update_desired=False)
                     # Insert newline + the text without its trailing newline
                     text_to_insert = text.rstrip('\n')
                     insert_text('\n' + text_to_insert)
@@ -3953,7 +4004,7 @@ def handle_normal_mode_key(key):
                     line_len = len(line.rstrip('\n\r'))
                     # Use API directly to bypass normal mode clamping
                     insert_x = min(x + 1, line_len)
-                    N10X.Editor.SetCursorPos((insert_x, y), 0)
+                    set_cursor_pos_raw((insert_x, y), update_desired=False)
                     insert_text(text)
                     end_x, end_y = get_inserted_text_end_pos((insert_x, y), text)
                     set_cursor_pos(end_x, end_y)
