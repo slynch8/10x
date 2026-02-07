@@ -649,12 +649,13 @@ def yank_to_register(text, linewise=False, blockwise=False):
     # Reset register selection after use
     g_current_register = "\""
 
-def get_register(reg=None):
+def get_register(reg=None, preserve_current=False):
     global g_current_register
     if reg is None:
         reg = g_current_register
-    # Reset register selection after use
-    g_current_register = "\""
+    # Reset register selection after use unless explicitly preserved
+    if not preserve_current:
+        g_current_register = "\""
     if reg == "+" or reg == "*":
         # System clipboard - try to get from clipboard via 10x
         try:
@@ -688,13 +689,14 @@ def get_register(reg=None):
         return g_registers.get("\"", "")
     return g_registers.get(reg, "")
 
-def get_register_linewise(reg=None):
+def get_register_linewise(reg=None, text=None):
     if reg is None:
         reg = g_current_register
     # Default to stored flag; fallback to newline heuristic for unknown regs.
     if reg in g_registers_linewise:
         return g_registers_linewise.get(reg, False)
-    text = get_register(reg)
+    if text is None:
+        text = get_register(reg, preserve_current=True)
     return text.endswith('\n') if text else False
 
 def get_register_blockwise(reg=None):
@@ -762,6 +764,9 @@ def enter_mode(mode):
             # If nothing was typed, restore to pre-insert position
             if not g_last_insert_text and g_pre_insert_pos[1] == y:
                 set_cursor_pos(g_pre_insert_pos[0], g_pre_insert_pos[1])
+            # Otherwise, move cursor back one (vim leaves cursor on last inserted char)
+            elif g_last_insert_text and x > 0:
+                set_cursor_pos(x - 1, y)
             # Otherwise, ensure cursor isn't past end of line
             elif x > 0 and x >= line_len:
                 set_cursor_pos(max(0, line_len - 1), y)
@@ -3212,6 +3217,21 @@ def handle_normal_mode_key(key):
                 apply_operator_to_range(g_operator, start, end, linewise, edit_info, skip_undo_save=True)
                 reset_operator_state()
                 return True
+            elif char == '{' or char == '}':
+                start = get_cursor_pos()
+                if char == '{':
+                    motion_brace_backward(count)
+                else:
+                    motion_brace_forward(count)
+                end = get_cursor_pos()
+                end = (len(get_line(end[1])), end[1])
+                edit_info = {'motion': char, 'count': count}
+                if char == '{':
+                    apply_operator_to_range(g_operator, end, start, True, edit_info, skip_undo_save=True)
+                else:
+                    apply_operator_to_range(g_operator, start, end, True, edit_info, skip_undo_save=True)
+                reset_operator_state()
+                return True
             elif char == 'f':
                 if is_shifted:
                     g_pending_motion = g_operator + 'F'
@@ -3932,9 +3952,10 @@ def handle_normal_mode_key(key):
 
     if char == 'p':
         # Paste
-        linewise = get_register_linewise()
-        blockwise = get_register_blockwise()
-        text = get_register()
+        reg = g_current_register
+        text = get_register(reg)
+        linewise = get_register_linewise(reg, text)
+        blockwise = get_register_blockwise(reg)
         if text:
             save_undo_cursor()
             x, y = get_cursor_pos()
