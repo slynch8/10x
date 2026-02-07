@@ -2763,7 +2763,7 @@ def handle_normal_mode_key(key):
     global g_recording_macro, g_macro_keys, g_macros, g_mode
     global g_suppress_next_char, g_change_undo_group, g_current_edit, g_last_edit
     global g_jump_index, g_jump_list, g_pre_insert_pos, g_mouse_visual_suppress_frames, g_clear_selection_once
-    global g_pending_window_cmd
+    global g_pending_window_cmd, g_pending_undo_before
 
     # Get the actual character including shift transformations (e.g., Shift+. = >)
     char = normalize_key_char(key)
@@ -2829,7 +2829,6 @@ def handle_normal_mode_key(key):
                 clear_pending_motion()
                 if not moved:
                     if saved_undo:
-                        global g_pending_undo_before
                         g_pending_undo_before = None
                     g_operator = ""
                     return True
@@ -3303,7 +3302,6 @@ def handle_normal_mode_key(key):
                 end = get_cursor_pos()
                 if not moved:
                     if saved_undo:
-                        global g_pending_undo_before
                         g_pending_undo_before = None
                     reset_operator_state()
                     return True
@@ -3325,7 +3323,6 @@ def handle_normal_mode_key(key):
                 end = get_cursor_pos()
                 if not moved:
                     if saved_undo:
-                        global g_pending_undo_before
                         g_pending_undo_before = None
                     reset_operator_state()
                     return True
@@ -3347,7 +3344,6 @@ def handle_normal_mode_key(key):
                 end = get_cursor_pos()
                 if not moved:
                     if saved_undo:
-                        global g_pending_undo_before
                         g_pending_undo_before = None
                     reset_operator_state()
                     return True
@@ -3369,7 +3365,6 @@ def handle_normal_mode_key(key):
                 end = get_cursor_pos()
                 if not moved:
                     if saved_undo:
-                        global g_pending_undo_before
                         g_pending_undo_before = None
                     reset_operator_state()
                     return True
