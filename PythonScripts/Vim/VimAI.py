@@ -117,6 +117,7 @@ g_mouse_visual_active = False  # True when visual mode was entered via mouse sel
 g_clear_selection_once = False  # Clear selection once (e.g., after goto definition)
 g_pending_window_cmd = False  # Ctrl+W prefix for window commands
 g_desired_col = None  # Preferred column for vertical motions (j/k)
+g_command_visual_range = None  # Visual selection captured for command-line execution
 
 # =============================================================================
 # Utility Functions
@@ -814,13 +815,31 @@ def enter_visual_block_mode():
     enter_mode(Mode.VISUAL_BLOCK)
     update_visual_selection()
 
-def enter_command_line_mode(char):
-    global g_mode, g_command_line, g_command_line_type, g_command_history_index
+def _capture_visual_command_range():
+    """Capture current visual range for command-line operations like :s."""
+    if not in_visual_mode():
+        return None
+
+    if g_mode == Mode.VISUAL_BLOCK:
+        # Block selections are rectangular; for : commands use whole selected lines.
+        x1, y1 = g_visual_start
+        x2, y2 = get_cursor_pos()
+        top = min(y1, y2)
+        bottom = max(y1, y2)
+        end_line = get_line(bottom)
+        return {'start': (0, top), 'end': (len(end_line), bottom), 'linewise': True}
+
+    start, end, linewise = get_visual_range(include_cursor=True)
+    return {'start': start, 'end': end, 'linewise': linewise}
+
+def enter_command_line_mode(char, initial_text="", visual_range=None):
+    global g_mode, g_command_line, g_command_line_type, g_command_history_index, g_command_visual_range
     g_mode = Mode.COMMAND_LINE
-    g_command_line = ""
+    g_command_line = initial_text
     g_command_line_type = char
     g_command_history_index = -1
-    set_status(char)
+    g_command_visual_range = visual_range
+    set_status(char + g_command_line)
     set_cursor_style()
 
 # =============================================================================
@@ -2252,12 +2271,18 @@ def _switch_buffer(direction):
         safe_call(N10X.Editor.FocusFile, files[new_idx])
 
 def execute_command(cmd):
-    global g_command_history
+    global g_command_history, g_command_visual_range
 
     if cmd.startswith(':'):
         cmd = cmd[1:]
 
     cmd = cmd.strip()
+    command_visual_range = g_command_visual_range
+    g_command_visual_range = None
+
+    if cmd.startswith("'<,'>"):
+        cmd = cmd[5:].lstrip()
+
     if not cmd:
         return
 
@@ -2449,11 +2474,14 @@ def execute_command(cmd):
     elif command.startswith('s/') or command.startswith('%s/'):
         # Substitute command
         import re
-        is_global_file = command.startswith('%')
+        substitute_cmd = command
+        is_global_file = substitute_cmd.startswith('%')
         if is_global_file:
-            cmd = command[1:]
+            substitute_cmd = substitute_cmd[1:]
 
-        parts = cmd.split('/')
+        is_visual_range = (not is_global_file and command_visual_range is not None)
+
+        parts = substitute_cmd.split('/')
         if len(parts) >= 3:
             pattern = parts[1]
             replacement = parts[2]
@@ -2508,6 +2536,28 @@ def execute_command(cmd):
                     new_line = do_replace(line)
                     if new_line != line:
                         replacements.append((line_y, new_line))
+            elif is_visual_range:
+                start = command_visual_range['start']
+                end = command_visual_range['end']
+                (start_x, start_y), (end_x, end_y) = ordered_range(start, end)
+
+                for line_y in range(start_y, end_y + 1):
+                    line = get_line(line_y)
+                    line_len = len(line)
+
+                    range_start_x = start_x if line_y == start_y else 0
+                    range_end_x = end_x if line_y == end_y else line_len
+                    range_start_x = max(0, min(range_start_x, line_len))
+                    range_end_x = max(range_start_x, min(range_end_x, line_len))
+
+                    line_prefix = line[:range_start_x]
+                    line_target = line[range_start_x:range_end_x]
+                    line_suffix = line[range_end_x:]
+
+                    new_target = do_replace(line_target)
+                    new_line = line_prefix + new_target + line_suffix
+                    if new_line != line:
+                        replacements.append((line_y, new_line))
             else:
                 x, y = get_cursor_pos()
                 line = get_line(y)
@@ -2523,7 +2573,10 @@ def execute_command(cmd):
                 N10X.Editor.PopUndoGroup()
                 finalize_undo_cursor()
 
-            set_status(f"Substituted {count_replaced} occurrence(s)")
+            if is_visual_range:
+                set_status(f"Substituted {count_replaced} occurrence(s) in selection")
+            else:
+                set_status(f"Substituted {count_replaced} occurrence(s)")
 
     elif command in ('make', 'build'):
         safe_call(N10X.Editor.ExecuteCommand, "BuildActiveWorkspace")
@@ -4272,6 +4325,9 @@ def handle_visual_mode_key(key):
     # Repeat motions
     if char == ';' and not is_shifted:
         return _visual_motion(motion_semicolon, count)
+    if char == ':' or (char == ';' and is_shifted):
+        enter_command_line_mode(':', "'<,'>", _capture_visual_command_range())
+        return True
     if char == ',':
         return _visual_motion(motion_comma, count)
 
