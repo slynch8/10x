@@ -4,6 +4,7 @@
 
 import N10X
 from enum import Enum, auto
+from contextlib import contextmanager
 
 # =============================================================================
 # Enums and Constants
@@ -251,6 +252,15 @@ def safe_call(func, *args, default=None, **kwargs):
     except Exception:
         return default
 
+@contextmanager
+def undo_group():
+    """Ensure undo groups are always balanced, even on errors."""
+    N10X.Editor.PushUndoGroup()
+    try:
+        yield
+    finally:
+        N10X.Editor.PopUndoGroup()
+
 def get_setting_bool(name, default=False):
     """Get a boolean setting value."""
     try:
@@ -436,18 +446,15 @@ def delete_selection():
         # Merge: keep part before selection on first line + part after selection on last line
         new_line = first_line[:start_x] + last_line[end_x:]
 
-        N10X.Editor.PushUndoGroup()
+        with undo_group():
+            # Set the first line to the merged content
+            N10X.Editor.SetLine(start_y, new_line)
 
-        # Set the first line to the merged content
-        N10X.Editor.SetLine(start_y, new_line)
-
-        # Delete the extra lines (from start_y+1 to end_y)
-        # Position cursor on each line and delete it
-        for _ in range(end_y - start_y):
-            set_cursor_pos(0, start_y + 1)
-            N10X.Editor.ExecuteCommand("DeleteLine")
-
-        N10X.Editor.PopUndoGroup()
+            # Delete the extra lines (from start_y+1 to end_y)
+            # Position cursor on each line and delete it
+            for _ in range(end_y - start_y):
+                set_cursor_pos(0, start_y + 1)
+                N10X.Editor.ExecuteCommand("DeleteLine")
 
     # Position cursor at start of deleted region
     # Use API directly to avoid normal mode clamping (line may now be shorter)
@@ -1722,12 +1729,11 @@ def apply_operator_to_range(op, start, end, linewise=False, edit_info=None, skip
         if linewise:
             # Delete entire lines, not just content
             clear_selection()
-            N10X.Editor.PushUndoGroup()
-            num_lines = end_y - start_y + 1
-            set_cursor_pos(0, start_y)
-            for _ in range(num_lines):
-                N10X.Editor.ExecuteCommand("DeleteLine")
-            N10X.Editor.PopUndoGroup()
+            with undo_group():
+                num_lines = end_y - start_y + 1
+                set_cursor_pos(0, start_y)
+                for _ in range(num_lines):
+                    N10X.Editor.ExecuteCommand("DeleteLine")
             # Position cursor on the line that took the place of deleted lines
             new_y = min(start_y, get_line_count() - 1)
             set_cursor_pos(0, new_y)
@@ -1790,19 +1796,17 @@ def apply_operator_to_range(op, start, end, linewise=False, edit_info=None, skip
     elif op == 'gu':  # lowercase
         new_text = text.lower()
         # Selection is already set, delete it and insert the new text
-        N10X.Editor.PushUndoGroup()
-        delete_selection()
-        insert_text(new_text)
-        N10X.Editor.PopUndoGroup()
+        with undo_group():
+            delete_selection()
+            insert_text(new_text)
         set_cursor_pos(start_x, start_y)
 
     elif op == 'gU':  # uppercase
         new_text = text.upper()
         # Selection is already set, delete it and insert the new text
-        N10X.Editor.PushUndoGroup()
-        delete_selection()
-        insert_text(new_text)
-        N10X.Editor.PopUndoGroup()
+        with undo_group():
+            delete_selection()
+            insert_text(new_text)
         set_cursor_pos(start_x, start_y)
 
     elif op == '=':  # auto-indent
@@ -1813,10 +1817,9 @@ def apply_operator_to_range(op, start, end, linewise=False, edit_info=None, skip
     elif op == 'g~':  # toggle case
         new_text = text.swapcase()
         # Selection is already set, delete it and insert the new text
-        N10X.Editor.PushUndoGroup()
-        delete_selection()
-        insert_text(new_text)
-        N10X.Editor.PopUndoGroup()
+        with undo_group():
+            delete_selection()
+            insert_text(new_text)
         set_cursor_pos(start_x, start_y)
 
     # Finalize undo cursor for operations that don't enter insert mode
@@ -1857,7 +1860,7 @@ def operator_cc(count=1):
 
 def _repeat_last_edit(repeat_count=1):
     """Repeat the last edit operation (for dot command)."""
-    global g_last_edit
+    global g_last_edit, g_pending_undo_before
 
     if not g_last_edit or not isinstance(g_last_edit, dict):
         return
@@ -1876,6 +1879,7 @@ def _repeat_last_edit(repeat_count=1):
     use_count = repeat_count if repeat_count > 1 else edit_count
 
     if not op or not motion:
+        g_pending_undo_before = None
         return
 
     # Execute the motion and get the range
@@ -1962,6 +1966,7 @@ def _repeat_last_edit(repeat_count=1):
         if obj_range:
             start, end = obj_range
         else:
+            g_pending_undo_before = None
             return  # No matching text object found
     elif motion == 'gg':
         target = use_count - 1 if use_count else 0
@@ -1988,12 +1993,14 @@ def _repeat_last_edit(repeat_count=1):
                 break
         end_y = min(y + use_count - 1, get_line_count() - 1)
         end_line = get_line(end_y)
-        set_selection((indent, y), (len(end_line.rstrip('\n\r')), end_y))
-        text = get_selection()
-        yank_to_register(text, False)
-        delete_selection()
-        if insert_text_content:
-            insert_text(insert_text_content)
+        with undo_group():
+            set_selection((indent, y), (len(end_line.rstrip('\n\r')), end_y))
+            text = get_selection()
+            yank_to_register(text, False)
+            delete_selection()
+            if insert_text_content:
+                insert_text(insert_text_content)
+        finalize_undo_cursor()
         return
     elif motion == 'x':
         # Delete character under cursor
@@ -2005,6 +2012,9 @@ def _repeat_last_edit(repeat_count=1):
             deleted = line[x:x + del_count]
             yank_to_register(deleted, False)
             N10X.Editor.SetLine(y, line[:x] + line[x + del_count:])
+            finalize_undo_cursor()
+        else:
+            g_pending_undo_before = None
         return
     elif motion == 'X':
         # Delete character before cursor
@@ -2016,22 +2026,30 @@ def _repeat_last_edit(repeat_count=1):
             yank_to_register(deleted, False)
             N10X.Editor.SetLine(y, line[:x - del_count] + line[x:])
             set_cursor_pos(x - del_count, y)
+            finalize_undo_cursor()
+        else:
+            g_pending_undo_before = None
         return
     elif motion == 's':
         # Substitute character(s) under cursor
-        N10X.Editor.PushUndoGroup()
-        x, y = get_cursor_pos()
-        line = get_line(y)
-        line_len = len(line.rstrip('\n\r'))
-        del_count = min(use_count, line_len - x)
-        if del_count > 0:
-            deleted = line[x:x + del_count]
-            yank_to_register(deleted, False)
-            N10X.Editor.SetLine(y, line[:x] + line[x + del_count:])
-        if insert_text_content:
-            insert_text(insert_text_content)
-        N10X.Editor.PopUndoGroup()
-        finalize_undo_cursor()
+        did_change = False
+        with undo_group():
+            x, y = get_cursor_pos()
+            line = get_line(y)
+            line_len = len(line.rstrip('\n\r'))
+            del_count = min(use_count, line_len - x)
+            if del_count > 0:
+                deleted = line[x:x + del_count]
+                yank_to_register(deleted, False)
+                N10X.Editor.SetLine(y, line[:x] + line[x + del_count:])
+                did_change = True
+            if insert_text_content:
+                insert_text(insert_text_content)
+                did_change = True
+        if did_change:
+            finalize_undo_cursor()
+        else:
+            g_pending_undo_before = None
         return
     elif motion == 'r':
         # Replace character (from 'r' command) - cursor stays in place
@@ -2041,7 +2059,9 @@ def _repeat_last_edit(repeat_count=1):
             new_line = line[:x] + insert_text_content + line[x+1:]
             N10X.Editor.SetLine(y, new_line)
             set_cursor_pos(x, y)
-        finalize_undo_cursor()
+            finalize_undo_cursor()
+        else:
+            g_pending_undo_before = None
         return
     elif motion == 'i':
         # Insert at cursor
@@ -2052,7 +2072,9 @@ def _repeat_last_edit(repeat_count=1):
             N10X.Editor.SetLine(y, new_line)
             # Position cursor at end of inserted text - 1 (vim normal mode)
             set_cursor_pos(x + len(insert_text_content) - 1, y)
-        finalize_undo_cursor()
+            finalize_undo_cursor()
+        else:
+            g_pending_undo_before = None
         return
     elif motion == 'I':
         # Insert at first non-blank
@@ -2069,7 +2091,9 @@ def _repeat_last_edit(repeat_count=1):
             N10X.Editor.SetLine(y, new_line)
             # Position cursor at end of inserted text - 1 (vim normal mode)
             set_cursor_pos(indent + len(insert_text_content) - 1, y)
-        finalize_undo_cursor()
+            finalize_undo_cursor()
+        else:
+            g_pending_undo_before = None
         return
     elif motion == 'a':
         # Append after cursor
@@ -2083,7 +2107,9 @@ def _repeat_last_edit(repeat_count=1):
             N10X.Editor.SetLine(y, new_line)
             # Position cursor at end of inserted text - 1 (vim normal mode)
             set_cursor_pos(insert_x + len(insert_text_content) - 1, y)
-        finalize_undo_cursor()
+            finalize_undo_cursor()
+        else:
+            g_pending_undo_before = None
         return
     elif motion == 'A':
         # Append at end of line
@@ -2095,7 +2121,9 @@ def _repeat_last_edit(repeat_count=1):
             N10X.Editor.SetLine(y, new_line)
             # Position cursor at end of inserted text - 1 (vim normal mode)
             set_cursor_pos(line_len + len(insert_text_content) - 1, y)
-        finalize_undo_cursor()
+            finalize_undo_cursor()
+        else:
+            g_pending_undo_before = None
         return
     elif motion == 'o':
         # Open line below
@@ -2142,6 +2170,7 @@ def _repeat_last_edit(repeat_count=1):
         finalize_undo_cursor()
         return
     else:
+        g_pending_undo_before = None
         return  # Unknown motion
 
     # Apply the operator
@@ -2152,16 +2181,17 @@ def _repeat_last_edit(repeat_count=1):
         set_cursor_pos(start[0], start[1])
         # For change, we need to delete and insert without entering insert mode
         # Group delete and insert as one undo operation
-        N10X.Editor.PushUndoGroup()
-        set_selection(start, end)
-        text = get_selection()
-        yank_to_register(text, linewise)
-        delete_selection()
-        if insert_text_content:
-            insert_text(insert_text_content)
-        N10X.Editor.PopUndoGroup()
+        with undo_group():
+            set_selection(start, end)
+            text = get_selection()
+            yank_to_register(text, linewise)
+            delete_selection()
+            if insert_text_content:
+                insert_text(insert_text_content)
         finalize_undo_cursor()
         # Don't update g_last_edit - keep the original
+    else:
+        g_pending_undo_before = None
 
 # =============================================================================
 # Search
@@ -2567,10 +2597,9 @@ def execute_command(cmd):
 
             if replacements:
                 save_undo_cursor()
-                N10X.Editor.PushUndoGroup()
-                for line_y, new_line in replacements:
-                    N10X.Editor.SetLine(line_y, new_line)
-                N10X.Editor.PopUndoGroup()
+                with undo_group():
+                    for line_y, new_line in replacements:
+                        N10X.Editor.SetLine(line_y, new_line)
                 finalize_undo_cursor()
 
             if is_visual_range:
@@ -2681,66 +2710,69 @@ def _apply_visual_block_operation(op):
     # Gather text for yank (block-wise)
     yanked_lines = []
 
-    if op in ('d', 'c', 'gu', 'gU', 'g~'):
+    undo_group_open = op in ('d', 'c', 'gu', 'gU', 'g~')
+    keep_undo_group_open = False
+    if undo_group_open:
         N10X.Editor.PushUndoGroup()
+    try:
+        for y in range(top, bottom + 1):
+            line = get_line(y)
+            line_no_nl = line.rstrip('\n\r')
+            line_suffix = line[len(line_no_nl):]
+            line_len = len(line_no_nl)
 
-    for y in range(top, bottom + 1):
-        line = get_line(y)
-        line_no_nl = line.rstrip('\n\r')
-        line_suffix = line[len(line_no_nl):]
-        line_len = len(line_no_nl)
+            if left >= line_len:
+                yanked_lines.append("")
+                continue
 
-        if left >= line_len:
-            yanked_lines.append("")
-            continue
+            del_end = min(right_exclusive, line_len)
+            segment = line_no_nl[left:del_end]
+            yanked_lines.append(segment)
 
-        del_end = min(right_exclusive, line_len)
-        segment = line_no_nl[left:del_end]
-        yanked_lines.append(segment)
+            if op in ('d', 'c'):
+                new_line = line_no_nl[:left] + line_no_nl[del_end:] + line_suffix
+                N10X.Editor.SetLine(y, new_line)
+            elif op == 'gu':
+                new_line = line_no_nl[:left] + segment.lower() + line_no_nl[del_end:] + line_suffix
+                N10X.Editor.SetLine(y, new_line)
+            elif op == 'gU':
+                new_line = line_no_nl[:left] + segment.upper() + line_no_nl[del_end:] + line_suffix
+                N10X.Editor.SetLine(y, new_line)
+            elif op == 'g~':
+                new_line = line_no_nl[:left] + segment.swapcase() + line_no_nl[del_end:] + line_suffix
+                N10X.Editor.SetLine(y, new_line)
 
-        if op in ('d', 'c'):
-            new_line = line_no_nl[:left] + line_no_nl[del_end:] + line_suffix
-            N10X.Editor.SetLine(y, new_line)
-        elif op == 'gu':
-            new_line = line_no_nl[:left] + segment.lower() + line_no_nl[del_end:] + line_suffix
-            N10X.Editor.SetLine(y, new_line)
-        elif op == 'gU':
-            new_line = line_no_nl[:left] + segment.upper() + line_no_nl[del_end:] + line_suffix
-            N10X.Editor.SetLine(y, new_line)
-        elif op == 'g~':
-            new_line = line_no_nl[:left] + segment.swapcase() + line_no_nl[del_end:] + line_suffix
-            N10X.Editor.SetLine(y, new_line)
+        # Yank result for d/c/y and case ops
+        if op in ('d', 'c', 'y', 'gu', 'gU', 'g~'):
+            yank_to_register('\n'.join(yanked_lines), linewise=False, blockwise=True)
 
-    if op in ('d', 'gu', 'gU', 'g~'):
-        N10X.Editor.PopUndoGroup()
+        # Position cursor at block start
+        if op != 'y':
+            line = get_line(top)
+            line_len = len(line.rstrip('\n\r'))
+            set_cursor_pos_raw((min(left, line_len), top))
 
-    # Yank result for d/c/y and case ops
-    if op in ('d', 'c', 'y', 'gu', 'gU', 'g~'):
-        yank_to_register('\n'.join(yanked_lines), linewise=False, blockwise=True)
-
-    # Position cursor at block start
-    if op != 'y':
-        line = get_line(top)
-        line_len = len(line.rstrip('\n\r'))
-        set_cursor_pos_raw((min(left, line_len), top))
-
-    if op == 'c':
-        # Enter insert mode with a cursor on each line in the block
-        clear_selection()
-        try:
-            N10X.Editor.ClearMultiCursors()
-        except Exception:
-            pass
-        set_cursor_pos(min(left, len(get_line(top).rstrip('\n\r'))), top)
-        for y in range(top + 1, bottom + 1):
+        if op == 'c':
+            # Enter insert mode with a cursor on each line in the block
+            clear_selection()
             try:
-                line_len = len(get_line(y).rstrip('\n\r'))
-                N10X.Editor.AddCursor((min(left, line_len), y))
+                N10X.Editor.ClearMultiCursors()
             except Exception:
                 pass
-        g_change_undo_group = True
-        enter_insert_mode(skip_undo_save=True)
-        return
+            set_cursor_pos(min(left, len(get_line(top).rstrip('\n\r'))), top)
+            for y in range(top + 1, bottom + 1):
+                try:
+                    line_len = len(get_line(y).rstrip('\n\r'))
+                    N10X.Editor.AddCursor((min(left, line_len), y))
+                except Exception:
+                    pass
+            g_change_undo_group = True
+            keep_undo_group_open = True
+            enter_insert_mode(skip_undo_save=True)
+            return
+    finally:
+        if undo_group_open and not keep_undo_group_open:
+            N10X.Editor.PopUndoGroup()
 
     # Finalize undo cursor for operations that don't enter insert mode
     if op != 'y':
@@ -2924,20 +2956,23 @@ def handle_normal_mode_key(key):
                 # Join lines without spaces (gJ)
                 x, y = get_cursor_pos()
                 did_join = False
-                for _ in range(count):
-                    line = get_line(y)
-                    next_line = get_line(y + 1) if y < get_line_count() - 1 else ""
-                    if next_line:
-                        if not did_join:
-                            save_undo_cursor()
-                            N10X.Editor.PushUndoGroup()
-                            did_join = True
-                        N10X.Editor.SetLine(y, line.rstrip('\n\r') + next_line.lstrip())
-                        set_cursor_pos_raw((0, y + 1), update_desired=False)
-                        N10X.Editor.ExecuteCommand("DeleteLine")
-                        set_cursor_pos(len(line.rstrip('\n\r')), y)
+                try:
+                    for _ in range(count):
+                        line = get_line(y)
+                        next_line = get_line(y + 1) if y < get_line_count() - 1 else ""
+                        if next_line:
+                            if not did_join:
+                                save_undo_cursor()
+                                N10X.Editor.PushUndoGroup()
+                                did_join = True
+                            N10X.Editor.SetLine(y, line.rstrip('\n\r') + next_line.lstrip())
+                            set_cursor_pos_raw((0, y + 1), update_desired=False)
+                            N10X.Editor.ExecuteCommand("DeleteLine")
+                            set_cursor_pos(len(line.rstrip('\n\r')), y)
+                finally:
+                    if did_join:
+                        N10X.Editor.PopUndoGroup()
                 if did_join:
-                    N10X.Editor.PopUndoGroup()
                     finalize_undo_cursor()
             elif char == 'u' and is_shifted:
                 # gU - uppercase operator
@@ -3701,21 +3736,24 @@ def handle_normal_mode_key(key):
             # Join lines
             x, y = get_cursor_pos()
             did_join = False
-            for _ in range(count):
-                line = get_line(y)
-                next_line = get_line(y + 1) if y < get_line_count() - 1 else ""
-                if next_line:
-                    if not did_join:
-                        save_undo_cursor()
-                        N10X.Editor.PushUndoGroup()
-                        did_join = True
-                    new_line = line.rstrip('\n\r') + ' ' + next_line.lstrip()
-                    N10X.Editor.SetLine(y, new_line)
-                    set_cursor_pos(0, y + 1)
-                    N10X.Editor.ExecuteCommand("DeleteLine")
-                    set_cursor_pos(len(line.rstrip('\n\r')), y)
+            try:
+                for _ in range(count):
+                    line = get_line(y)
+                    next_line = get_line(y + 1) if y < get_line_count() - 1 else ""
+                    if next_line:
+                        if not did_join:
+                            save_undo_cursor()
+                            N10X.Editor.PushUndoGroup()
+                            did_join = True
+                        new_line = line.rstrip('\n\r') + ' ' + next_line.lstrip()
+                        N10X.Editor.SetLine(y, new_line)
+                        set_cursor_pos(0, y + 1)
+                        N10X.Editor.ExecuteCommand("DeleteLine")
+                        set_cursor_pos(len(line.rstrip('\n\r')), y)
+            finally:
+                if did_join:
+                    N10X.Editor.PopUndoGroup()
             if did_join:
-                N10X.Editor.PopUndoGroup()
                 finalize_undo_cursor()
         else:
             motion_j(count)
@@ -4437,10 +4475,9 @@ def handle_visual_mode_key(key):
         if text:
             toggled = text.swapcase()
             save_undo_cursor()
-            N10X.Editor.PushUndoGroup()
-            delete_selection()
-            insert_text(toggled)
-            N10X.Editor.PopUndoGroup()
+            with undo_group():
+                delete_selection()
+                insert_text(toggled)
             finalize_undo_cursor()
         enter_normal_mode()
         return True
@@ -4489,21 +4526,24 @@ def handle_visual_mode_key(key):
         end = get_cursor_pos()
         start, end = ordered_range(start, end)
         did_join = False
-        for _ in range(end[1] - start[1]):
-            set_cursor_pos(0, start[1])
-            line = get_line(start[1])
-            next_line = get_line(start[1] + 1)
-            if next_line:
-                if not did_join:
-                    save_undo_cursor()
-                    N10X.Editor.PushUndoGroup()
-                    did_join = True
-                new_line = line.rstrip('\n\r') + ' ' + next_line.lstrip()
-                N10X.Editor.SetLine(start[1], new_line)
-                set_cursor_pos(0, start[1] + 1)
-                N10X.Editor.ExecuteCommand("DeleteLine")
+        try:
+            for _ in range(end[1] - start[1]):
+                set_cursor_pos(0, start[1])
+                line = get_line(start[1])
+                next_line = get_line(start[1] + 1)
+                if next_line:
+                    if not did_join:
+                        save_undo_cursor()
+                        N10X.Editor.PushUndoGroup()
+                        did_join = True
+                    new_line = line.rstrip('\n\r') + ' ' + next_line.lstrip()
+                    N10X.Editor.SetLine(start[1], new_line)
+                    set_cursor_pos(0, start[1] + 1)
+                    N10X.Editor.ExecuteCommand("DeleteLine")
+        finally:
+            if did_join:
+                N10X.Editor.PopUndoGroup()
         if did_join:
-            N10X.Editor.PopUndoGroup()
             finalize_undo_cursor()
         enter_normal_mode()
         return True
