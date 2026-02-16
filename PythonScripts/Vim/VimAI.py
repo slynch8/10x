@@ -3736,6 +3736,20 @@ def handle_normal_mode_key(key):
             motion_l(count)
         return True
 
+    # Arrow-key navigation aliases (match h/j/k/l behavior).
+    if char == 'Left':
+        motion_h(count)
+        return True
+    if char == 'Down':
+        motion_j(count)
+        return True
+    if char == 'Up':
+        motion_k(count)
+        return True
+    if char == 'Right':
+        motion_l(count)
+        return True
+
     if char == 'm':
         if is_shifted:
             motion_M()
@@ -4270,6 +4284,7 @@ def handle_visual_mode_key(key):
 
     # Simple motions with count
     simple_motions = {'h': motion_h, 'j': motion_j, 'k': motion_k, 'l': motion_l,
+                      'Left': motion_h, 'Down': motion_j, 'Up': motion_k, 'Right': motion_l,
                       '$': motion_dollar, '_': motion_underscore, '+': motion_plus,
                       '-': motion_minus, '|': motion_pipe}
     if char in simple_motions:
