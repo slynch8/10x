@@ -508,13 +508,11 @@ def _change_number_under_cursor(delta):
     while i < line_len:
         c = line[i]
         if c.isdigit():
-            # Found a digit, find the full number
-            num_end = i
-            while num_end < line_len and (line[num_end].isdigit() or
-                  (is_hex and line[num_end] in 'abcdefABCDEF')):
-                num_end += 1
-
+            # Found a digit; expand both directions to capture the full number
             num_start = i
+            while num_start > 0 and line[num_start - 1].isdigit():
+                num_start -= 1
+
             # Check for hex prefix
             if num_start >= 2 and line[num_start-2:num_start] in ('0x', '0X'):
                 num_start -= 2
@@ -523,6 +521,12 @@ def _change_number_under_cursor(delta):
             elif num_start > 0 and line[num_start-1] == '-':
                 num_start -= 1
                 is_negative = True
+
+            # Find the end of the number from the current position
+            num_end = i + 1
+            while num_end < line_len and (line[num_end].isdigit() or
+                  (is_hex and line[num_end] in 'abcdefABCDEF')):
+                num_end += 1
             break
         elif c in 'xX' and i > 0 and line[i-1] == '0' and i + 1 < line_len and line[i+1] in '0123456789abcdefABCDEF':
             # Hex number
@@ -2977,17 +2981,17 @@ def handle_normal_mode_key(key):
             elif char == 'u' and is_shifted:
                 # gU - uppercase operator
                 g_operator = 'gU'
-                g_pending_motion = ""
+                g_pending_motion = 'gU'
                 return True
             elif char == 'u' and not is_shifted:
                 # gu - lowercase operator
                 g_operator = 'gu'
-                g_pending_motion = ""
+                g_pending_motion = 'gu'
                 return True
             elif char == '~':
                 # g~ - toggle case operator
                 g_operator = 'g~'
-                g_pending_motion = ""
+                g_pending_motion = 'g~'
                 return True
             elif char == 'd':
                 # Go to definition
@@ -3487,6 +3491,7 @@ def handle_normal_mode_key(key):
     if key.control:
         if char == 'v':
             enter_visual_block_mode()
+            clear_count()
             return True
 
         if char == 'r':
@@ -3498,6 +3503,7 @@ def handle_normal_mode_key(key):
                 if pos:
                     set_cursor_pos(pos[0], pos[1])
             clear_selection()
+            clear_count()
             return True
 
         if char == 'd':
@@ -3508,6 +3514,7 @@ def handle_normal_mode_key(key):
                 N10X.Editor.ScrollCursorIntoView()
             except Exception:
                 pass
+            clear_count()
             return True
 
         if char == 'u':
@@ -3517,6 +3524,7 @@ def handle_normal_mode_key(key):
                 N10X.Editor.ScrollCursorIntoView()
             except Exception:
                 pass
+            clear_count()
             return True
 
         if char == 'f':
@@ -3526,6 +3534,7 @@ def handle_normal_mode_key(key):
                 N10X.Editor.ScrollCursorIntoView()
             except Exception:
                 pass
+            clear_count()
             return True
 
         if char == 'b':
@@ -3535,6 +3544,7 @@ def handle_normal_mode_key(key):
                 N10X.Editor.ScrollCursorIntoView()
             except Exception:
                 pass
+            clear_count()
             return True
 
         if char == 'e':
@@ -3543,16 +3553,19 @@ def handle_normal_mode_key(key):
                 N10X.Editor.SetScrollLine(scroll + count)
             except Exception:
                 pass
+            clear_count()
             return True
 
         if char == 'a':
             # Increment number under cursor
             _change_number_under_cursor(count)
+            clear_count()
             return True
 
         if char == 'x':
             # Decrement number under cursor
             _change_number_under_cursor(-count)
+            clear_count()
             return True
 
         if char == 'y':
@@ -3561,6 +3574,7 @@ def handle_normal_mode_key(key):
                 N10X.Editor.SetScrollLine(max(0, scroll - count))
             except Exception:
                 pass
+            clear_count()
             return True
 
         if char == 'g':
@@ -3574,11 +3588,13 @@ def handle_normal_mode_key(key):
                 set_status(f'"{filename}"{modified} line {y + 1} of {line_count} --{percent}%-- col {x + 1}')
             except Exception:
                 pass
+            clear_count()
             return True
 
         if char == 'w':
             # Window prefix (Ctrl+W)
             g_pending_window_cmd = True
+            clear_count()
             return True
 
         if char == 'o':
@@ -3645,6 +3661,7 @@ def handle_normal_mode_key(key):
         if char == '[':
             # Ctrl+[ is Escape
             enter_normal_mode()
+            clear_count()
             return True
 
         # Control key pressed but no handler matched - pass to 10x
@@ -3729,6 +3746,7 @@ def handle_normal_mode_key(key):
             motion_H()
         else:
             motion_h(count)
+        clear_count()
         return True
 
     if char == 'j':
@@ -3757,6 +3775,7 @@ def handle_normal_mode_key(key):
                 finalize_undo_cursor()
         else:
             motion_j(count)
+        clear_count()
         return True
 
     if char == 'k':
@@ -3765,6 +3784,7 @@ def handle_normal_mode_key(key):
             pass
         else:
             motion_k(count)
+        clear_count()
         return True
 
     if char == 'l':
@@ -3772,25 +3792,31 @@ def handle_normal_mode_key(key):
             motion_L()
         else:
             motion_l(count)
+        clear_count()
         return True
 
     # Arrow-key navigation aliases (match h/j/k/l behavior).
     if char == 'Left':
         motion_h(count)
+        clear_count()
         return True
     if char == 'Down':
         motion_j(count)
+        clear_count()
         return True
     if char == 'Up':
         motion_k(count)
+        clear_count()
         return True
     if char == 'Right':
         motion_l(count)
+        clear_count()
         return True
 
     if char == 'm':
         if is_shifted:
             motion_M()
+            clear_count()
         else:
             g_pending_motion = 'm'
         return True
@@ -3800,6 +3826,7 @@ def handle_normal_mode_key(key):
             motion_W(count)
         else:
             motion_w(count)
+        clear_count()
         return True
 
     if char == 'b':
@@ -3807,6 +3834,7 @@ def handle_normal_mode_key(key):
             motion_B(count)
         else:
             motion_b(count)
+        clear_count()
         return True
 
     if char == 'e':
@@ -3814,6 +3842,7 @@ def handle_normal_mode_key(key):
             motion_E(count)
         else:
             motion_e(count)
+        clear_count()
         return True
 
     if char == '0':
@@ -3823,26 +3852,32 @@ def handle_normal_mode_key(key):
 
     if char == '^':
         motion_caret()
+        clear_count()
         return True
 
     if char == '_':
         motion_underscore(count)
+        clear_count()
         return True
 
     if char == '+':
         motion_plus(count)
+        clear_count()
         return True
 
     if char == '-':
         motion_minus(count)
+        clear_count()
         return True
 
     if char == '|':
         motion_pipe(count)
+        clear_count()
         return True
 
     if char == '$':
         motion_dollar(count)
+        clear_count()
         return True
 
     if char == 'g':
@@ -3855,16 +3890,19 @@ def handle_normal_mode_key(key):
 
     if char == '%':
         motion_percent()
+        clear_count()
         return True
 
     if char == '{' or (char == '[' and is_shifted):
         push_jump()
         motion_brace_backward(count)
+        clear_count()
         return True
 
     if char == '}' or (char == ']' and is_shifted):
         push_jump()
         motion_brace_forward(count)
+        clear_count()
         return True
 
     if char == '[' and not is_shifted:
@@ -3891,6 +3929,7 @@ def handle_normal_mode_key(key):
 
     if char == ';' and not is_shifted:
         motion_semicolon(count)
+        clear_count()
         return True
 
     if char == ':' or (char == ';' and is_shifted):
@@ -3899,6 +3938,7 @@ def handle_normal_mode_key(key):
 
     if char == ',':
         motion_comma(count)
+        clear_count()
         return True
 
     # Mode changes
@@ -4954,6 +4994,19 @@ def initialize():
     callbacks["on_char_key"] = on_char_key
     callbacks["on_settings_changed"] = on_settings_changed
     callbacks["on_update"] = on_update
+
+# =============================================================================
+# Test Entry Points
+# =============================================================================
+
+def RunVimTests():
+    """Bridge entrypoint used by command-line automation."""
+    import VimTests
+    VimTests.RunVimTests()
+
+def RunTests():
+    """Alias for compatibility with existing RunTests() workflows."""
+    RunVimTests()
 
 # IMPORTANT: Do not remove this __name__ guard. It is required due to how 10x
 # loads VimUser.py and Vim.py - VimUser.py imports Vim.py, and without this guard
