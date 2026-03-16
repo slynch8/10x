@@ -3203,20 +3203,22 @@ def HandleCommandlineModeKey(key: Key):
 
     # Paste
     elif key == Key("V", control=True):
-        clipboard_text = GetClipboardValue().strip()
-        # Truncate if too big
-        max_paste_length = 512 # characters
-        clipboard_text = clipboard_text[:max_paste_length-len(clipboard_text)]
-        # Insert clipboard at cursor pos
-        g_Commandline.text = g_Commandline.text[:g_Commandline.cursorPos] + clipboard_text + g_Commandline.text[g_Commandline.cursorPos:]
-        g_Commandline.cursorPos += len(clipboard_text)
-        # Update history buffer
-        history_buffer[-1] = g_Commandline.text[1:]               
-        # Update search text if searching
-        if IsSearching() and len(g_Commandline.text) > 1:
-            UpdateSearchText(g_Commandline.text)
-        elif IsSubstituting():
-            UpdateSubstitution(g_Commandline.text)
+        clipboard_value = GetClipboardValue()
+        if clipboard_value:
+            clipboard_text = clipboard_value.strip()
+            # Truncate if too big
+            max_paste_length = 512 # characters
+            clipboard_text = clipboard_text[:max_paste_length-len(clipboard_text)]
+            # Insert clipboard at cursor pos
+            g_Commandline.text = g_Commandline.text[:g_Commandline.cursorPos] + clipboard_text + g_Commandline.text[g_Commandline.cursorPos:]
+            g_Commandline.cursorPos += len(clipboard_text)
+            # Update history buffer
+            history_buffer[-1] = g_Commandline.text[1:]               
+            # Update search text if searching
+            if IsSearching() and len(g_Commandline.text) > 1:
+                UpdateSearchText(g_Commandline.text)
+            elif IsSubstituting():
+                UpdateSubstitution(g_Commandline.text)
 
     # Navigation
     elif key == Key("Left"):
