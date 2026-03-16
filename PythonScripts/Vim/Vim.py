@@ -3513,6 +3513,7 @@ def HandleVisualModeChar(char):
         should_save = True
 
     elif c == "p":
+        start, _ = SubmitVisualModeSelection()
         N10X.Editor.PushUndoGroup()
         for i in range(repeat_count):
             clipboard_value = GetClipboardValue()
@@ -3526,7 +3527,6 @@ def HandleVisualModeChar(char):
                 N10X.Editor.ExecuteCommand("Paste")
                 MoveCursorPos(x_delta=-1, max_offset=0)
         N10X.Editor.PopUndoGroup()
-        EnterCommandMode()
         should_save = True
 
     elif c == "c":
