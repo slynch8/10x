@@ -1533,7 +1533,7 @@ def SubmitSubstitution(text):
         # for each iteration process each line down from the cursor
         for _ in range(line_count):
             # check file limit
-            if line_idx + 1 >= N10X.Editor.GetLineCount():
+            if line_idx >= N10X.Editor.GetLineCount():
                 break
             line_text = N10X.Editor.GetLine(line_idx) 
             if replace_all == True:
@@ -2485,7 +2485,7 @@ def HandleCommandModeChar(char):
         action = m.group(2)
         if pos := SelectAroundBlock(action, count):
             N10X.Editor.PushUndoGroup()
-            N10X.Editor.ExecuteCommand("")
+            N10X.Editor.ExecuteCommand("Cut")
             EnterInsertMode()
             N10X.Editor.PopUndoGroup()
         should_save = True
