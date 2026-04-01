@@ -1,8 +1,10 @@
 # clang-format plugin for 10x
 # Settings:
 #     - "ClangFormat.Path": Path to clang-format executable, default: "clang-format.exe"
-#     - "ClangFormat.Stlye": One of 'LLVM', 'GNU', 'Google', 'Chromium', 'Microsoft', 'Mozilla', 'WebKit' values
+#     - "ClangFormat.Style": One of 'LLVM', 'GNU', 'Google', 'Chromium', 'Microsoft', 'Mozilla', 'WebKit' values
 #                            Or 'file' if you are providing .clang-format file in your project
+#     - "ClangFormat.OnSave": 'true' or 'false'. When true, clang-format is called on save
+#     - "ClangFormat.OnSaveExtensions": comma-separated list of extensions allowed to auto-format on save
 #
 import subprocess
 import os
@@ -27,46 +29,72 @@ def _ClangFormatReadSettings():
 
     return ClangFormatConfig(bin_path, style_name)
 
-def ClangFormatSelection():
+
+def _ClangFormat(file, line_range=None):
     settings = _ClangFormatReadSettings()
 
-    start = N10X.Editor.GetSelectionStart()
-    end = N10X.Editor.GetSelectionEnd()
-    if start[1] != end[1]:
-        N10X.Editor.SaveFile()
-        cwd = None
-        if settings.style_name == 'file':
-            cwd = os.path.dirname(settings.bin_path)
-        try:
-            process = subprocess.Popen([settings.bin_path,
-                                        '--style=' + settings.style_name,
-                                        '--lines=' + str(start[1]) + ':' + str(end[1]),
-                                        '-i',
-                                        N10X.Editor.GetCurrentFilename()],
-                            shell=True, stdin=None, stdout=None, stderr=None, 
-                            close_fds=True, cwd=cwd)
-            process.communicate()
-        except FileNotFoundError:
-            print('[ClangFormat]: clang-format executable "' + settings.bin_path + '" could not be found')    
-        N10X.Editor.CheckForModifiedFiles()
-
-#------------------------------------------------------------------------
-def ClangFormatFile():
-    settings = _ClangFormatReadSettings()
-
-    N10X.Editor.SaveFile()
     try:
         cwd = None
         if settings.style_name == 'file':
-            cwd = os.path.dirname(settings.bin_path)
-        process = subprocess.Popen([settings.bin_path,
-                                    '-style=' + settings.style_name,
-                                    '-i',
-                                    N10X.Editor.GetCurrentFilename()],
-                            shell=True, stdin=None, stdout=None, stderr=None, 
-                            close_fds=True, cwd=cwd)
-        process.communicate()
-    except FileNotFoundError:
-         print('[ClangFormat]: clang-format executable "' + settings.bin_path + '" could not be found')
-    N10X.Editor.CheckForModifiedFiles()
+            cwd = os.path.dirname(file) or None
 
+        command = [settings.bin_path,
+                   '--style=' + settings.style_name,
+                   '-i']
+
+        if line_range is not None:
+            start = line_range[0]
+            end = line_range[1]
+            if start != end:
+                command.append('--lines=' + str(start) + ':' + str(end))
+
+        command.append(file)
+
+        process = subprocess.Popen(command,
+                            shell=False, stdin=None, stdout=None, stderr=subprocess.PIPE,
+                            close_fds=True, cwd=cwd,
+                            creationflags=subprocess.CREATE_NO_WINDOW)
+        _, stderr = process.communicate()
+        if process.returncode != 0:
+            print('[ClangFormat]: clang-format failed (exit code ' + str(process.returncode) + ')')
+            if stderr:
+                print('[ClangFormat]: ' + stderr.decode(errors='replace'))
+    except FileNotFoundError:
+        print('[ClangFormat]: clang-format executable "' + settings.bin_path + '" could not be found')
+
+
+def ClangFormatSelection():
+    start = N10X.Editor.GetSelectionStart()[1]
+    end = N10X.Editor.GetSelectionEnd()[1]
+    if start != end:
+        N10X.Editor.SaveFile()
+        _ClangFormat(N10X.Editor.GetCurrentFilename(), (start, end))
+
+
+#------------------------------------------------------------------------
+def ClangFormatFile():
+    N10X.Editor.SaveFile()
+    _ClangFormat(N10X.Editor.GetCurrentFilename())
+
+
+#------------------------------------------------------------------------
+def ClangFormatPostSave(file):
+    if N10X.Editor.GetSetting("ClangFormat.OnSave") != "true":
+        return
+
+    EXTS = [
+        ".c", ".cc", ".cpp", ".c++", ".cp", ".cxx",
+        ".h", ".hh", ".hpp", ".h++",".hp",".hxx",
+        ".inl",".ixx"
+    ]
+    extensions = N10X.Editor.GetSetting("ClangFormat.OnSaveExtensions")
+    if not extensions:
+        extensions = EXTS
+    else:
+        extensions = [e.strip() for e in extensions.split(",")]
+
+    if any(file.endswith(ext) for ext in extensions):
+        _ClangFormat(file)
+
+
+N10X.Editor.AddPostFileSaveFunction(ClangFormatPostSave)
