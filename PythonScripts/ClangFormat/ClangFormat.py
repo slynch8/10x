@@ -51,7 +51,7 @@ def _ClangFormat(file, line_range=None):
         command.append(file)
 
         process = subprocess.Popen(command,
-                            shell=True, stdin=None, stdout=None, stderr=subprocess.PIPE,
+                            shell=False, stdin=None, stdout=None, stderr=subprocess.PIPE,
                             close_fds=True, cwd=cwd,
                             creationflags=subprocess.CREATE_NO_WINDOW)
         _, stderr = process.communicate()
