@@ -1,7 +1,7 @@
 # clang-format plugin for 10x
 # Settings:
 #     - "ClangFormat.Path": Path to clang-format executable, default: "clang-format.exe"
-#     - "ClangFormat.Stlye": One of 'LLVM', 'GNU', 'Google', 'Chromium', 'Microsoft', 'Mozilla', 'WebKit' values
+#     - "ClangFormat.Style": One of 'LLVM', 'GNU', 'Google', 'Chromium', 'Microsoft', 'Mozilla', 'WebKit' values
 #                            Or 'file' if you are providing .clang-format file in your project
 #
 import subprocess
@@ -43,11 +43,11 @@ def ClangFormatSelection():
                                         '--lines=' + str(start[1]) + ':' + str(end[1]),
                                         '-i',
                                         N10X.Editor.GetCurrentFilename()],
-                            shell=True, stdin=None, stdout=None, stderr=None, 
+                            shell=True, stdin=None, stdout=None, stderr=None,
                             close_fds=True, cwd=cwd)
             process.communicate()
         except FileNotFoundError:
-            print('[ClangFormat]: clang-format executable "' + settings.bin_path + '" could not be found')    
+            print('[ClangFormat]: clang-format executable "' + settings.bin_path + '" could not be found')
         N10X.Editor.CheckForModifiedFiles()
 
 #------------------------------------------------------------------------
@@ -63,10 +63,9 @@ def ClangFormatFile():
                                     '-style=' + settings.style_name,
                                     '-i',
                                     N10X.Editor.GetCurrentFilename()],
-                            shell=True, stdin=None, stdout=None, stderr=None, 
+                            shell=True, stdin=None, stdout=None, stderr=None,
                             close_fds=True, cwd=cwd)
         process.communicate()
     except FileNotFoundError:
          print('[ClangFormat]: clang-format executable "' + settings.bin_path + '" could not be found')
     N10X.Editor.CheckForModifiedFiles()
-
