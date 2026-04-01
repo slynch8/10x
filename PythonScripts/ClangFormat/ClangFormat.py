@@ -49,9 +49,13 @@ def _ClangFormat(file, line_range=None):
         command.append(file)
 
         process = subprocess.Popen(command,
-                            shell=True, stdin=None, stdout=None, stderr=None,
+                            shell=True, stdin=None, stdout=None, stderr=subprocess.PIPE,
                             close_fds=True, cwd=cwd)
-        process.communicate()
+        _, stderr = process.communicate()
+        if process.returncode != 0:
+            print('[ClangFormat]: clang-format failed (exit code ' + str(process.returncode) + ')')
+            if stderr:
+                print('[ClangFormat]: ' + stderr.decode(errors='replace'))
     except FileNotFoundError:
         print('[ClangFormat]: clang-format executable "' + settings.bin_path + '" could not be found')
 
