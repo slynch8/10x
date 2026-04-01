@@ -28,11 +28,10 @@ def _ClangFormatReadSettings():
     return ClangFormatConfig(bin_path, style_name)
 
 def ClangFormatSelection():
-    settings = _ClangFormatReadSettings()
-
     start = N10X.Editor.GetSelectionStart()
     end = N10X.Editor.GetSelectionEnd()
     if start[1] != end[1]:
+        settings = _ClangFormatReadSettings()
         N10X.Editor.SaveFile()
         cwd = None
         if settings.style_name == 'file':
