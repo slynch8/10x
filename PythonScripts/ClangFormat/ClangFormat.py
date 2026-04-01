@@ -27,44 +27,44 @@ def _ClangFormatReadSettings():
 
     return ClangFormatConfig(bin_path, style_name)
 
-def ClangFormatSelection():
-    start = N10X.Editor.GetSelectionStart()[1]
-    end = N10X.Editor.GetSelectionEnd()[1]
-    if start != end:
-        settings = _ClangFormatReadSettings()
-        N10X.Editor.SaveFile()
-        cwd = None
-        if settings.style_name == 'file':
-            cwd = os.path.dirname(settings.bin_path)
-        try:
-            process = subprocess.Popen([settings.bin_path,
-                                        '--style=' + settings.style_name,
-                                        '--lines=' + str(start) + ':' + str(end),
-                                        '-i',
-                                        N10X.Editor.GetCurrentFilename()],
-                            shell=True, stdin=None, stdout=None, stderr=None,
-                            close_fds=True, cwd=cwd)
-            process.communicate()
-        except FileNotFoundError:
-            print('[ClangFormat]: clang-format executable "' + settings.bin_path + '" could not be found')
-        N10X.Editor.CheckForModifiedFiles()
 
-#------------------------------------------------------------------------
-def ClangFormatFile():
+def _ClangFormat(file, line_range=None):
     settings = _ClangFormatReadSettings()
 
-    N10X.Editor.SaveFile()
     try:
         cwd = None
         if settings.style_name == 'file':
             cwd = os.path.dirname(settings.bin_path)
-        process = subprocess.Popen([settings.bin_path,
-                                    '-style=' + settings.style_name,
-                                    '-i',
-                                    N10X.Editor.GetCurrentFilename()],
+
+        command = [settings.bin_path,
+                   '--style=' + settings.style_name,
+                   '-i']
+
+        if line_range is not None:
+            start = line_range[0]
+            end = line_range[1]
+            if start != end:
+                command.append('--lines=' + str(start) + ':' + str(end))
+
+        command.append(file)
+
+        process = subprocess.Popen(command,
                             shell=True, stdin=None, stdout=None, stderr=None,
                             close_fds=True, cwd=cwd)
         process.communicate()
     except FileNotFoundError:
         print('[ClangFormat]: clang-format executable "' + settings.bin_path + '" could not be found')
-    N10X.Editor.CheckForModifiedFiles()
+
+
+def ClangFormatSelection():
+    start = N10X.Editor.GetSelectionStart()[1]
+    end = N10X.Editor.GetSelectionEnd()[1]
+    if start != end:
+        N10X.Editor.SaveFile()
+        _ClangFormat(N10X.Editor.GetCurrentFilename(), (start, end))
+
+
+#------------------------------------------------------------------------
+def ClangFormatFile():
+    N10X.Editor.SaveFile()
+    _ClangFormat(N10X.Editor.GetCurrentFilename())
