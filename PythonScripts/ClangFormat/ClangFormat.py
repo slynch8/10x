@@ -28,9 +28,9 @@ def _ClangFormatReadSettings():
     return ClangFormatConfig(bin_path, style_name)
 
 def ClangFormatSelection():
-    start = N10X.Editor.GetSelectionStart()
-    end = N10X.Editor.GetSelectionEnd()
-    if start[1] != end[1]:
+    start = N10X.Editor.GetSelectionStart()[1]
+    end = N10X.Editor.GetSelectionEnd()[1]
+    if start != end:
         settings = _ClangFormatReadSettings()
         N10X.Editor.SaveFile()
         cwd = None
@@ -39,7 +39,7 @@ def ClangFormatSelection():
         try:
             process = subprocess.Popen([settings.bin_path,
                                         '--style=' + settings.style_name,
-                                        '--lines=' + str(start[1]) + ':' + str(end[1]),
+                                        '--lines=' + str(start) + ':' + str(end),
                                         '-i',
                                         N10X.Editor.GetCurrentFilename()],
                             shell=True, stdin=None, stdout=None, stderr=None,
