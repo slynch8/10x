@@ -34,7 +34,7 @@ def _ClangFormat(file, line_range=None):
     try:
         cwd = None
         if settings.style_name == 'file':
-            cwd = os.path.dirname(settings.bin_path)
+            cwd = os.path.dirname(file) or None
 
         command = [settings.bin_path,
                    '--style=' + settings.style_name,
