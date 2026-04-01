@@ -67,5 +67,5 @@ def ClangFormatFile():
                             close_fds=True, cwd=cwd)
         process.communicate()
     except FileNotFoundError:
-         print('[ClangFormat]: clang-format executable "' + settings.bin_path + '" could not be found')
+        print('[ClangFormat]: clang-format executable "' + settings.bin_path + '" could not be found')
     N10X.Editor.CheckForModifiedFiles()
