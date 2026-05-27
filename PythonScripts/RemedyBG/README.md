@@ -21,8 +21,8 @@ Note that this script only works with RemedyBG version 0.3.8 and above. Some fea
 
 - First, Copy the script file (RemedyBG.py) in to `%appdata%\10x\PythonScripts\` directory or just run `RemedyBG_Install.bat` and then restart 10x editor.
 - By this time, you should be able to see `RDBG_` family of commands in command panel (CTRL+SHIFT+X).
-- Set `RemedyBG.Path` setting to the correct path of your remedybg.exe binary
-- Now you can add the setting `RemedyBG.Hook: true` to hook RemedyBG instead of the default visual-studio debugger. So every time you run debugging commands like "Start debugger (F5)" a new RemedyBG session will be opened. If you wish to keep visual-studio debugger integration, you can just assign different shortcuts to `RDBG_StartDebugging`/`RDBG_StopDebugging` and `RDBG_RestartDebugging` commands.
+- Set `DebuggerExe` setting in your workspace settings file to the correct path of your remedybg.exe binary
+- Every time you run debugging commands like "Start debugger (F5)" a new RemedyBG session will be opened. If you wish to keep visual-studio debugger integration, you can just assign different shortcuts to `RDBG_StartDebugging`/`RDBG_StopDebugging` and `RDBG_RestartDebugging` commands.
 
 ## Additional settings and commands
 
@@ -49,7 +49,7 @@ the target to be 10x's installation directory:
 **You can get the Portal Token from the itch.io download page url for RemedyBG:**  
 - in any browser login to itch.io
 - navigate to https://remedybg.itch.io/remedybg
-- if you havnt purchased RemedyBG, do so now.  Support the dev!
+- if you haven't purchased RemedyBG, do so now.  Support the dev!
 - click the "Download" button
 - The PortalToken value will be in the url for the downloads page
     e.g: https://remedybg.itch.io/remedybg/download/{PortalToken}
