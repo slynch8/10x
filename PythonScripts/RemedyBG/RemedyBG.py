@@ -42,6 +42,9 @@ RemedyBG sessions:
     and it will load that next time instead of starting a new session
 
 History:
+  0.13.1
+    - Quotes are now stripped of the value in DebuggerExe, inaddition to spaces
+    
   0.13.0
     - BREAKING: RemedyBG.Path and RemedyBG.Hook options has been removed. With the newer 10x editor versions, you only need to set DebuggerPath setting to remedybg.exe path and it will automatically hook itself to the project.
     - Added version checking
@@ -233,7 +236,7 @@ class RDBG_Options():
                                   '"RemedyBG.Path" and "RemedyBG.Hook" Settings has gone obsolete and would not work. '\
                                   'To enable RemedyBG for your project, set "DebuggerExe" setting to remedybg.exe path')
 
-        debugger_exe:str = Editor.GetSetting("DebuggerExe").strip()
+        debugger_exe:str = Editor.GetSetting("DebuggerExe").strip("'\"")
         debugger_exe_lower:str = debugger_exe.lower()
         if debugger_exe_lower.endswith('remedybg') or debugger_exe_lower.endswith('remedybg.exe'):
             if debugger_exe_lower.startswith('remedybg'):
