@@ -1,0 +1,112 @@
+# RustLSP.py - Rust language support for 10x (10xeditor.com)
+#
+# A thin configuration layer on top of the generic LSPClient module (same
+# folder). It points the generic Language Server Protocol client at
+# rust-analyzer (https://rust-analyzer.github.io/) and exposes the editor
+# features: completion, hover docs, signature help, go-to-definition,
+# find-references and live diagnostics.
+#
+# ---------------------------------------------------------------------------
+# INSTALL
+#   1. Copy the LSPClient folder (this file lives alongside LSPClient.py) to:
+#          %appdata%\10x\PythonScripts
+#   2. Install rust-analyzer so that "rust-analyzer" (rust-analyzer.exe) is on
+#      your PATH, or set RustLSP.Command to its full path. Options:
+#          rustup component add rust-analyzer
+#            (then it lives in ~/.rustup; either add that to PATH or use
+#             RustLSP.Command: rustup run stable rust-analyzer)
+#          or download a release binary from:
+#            https://github.com/rust-lang/rust-analyzer/releases
+#   3. Open a Cargo project (a folder containing Cargo.toml). rust-analyzer
+#      discovers the workspace and its dependencies from there. Non-Cargo
+#      projects need a rust-project.json at the root.
+#
+# SETTINGS (Settings.10x_settings)
+#   RustLSP.Command            Command line used to launch the server.
+#                              Default: "rust-analyzer". Examples:
+#                                  RustLSP.Command: rust-analyzer
+#                                  RustLSP.Command: rustup run stable rust-analyzer
+#                                  RustLSP.Command: C:/tools/rust-analyzer.exe
+#   RustLSP.Enabled            "true"/"false" (default true)
+#   RustLSP.AutoComplete       "true"/"false" - auto-trigger as you type (default false)
+#   RustLSP.Diagnostics        "true"/"false" - line diagnostic in status bar (default true)
+#   RustLSP.LogVerbose         "true"/"false" - log server traffic (default false)
+#
+# KEY BINDINGS (Settings -> Key Bindings) - bind the functions you want:
+#   Control Space:       RustLSP_Completion()
+#   F12:                 RustLSP_GotoDefinition()
+#   Control K:           RustLSP_Hover()
+#   Shift F12:           RustLSP_FindReferences()
+#   Control Shift Space: RustLSP_SignatureHelp()
+#   (no binding needed)  RustLSP_ShowDiagnostics()
+#   (no binding needed)  RustLSP_Restart()
+# ---------------------------------------------------------------------------
+
+import os
+import sys
+
+import N10X
+
+try:
+    from LSPClient import LanguageServerClient
+except ImportError:
+    # 10x normally puts every PythonScripts subfolder on sys.path, so the bare
+    # import above works. If it didn't, add this file's own folder (which also
+    # contains LSPClient.py) to sys.path and retry.
+    try:
+        _here = os.path.dirname(os.path.abspath(__file__))
+        if _here not in sys.path:
+            sys.path.append(_here)
+    except NameError:
+        pass
+    from LSPClient import LanguageServerClient
+
+
+_client = LanguageServerClient(
+    name="RustLSP",
+    language_id="rust",
+    extensions=(".rs",),
+    default_command="rust-analyzer",
+    # "." for fields/methods, ":" for "::" path segments.
+    trigger_chars=".:",
+    # Prefer the Cargo manifest as the project root so rust-analyzer loads the
+    # workspace; rust-project.json covers non-Cargo projects.
+    root_markers=("Cargo.toml", "rust-project.json", ".git"),
+)
+
+
+# --- commands to bind to keys ----------------------------------------------
+
+def RustLSP_Completion():
+    _client.complete()
+
+
+def RustLSP_Hover():
+    _client.hover()
+
+
+def RustLSP_SignatureHelp():
+    _client.signature_help()
+
+
+def RustLSP_GotoDefinition():
+    _client.goto_definition()
+
+
+def RustLSP_FindReferences():
+    _client.find_references()
+
+
+def RustLSP_ShowDiagnostics():
+    _client.show_all_diagnostics()
+
+
+def RustLSP_Restart():
+    _client.restart()
+
+
+def RustLSP_Status():
+    _client.status()
+
+
+N10X.Editor.CallOnMainThread(_client.register)
