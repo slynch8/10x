@@ -30,6 +30,7 @@
 #   RustLSP.Enabled            "true"/"false" (default true)
 #   RustLSP.AutoComplete       "true"/"false" - auto-trigger as you type (default false)
 #   RustLSP.Diagnostics        "true"/"false" - line diagnostic in status bar (default true)
+#   RustLSP.MaxResults         max completion items shown, most-relevant first (default 50)
 #   RustLSP.LogVerbose         "true"/"false" - log server traffic (default false)
 #
 # KEY BINDINGS (Settings -> Key Bindings) - bind the functions you want:

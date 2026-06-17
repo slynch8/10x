@@ -33,6 +33,9 @@
 #                           Default false (use the keybinding instead).
 #     <name>.Diagnostics    "true"/"false" - show the diagnostic under the
 #                           cursor in the status bar (default true)
+#     <name>.MaxResults     Max completion items to show, most-relevant first
+#                           (default 50). Useful for servers like rust-analyzer
+#                           that return the whole scope.
 #     <name>.LogVerbose     "true"/"false" - log server traffic to the output
 #                           panel (default false)
 #
@@ -251,11 +254,15 @@ class LSPConnection:
             self.incoming.put({"__lsp_internal__": "exited"})
 
     def _stderr_loop(self):
+        # Runs on a background thread, so it must not call any N10X.Editor API
+        # (those are main-thread only). Hand lines to the main thread via the
+        # incoming queue, where they are logged from pump().
         stream = self.proc.stderr
         try:
             for raw in iter(stream.readline, b""):
-                if self._verbose():
-                    self._log("stderr: " + raw.decode("utf-8", "replace").rstrip())
+                line = raw.decode("utf-8", "replace").rstrip()
+                if line:
+                    self.incoming.put({"__lsp_stderr__": line})
         except (OSError, ValueError):
             pass
 
@@ -321,8 +328,10 @@ class LanguageServerClient:
         self._sync_interval = 0.35
         self._completion_due = 0.0   # time.time() at which to auto-fire completion
         self._auto_delay = 0.12      # debounce window for as-you-type completion
+        self._last_completion_id = None  # newest in-flight completion request id
         self._last_status_line = -1
         self._next_start_attempt = 0.0  # backoff for auto-starting the server
+        self._verbose_flag = False       # cached so background threads can read it
 
     # -- logging / settings ------------------------------------------------
 
@@ -330,11 +339,18 @@ class LanguageServerClient:
         _log(self.name, msg)
 
     def setting(self, key, default=""):
+        # N10X.Editor.* is main-thread only; never call this from a worker thread.
         val = N10X.Editor.GetSetting(f"{self.name}.{key}")
         return val if val else default
 
+    def _refresh_verbose(self):
+        """Refresh the cached LogVerbose flag. Call only on the main thread."""
+        self._verbose_flag = self.setting("LogVerbose") == "true"
+
     def _verbose(self):
-        return self.setting("LogVerbose") == "true"
+        # Returns the cached flag so it is safe to call from any thread (e.g. the
+        # connection's writer/reader). The flag is refreshed on the main thread.
+        return self._verbose_flag
 
     def handles(self, filename):
         return bool(filename) and filename.endswith(self.extensions)
@@ -519,9 +535,10 @@ class LanguageServerClient:
     def _send_request(self, method, params, handler):
         if not self._ready():
             self.log("server not ready")
-            return
+            return None
         rid = self.conn.request(method, params)
         self.pending[rid] = handler
+        return rid
 
     # -- main-thread message pump -----------------------------------------
 
@@ -543,6 +560,11 @@ class LanguageServerClient:
             if self.initialized:
                 self.log("server process exited")
             self.initialized = False
+            return
+
+        if "__lsp_stderr__" in msg:
+            if self._verbose():
+                self.log("stderr: " + msg["__lsp_stderr__"])
             return
 
         if "id" in msg and ("result" in msg or "error" in msg):
@@ -636,7 +658,14 @@ class LanguageServerClient:
 
     # -- feature response handlers ----------------------------------------
 
-    def _on_completion(self, result, error):
+    def _on_completion(self, result, error, rid=None):
+        # Ignore responses from superseded completion requests (see
+        # _request_completion) so a late, stale reply can't replace the list.
+        if rid is not None and rid != self._last_completion_id:
+            if self._verbose():
+                self.log(f"completion: ignoring stale response (req {rid}, "
+                         f"latest {self._last_completion_id})")
+            return
         if error:
             self.log(f"completion error: {error}")
             return
@@ -649,15 +678,21 @@ class LanguageServerClient:
             if self._verbose():
                 self.log("completion: 0 items returned by server")
             return
-        items = sorted(items, key=lambda it: it.get("sortText") or it.get("label", ""))
+        # Order by the server's relevance ranking (sortText). Servers like
+        # rust-analyzer encode "most relevant first" there; falling back to the
+        # label keeps a stable order for items that omit it.
+        items = sorted(items, key=lambda it: (it.get("sortText") is None,
+                                              it.get("sortText") or "",
+                                              it.get("label") or ""))
         prefix = self._line_prefix()
+        limit = self._max_results()
         if self._verbose():
             try:
                 x, y = N10X.Editor.GetCursorPos()
             except Exception:
                 x, y = ("?", "?")
-            self.log(f"completion: {len(items)} items; cursor=({x},{y}) "
-                     f"line_prefix={prefix!r}")
+            self.log(f"completion: {len(items)} items (cap {limit}); "
+                     f"cursor=({x},{y}) line_prefix={prefix!r}")
         labels, seen = [], set()
         for it in items:
             text = self._completion_insert_text(it, prefix)
@@ -668,9 +703,19 @@ class LanguageServerClient:
             if text and text not in seen:
                 seen.add(text)
                 labels.append(text)
+                if len(labels) >= limit:
+                    break
         if not labels:
             return
         self._show_autocomplete(labels)
+
+    def _max_results(self):
+        """Maximum completion items to show (servers like rust-analyzer return
+        the whole scope). Configurable via "<name>.MaxResults"."""
+        try:
+            return max(1, int(self.setting("MaxResults", "50")))
+        except (TypeError, ValueError):
+            return 50
 
     def _line_prefix(self):
         """Text on the current line to the left of the cursor."""
@@ -773,7 +818,15 @@ class LanguageServerClient:
         if self._verbose():
             p = params["position"]
             self.log(f"requesting completion at line {p['line']}, char {p['character']}")
-        self._send_request("textDocument/completion", params, self._on_completion)
+        rid = self._send_request("textDocument/completion", params, self._on_completion)
+        # Only the newest completion request's response should be shown; rapid
+        # typing can leave older requests in flight whose (slower, less-specific)
+        # replies would otherwise land later and clobber the right list. Tag the
+        # handler with its id so _on_completion can drop stale responses.
+        self._last_completion_id = rid
+        if rid is not None:
+            self.pending[rid] = (lambda res, err, _id=rid:
+                                 self._on_completion(res, err, _id))
 
     def complete(self):
         self.sync_current(force=True)
@@ -874,6 +927,7 @@ class LanguageServerClient:
             # without a file-open event (e.g. switching to a restored tab).
             if now - self._last_sync >= self._sync_interval:
                 self._last_sync = now
+                self._refresh_verbose()
                 self._reconcile_open_files(now)
                 if self._ready():
                     self.sync_current()
@@ -958,6 +1012,7 @@ class LanguageServerClient:
     def register(self):
         """Wire this client into the 10x editor events. Call once, on the main
         thread (e.g. via N10X.Editor.CallOnMainThread)."""
+        self._refresh_verbose()
         N10X.Editor.AddOnFileOpenedFunction(self._on_file_opened)
         N10X.Editor.AddPostFileSaveFunction(self._on_post_save)
         N10X.Editor.AddOnCharKeyFunction(self._on_char_key)
