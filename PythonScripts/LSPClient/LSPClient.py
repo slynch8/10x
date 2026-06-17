@@ -322,6 +322,7 @@ class LanguageServerClient:
         self._completion_due = 0.0   # time.time() at which to auto-fire completion
         self._auto_delay = 0.12      # debounce window for as-you-type completion
         self._last_status_line = -1
+        self._next_start_attempt = 0.0  # backoff for auto-starting the server
 
     # -- logging / settings ------------------------------------------------
 
@@ -649,17 +650,59 @@ class LanguageServerClient:
                 self.log("completion: 0 items returned by server")
             return
         items = sorted(items, key=lambda it: it.get("sortText") or it.get("label", ""))
+        prefix = self._line_prefix()
+        if self._verbose():
+            try:
+                x, y = N10X.Editor.GetCursorPos()
+            except Exception:
+                x, y = ("?", "?")
+            self.log(f"completion: {len(items)} items; cursor=({x},{y}) "
+                     f"line_prefix={prefix!r}")
         labels, seen = [], set()
         for it in items:
-            label = it.get("insertText") or it.get("label")
-            if label and label not in seen:
-                seen.add(label)
-                labels.append(label)
+            text = self._completion_insert_text(it, prefix)
+            if self._verbose() and len(labels) < 5:
+                edit = it.get("textEdit") or {}
+                raw = edit.get("newText") or it.get("insertText") or it.get("label")
+                self.log(f"   raw={raw!r} -> insert={text!r}")
+            if text and text not in seen:
+                seen.add(text)
+                labels.append(text)
         if not labels:
             return
-        if self._verbose():
-            self.log(f"completion: {len(labels)} items, showing e.g. {labels[:5]}")
         self._show_autocomplete(labels)
+
+    def _line_prefix(self):
+        """Text on the current line to the left of the cursor."""
+        try:
+            line = N10X.Editor.GetCurrentLine() or ""
+        except Exception:
+            return ""
+        x, _ = N10X.Editor.GetCursorPos()
+        return line[:x]
+
+    def _completion_insert_text(self, item, prefix):
+        """Turn an LSP completion item into the string to hand 10x.
+
+        On accept, 10x inserts our string at the cursor and deletes nothing -
+        so whatever the user has already typed before the cursor stays put.
+        LSP items, however, give the full word/qualifier (e.g. "UpdateCursorMode"
+        after typing "Update", or "Mode.VISUAL" after "Mode."). We strip the
+        leading part of the item that duplicates the text already on the line
+        immediately before the cursor, leaving only the remainder to insert.
+        """
+        edit = item.get("textEdit") or {}
+        raw = edit.get("newText") or item.get("insertText") or item.get("label")
+        if not raw:
+            return ""
+        # Longest suffix of `prefix` that the item also starts with (matched
+        # case-insensitively so e.g. "upd" still lines up with "Update").
+        overlap = 0
+        for k in range(min(len(prefix), len(raw)), 0, -1):
+            if prefix[-k:].lower() == raw[:k].lower():
+                overlap = k
+                break
+        return raw[overlap:]
 
     def _show_autocomplete(self, labels):
         """Call 10x's ShowAutocomplete, tolerant of signature/format differences."""
@@ -817,29 +860,52 @@ class LanguageServerClient:
     def _on_update(self, *args):
         try:
             self.pump()
-            if not self._ready():
-                return
             now = time.time()
-            if self._completion_due and now >= self._completion_due:
+            # Completion fires as soon as it's due (not throttled).
+            if (self._ready() and self._completion_due
+                    and now >= self._completion_due):
                 self._completion_due = 0.0
                 self.sync_current(force=True)
                 self._request_completion()
                 self._last_sync = now
-            elif now - self._last_sync >= self._sync_interval:
-                self.sync_current()
-                self._detect_closed_files()
+                return
+            # Throttled housekeeping. Runs even before the server is ready so a
+            # workspace whose Python files are already open gets picked up
+            # without a file-open event (e.g. switching to a restored tab).
+            if now - self._last_sync >= self._sync_interval:
                 self._last_sync = now
+                self._reconcile_open_files(now)
+                if self._ready():
+                    self.sync_current()
         except Exception as e:
             self.log(f"update error: {e}")
 
-    def _detect_closed_files(self):
+    def _reconcile_open_files(self, now):
+        """Keep the server's open-document set in step with the editor's open
+        handled files: start the server if needed, open newly-seen files and
+        close ones no longer open. This makes startup robust to missed
+        file-open events and to files already open when the workspace loads."""
         try:
-            open_now = set(path_to_uri(f) for f in (N10X.Editor.GetOpenFiles() or [])
-                           if self.handles(f))
+            open_handled = [f for f in (N10X.Editor.GetOpenFiles() or [])
+                            if self.handles(f)]
         except Exception:
             return
+        if not self._ready():
+            # Bring the server up if a handled file is open; _on_initialized
+            # opens the full set once it finishes initializing. Backed off so a
+            # missing/failing server isn't relaunched every tick.
+            if open_handled and now >= self._next_start_attempt:
+                self._next_start_attempt = now + 3.0
+                self.ensure_started(open_handled[0])
+            return
+        open_uris = set()
+        for fn in open_handled:
+            uri = path_to_uri(fn)
+            open_uris.add(uri)
+            if uri not in self.docs:
+                self.did_open(fn)
         for uri in list(self.docs.keys()):
-            if uri not in open_now:
+            if uri not in open_uris:
                 self.did_close(uri)
 
     def _on_exit(self):
