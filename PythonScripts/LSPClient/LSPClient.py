@@ -28,8 +28,9 @@
 #     <name>.Command        Command line used to launch the server (overrides
 #                           the default). e.g. "PythonLSP.Command: pylsp"
 #     <name>.Enabled        "true"/"false" (default true)
-#     <name>.AutoComplete   "true"/"false" - auto-trigger completion after a
-#                           trigger char (default false)
+#     <name>.AutoComplete   "true"/"false" - auto-trigger completion as you type
+#                           (after identifier or trigger chars, debounced).
+#                           Default false (use the keybinding instead).
 #     <name>.Diagnostics    "true"/"false" - show the diagnostic under the
 #                           cursor in the status bar (default true)
 #     <name>.LogVerbose     "true"/"false" - log server traffic to the output
@@ -318,7 +319,8 @@ class LanguageServerClient:
         self.diagnostics = {}    # uri -> [Diagnostic]
         self._last_sync = 0.0
         self._sync_interval = 0.35
-        self._want_completion = False
+        self._completion_due = 0.0   # time.time() at which to auto-fire completion
+        self._auto_delay = 0.12      # debounce window for as-you-type completion
         self._last_status_line = -1
 
     # -- logging / settings ------------------------------------------------
@@ -634,10 +636,17 @@ class LanguageServerClient:
     # -- feature response handlers ----------------------------------------
 
     def _on_completion(self, result, error):
-        if error or result is None:
+        if error:
+            self.log(f"completion error: {error}")
+            return
+        if result is None:
+            if self._verbose():
+                self.log("completion: null result")
             return
         items = result.get("items", result) if isinstance(result, dict) else result
         if not items:
+            if self._verbose():
+                self.log("completion: 0 items returned by server")
             return
         items = sorted(items, key=lambda it: it.get("sortText") or it.get("label", ""))
         labels, seen = [], set()
@@ -648,10 +657,28 @@ class LanguageServerClient:
                 labels.append(label)
         if not labels:
             return
-        try:
-            N10X.Editor.ShowAutocomplete(labels, N10X.Editor.GetCursorPos())
-        except TypeError:
-            N10X.Editor.ShowAutocomplete(labels)
+        if self._verbose():
+            self.log(f"completion: {len(labels)} items, showing e.g. {labels[:5]}")
+        self._show_autocomplete(labels)
+
+    def _show_autocomplete(self, labels):
+        """Call 10x's ShowAutocomplete, tolerant of signature/format differences."""
+        pos = N10X.Editor.GetCursorPos()
+        attempts = (
+            lambda: N10X.Editor.ShowAutocomplete(labels, pos),
+            lambda: N10X.Editor.ShowAutocomplete(labels),
+            lambda: N10X.Editor.ShowAutocomplete([{"text": l} for l in labels], pos),
+            lambda: N10X.Editor.ShowAutocomplete([{"label": l} for l in labels], pos),
+        )
+        last_err = None
+        for attempt in attempts:
+            try:
+                attempt()
+                return True
+            except Exception as e:
+                last_err = e
+        self.log(f"ShowAutocomplete failed for all formats: {last_err}")
+        return False
 
     def _on_hover(self, result, error):
         text = extract_markup(result.get("contents")) if result else ""
@@ -696,13 +723,32 @@ class LanguageServerClient:
     def _request_completion(self):
         params = self._doc_pos_params()
         if params is None:
+            if self._verbose():
+                self.log("completion skipped: current file not handled / no params")
             return
         params["context"] = {"triggerKind": 1}  # Invoked
+        if self._verbose():
+            p = params["position"]
+            self.log(f"requesting completion at line {p['line']}, char {p['character']}")
         self._send_request("textDocument/completion", params, self._on_completion)
 
     def complete(self):
         self.sync_current(force=True)
         self._request_completion()
+
+    def status(self):
+        """Log the current client state to the output panel (for debugging)."""
+        fn = N10X.Editor.GetCurrentFilename()
+        self.log("---- status ----")
+        self.log(f"  enabled setting : {self.setting('Enabled') or '(unset=true)'}")
+        self.log(f"  autocomplete    : {self.setting('AutoComplete') or '(unset=false)'}")
+        self.log(f"  server argv     : {self._server_argv()}")
+        self.log(f"  connection      : {'alive' if (self.conn and self.conn.alive) else 'none/dead'}")
+        self.log(f"  initialized     : {self.initialized}")
+        self.log(f"  root            : {self.root_path}")
+        self.log(f"  current file    : {fn}")
+        self.log(f"  handled         : {self.handles(fn)}")
+        self.log(f"  open documents  : {len(self.docs)}")
 
     def hover(self):
         params = self._doc_pos_params()
@@ -753,9 +799,14 @@ class LanguageServerClient:
             self.log(f"on_post_save error: {e}")
 
     def _on_char_key(self, ch=None, *args):
-        if (ch and self.trigger_chars and ch in self.trigger_chars
-                and self.setting("AutoComplete") == "true"):
-            self._want_completion = True
+        # As-you-type completion: schedule a (debounced) completion request when
+        # an identifier char or a trigger char is typed. Each keystroke pushes
+        # the due time forward, so a burst of typing fires a single request once
+        # the user pauses for _auto_delay seconds.
+        if not ch or self.setting("AutoComplete") != "true":
+            return
+        if ch in self.trigger_chars or ch.isalnum() or ch == "_":
+            self._completion_due = time.time() + self._auto_delay
 
     def _on_cursor_moved(self, *args):
         try:
@@ -769,8 +820,8 @@ class LanguageServerClient:
             if not self._ready():
                 return
             now = time.time()
-            if self._want_completion:
-                self._want_completion = False
+            if self._completion_due and now >= self._completion_due:
+                self._completion_due = 0.0
                 self.sync_current(force=True)
                 self._request_completion()
                 self._last_sync = now
@@ -797,6 +848,47 @@ class LanguageServerClient:
         except Exception:
             pass
 
+    # Command-panel commands, keyed by their normalised (lowercased, spaces and
+    # underscores removed) name. Lets you drive the client by typing
+    # "<name> <command>" into the 10x command panel - no keybinding needed.
+    def _command_table(self):
+        return {
+            "status": self.status,
+            "complete": self.complete,
+            "completion": self.complete,
+            "hover": self.hover,
+            "signature": self.signature_help,
+            "signaturehelp": self.signature_help,
+            "definition": self.goto_definition,
+            "gotodefinition": self.goto_definition,
+            "references": self.find_references,
+            "findreferences": self.find_references,
+            "diagnostics": self.show_all_diagnostics,
+            "showdiagnostics": self.show_all_diagnostics,
+            "restart": self.restart,
+        }
+
+    def _on_command_panel(self, text=None, *args):
+        try:
+            if not text:
+                return False
+            low = text.strip().lower()
+            prefix = self.name.lower()
+            if not low.startswith(prefix):
+                return False
+            cmd = low[len(prefix):].lstrip(" :_-").replace(" ", "").replace("_", "")
+            fn = self._command_table().get(cmd)
+            if fn is None:
+                self.log(f"unknown command '{text}'. Try: {self.name} status | "
+                         f"complete | hover | signature | definition | references | "
+                         f"diagnostics | restart")
+                return True
+            fn()
+            return True
+        except Exception as e:
+            self.log(f"command panel error: {e}")
+            return True
+
     def register(self):
         """Wire this client into the 10x editor events. Call once, on the main
         thread (e.g. via N10X.Editor.CallOnMainThread)."""
@@ -807,9 +899,13 @@ class LanguageServerClient:
         N10X.Editor.AddUpdateFunction(self._on_update)
         N10X.Editor.AddExitingFunction(self._on_exit)
         try:
+            N10X.Editor.AddCommandPanelHandlerFunction(self._on_command_panel)
+        except Exception as e:
+            self.log(f"command panel registration failed: {e}")
+        try:
             cur = N10X.Editor.GetCurrentFilename()
             if self.handles(cur) and self.ensure_started(cur):
                 self.did_open(cur)
         except Exception:
             pass
-        self.log("registered")
+        self.log(f"registered (server: {' '.join(self._server_argv())})")

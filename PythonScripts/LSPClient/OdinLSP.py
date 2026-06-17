@@ -31,7 +31,7 @@
 #                                  OdinLSP.Command: ols
 #                                  OdinLSP.Command: C:/tools/ols/ols.exe
 #   OdinLSP.Enabled            "true"/"false" (default true)
-#   OdinLSP.AutoComplete       "true"/"false" - auto-trigger after "." (default false)
+#   OdinLSP.AutoComplete       "true"/"false" - auto-trigger as you type (default false)
 #   OdinLSP.Diagnostics        "true"/"false" - line diagnostic in status bar (default true)
 #   OdinLSP.LogVerbose         "true"/"false" - log server traffic (default false)
 #
@@ -105,6 +105,10 @@ def OdinLSP_ShowDiagnostics():
 
 def OdinLSP_Restart():
     _client.restart()
+
+
+def OdinLSP_Status():
+    _client.status()
 
 
 N10X.Editor.CallOnMainThread(_client.register)

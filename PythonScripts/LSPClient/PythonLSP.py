@@ -22,7 +22,7 @@
 #                                  PythonLSP.Command: pylsp
 #                                  PythonLSP.Command: pyright-langserver --stdio
 #   PythonLSP.Enabled          "true"/"false" (default true)
-#   PythonLSP.AutoComplete     "true"/"false" - auto-trigger after "." (default false)
+#   PythonLSP.AutoComplete     "true"/"false" - auto-trigger as you type (default false)
 #   PythonLSP.Diagnostics      "true"/"false" - line diagnostic in status bar (default true)
 #   PythonLSP.LogVerbose       "true"/"false" - log server traffic (default false)
 #
@@ -94,6 +94,10 @@ def PythonLSP_ShowDiagnostics():
 
 def PythonLSP_Restart():
     _client.restart()
+
+
+def PythonLSP_Status():
+    _client.status()
 
 
 N10X.Editor.CallOnMainThread(_client.register)
