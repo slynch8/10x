@@ -901,6 +901,14 @@ class LanguageServerClient:
         # the user pauses for _auto_delay seconds.
         if not ch or self.setting("AutoComplete") != "true":
             return
+        # Only schedule completion when the focused file is one we handle;
+        # otherwise typing in another language's file (e.g. after switching
+        # workspaces) would queue requests that just get rejected.
+        try:
+            if not self.handles(N10X.Editor.GetCurrentFilename()):
+                return
+        except Exception:
+            return
         if ch in self.trigger_chars or ch.isalnum() or ch == "_":
             self._completion_due = time.time() + self._auto_delay
 
@@ -943,6 +951,16 @@ class LanguageServerClient:
             open_handled = [f for f in (N10X.Editor.GetOpenFiles() or [])
                             if self.handles(f)]
         except Exception:
+            return
+        if not open_handled:
+            # Nothing we handle is open anymore (e.g. the user switched to a
+            # different workspace/language). Shut the server down rather than
+            # leave it running in the background against a workspace we've left.
+            # It will be relaunched - with the correct root - when one of our
+            # files is opened again.
+            if self.conn:
+                self.log("no handled files open; shutting server down")
+                self._teardown()
             return
         if not self._ready():
             # Bring the server up if a handled file is open; _on_initialized
