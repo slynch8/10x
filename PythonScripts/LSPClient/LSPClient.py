@@ -150,6 +150,34 @@ def first_location(result):
     return None
 
 
+def offset_to_pos(text, offset):
+    """Convert a character offset in `text` to an LSP {line, character}."""
+    line = text.count("\n", 0, offset)
+    last_nl = text.rfind("\n", 0, offset)
+    return {"line": line, "character": offset - (last_nl + 1)}
+
+
+def incremental_change(old, new):
+    """Single LSP incremental contentChange describing old -> new (a range
+    replace covering everything between the common prefix and common suffix),
+    or None when the text is unchanged. Positions are computed against `old`,
+    which is what the server currently holds."""
+    if old == new:
+        return None
+    old_len, new_len = len(old), len(new)
+    p = 0
+    max_p = min(old_len, new_len)
+    while p < max_p and old[p] == new[p]:
+        p += 1
+    s = 0
+    max_s = min(old_len, new_len) - p
+    while s < max_s and old[old_len - 1 - s] == new[new_len - 1 - s]:
+        s += 1
+    return {"range": {"start": offset_to_pos(old, p),
+                      "end": offset_to_pos(old, old_len - s)},
+            "text": new[p:new_len - s]}
+
+
 # ===========================================================================
 # JSON-RPC transport over the server's stdio
 # ===========================================================================
@@ -166,7 +194,7 @@ class LSPConnection:
         self._log = log or (lambda m: None)
         self._verbose = verbose or (lambda: False)
         self.incoming = queue.Queue()
-        self._wlock = threading.Lock()
+        self.outgoing = queue.Queue()
         self._next_id = 1
         self.alive = False
 
@@ -180,23 +208,45 @@ class LSPConnection:
         self._reader.start()
         self._errreader = threading.Thread(target=self._stderr_loop, daemon=True)
         self._errreader.start()
+        self._writer = threading.Thread(target=self._write_loop, daemon=True)
+        self._writer.start()
 
     # -- outgoing ----------------------------------------------------------
 
     def _write(self, payload):
         if not self.alive or self.proc.stdin is None:
             return
-        data = json.dumps(payload).encode("utf-8")
-        header = ("Content-Length: %d\r\n\r\n" % len(data)).encode("ascii")
         try:
-            with self._wlock:
-                self.proc.stdin.write(header + data)
-                self.proc.stdin.flush()
-            if self._verbose():
-                self._log("--> " + json.dumps(payload)[:300])
-        except (OSError, ValueError) as e:
-            self.alive = False
-            self._log(f"write failed: {e}")
+            body = json.dumps(payload)
+        except (TypeError, ValueError) as e:
+            self._log(f"encode failed: {e}")
+            return
+        data = body.encode("utf-8")
+        header = ("Content-Length: %d\r\n\r\n" % len(data)).encode("ascii")
+        # Hand the framed bytes to the writer thread instead of writing to the
+        # pipe here. A server that is busy (e.g. reparsing a large file) and not
+        # draining its stdin would otherwise block this call - and since _write
+        # runs on the editor's main thread, that freezes the editor.
+        self.outgoing.put(header + data)
+        if self._verbose():
+            self._log("--> " + body[:300])
+
+    def _write_loop(self):
+        # Runs on a background thread: the blocking write/flush happens here, off
+        # the main thread. No N10X.Editor calls (main-thread only) - logging uses
+        # plain print via self._log, which is thread-safe enough.
+        stream = self.proc.stdin
+        while True:
+            chunk = self.outgoing.get()
+            if chunk is None:  # shutdown sentinel
+                break
+            try:
+                stream.write(chunk)
+                stream.flush()
+            except (OSError, ValueError) as e:
+                self.alive = False
+                self._log(f"write failed: {e}")
+                break
 
     def request(self, method, params):
         """Send a request, returning its id so the caller can match a reply."""
@@ -274,6 +324,7 @@ class LSPConnection:
             except Exception:
                 pass
         self.alive = False
+        self.outgoing.put(None)  # stop the writer thread
         try:
             if self.proc.poll() is None:
                 self.proc.terminate()
@@ -321,6 +372,7 @@ class LanguageServerClient:
         self.initialized = False
         self.root_uri = None
         self.root_path = None
+        self._sync_kind = 1  # server textDocumentSync.change: 0 none/1 full/2 incremental
         self.pending = {}        # request id -> handler(result, error)
         self.docs = {}           # uri -> {"version", "text", "filename"}
         self.diagnostics = {}    # uri -> [Diagnostic]
@@ -438,6 +490,14 @@ class LanguageServerClient:
         if error:
             self.log(f"initialize failed: {error}")
             return
+        # Honour the server's document-sync mode. textDocumentSync may be a bare
+        # number or an object with a "change" field: 0 none, 1 full, 2 incremental.
+        caps = (result or {}).get("capabilities", {}) or {}
+        sync = caps.get("textDocumentSync", 1)
+        self._sync_kind = sync.get("change", 1) if isinstance(sync, dict) else sync
+        if self._verbose():
+            self.log(f"server sync kind: {self._sync_kind} "
+                     f"(0=none,1=full,2=incremental)")
         self.conn.notify("initialized", {})
         self.initialized = True
         N10X.Editor.SetStatusBarText(f"{self.name}: ready")
@@ -507,13 +567,24 @@ class LanguageServerClient:
         if text is None:
             return
         doc = self.docs[uri]
-        if text == doc["text"] and not force:
+        if text == doc["text"]:
+            return  # nothing changed; `force` only governs whether callers
+            # request features, not whether we resend identical content.
+        if self._sync_kind == 0:
+            doc["text"] = text  # server doesn't want changes; just track locally
             return
+        if self._sync_kind == 2:
+            # Incremental: send only the edited range. Crucial for large files -
+            # full-text resync on every keystroke is what makes typing lag.
+            change = incremental_change(doc["text"], text)
+            changes = [change] if change is not None else [{"text": text}]
+        else:
+            changes = [{"text": text}]
         doc["text"] = text
         doc["version"] += 1
         self.conn.notify("textDocument/didChange", {
             "textDocument": {"uri": uri, "version": doc["version"]},
-            "contentChanges": [{"text": text}]})
+            "contentChanges": changes})
 
     def did_save(self, filename):
         if not self.handles(filename) or not self._ready():
