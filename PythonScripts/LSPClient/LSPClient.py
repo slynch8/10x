@@ -30,7 +30,7 @@
 #     <name>.Enabled        "true"/"false" (default true)
 #     <name>.AutoComplete   "true"/"false" - auto-trigger completion as you type
 #                           (after identifier or trigger chars, debounced).
-#                           Default false (use the keybinding instead).
+#                           Default true; set "false" to use the keybinding only.
 #     <name>.Diagnostics    "true"/"false" - show the diagnostic under the
 #                           cursor in the status bar (default true)
 #     <name>.MaxResults     Max completion items to show, most-relevant first
@@ -956,7 +956,7 @@ class LanguageServerClient:
         fn = N10X.Editor.GetCurrentFilename()
         self.log("---- status ----")
         self.log(f"  enabled setting : {self.setting('Enabled') or '(unset=true)'}")
-        self.log(f"  autocomplete    : {self.setting('AutoComplete') or '(unset=false)'}")
+        self.log(f"  autocomplete    : {self.setting('AutoComplete') or '(unset=true)'}")
         self.log(f"  server argv     : {self._server_argv()}")
         self.log(f"  connection      : {'alive' if (self.conn and self.conn.alive) else 'none/dead'}")
         self.log(f"  initialized     : {self.initialized}")
@@ -1019,7 +1019,7 @@ class LanguageServerClient:
         # an identifier char or a trigger char is typed. Each keystroke pushes
         # the due time forward, so a burst of typing fires a single request once
         # the user pauses for _auto_delay seconds.
-        if not ch or self.setting("AutoComplete") != "true":
+        if not ch or self.setting("AutoComplete") == "false":
             return
         # Only schedule completion when the focused file is one we handle;
         # otherwise typing in another language's file (e.g. after switching

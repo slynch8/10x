@@ -28,7 +28,7 @@
 #                                  RustLSP.Command: rustup run stable rust-analyzer
 #                                  RustLSP.Command: C:/tools/rust-analyzer.exe
 #   RustLSP.Enabled            "true"/"false" (default true)
-#   RustLSP.AutoComplete       "true"/"false" - auto-trigger as you type (default false)
+#   RustLSP.AutoComplete       "true"/"false" - auto-trigger as you type (default true)
 #   RustLSP.Diagnostics        "true"/"false" - line diagnostic in status bar (default true)
 #   RustLSP.MaxResults         max completion items shown, most-relevant first (default 50)
 #   RustLSP.LogVerbose         "true"/"false" - log server traffic (default false)

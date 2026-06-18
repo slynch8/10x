@@ -31,7 +31,7 @@
 #                                  OdinLSP.Command: ols
 #                                  OdinLSP.Command: C:/tools/ols/ols.exe
 #   OdinLSP.Enabled            "true"/"false" (default true)
-#   OdinLSP.AutoComplete       "true"/"false" - auto-trigger as you type (default false)
+#   OdinLSP.AutoComplete       "true"/"false" - auto-trigger as you type (default true)
 #   OdinLSP.Diagnostics        "true"/"false" - line diagnostic in status bar (default true)
 #   OdinLSP.LogVerbose         "true"/"false" - log server traffic (default false)
 #

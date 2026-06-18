@@ -29,7 +29,7 @@
 #                                  JaiLSP.Command: jails
 #                                  JaiLSP.Command: C:/tools/jails/jails.exe
 #   JaiLSP.Enabled             "true"/"false" (default true)
-#   JaiLSP.AutoComplete        "true"/"false" - auto-trigger as you type (default false)
+#   JaiLSP.AutoComplete        "true"/"false" - auto-trigger as you type (default true)
 #   JaiLSP.Diagnostics         "true"/"false" - line diagnostic in status bar (default true)
 #   JaiLSP.MaxResults          max completion items shown, most-relevant first (default 50)
 #   JaiLSP.LogVerbose          "true"/"false" - log server traffic (default false)
