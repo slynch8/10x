@@ -24,9 +24,18 @@
 #   PythonLSP.Enabled          "true"/"false" (default true)
 #   PythonLSP.AutoComplete     "true"/"false" - auto-trigger as you type (default true)
 #   PythonLSP.Diagnostics      "true"/"false" - line diagnostic in status bar (default true)
+#   PythonLSP.InterceptCommands "true"/"false" - drive the language server from
+#                              10x's built-in GoToSymbolDefinition /
+#                              FindSymbolReferences / Autocomplete /
+#                              ShowFunctionArgsInfo commands so the editor's
+#                              default key bindings work (default true)
 #   PythonLSP.LogVerbose       "true"/"false" - log server traffic (default false)
 #
-# KEY BINDINGS (Settings -> Key Bindings) - bind the functions you want:
+# KEY BINDINGS - with InterceptCommands on (the default), 10x's standard
+# bindings for GoToSymbolDefinition, FindSymbolReferences, Autocomplete and
+# ShowFunctionArgsInfo already drive the language server in Python files; no
+# setup needed. To bind the functions explicitly instead (Settings -> Key
+# Bindings):
 #   Control Space:       PythonLSP_Completion()
 #   F12:                 PythonLSP_GotoDefinition()
 #   Control K:           PythonLSP_Hover()

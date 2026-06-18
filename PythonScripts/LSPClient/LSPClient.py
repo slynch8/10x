@@ -31,6 +31,12 @@
 #     <name>.AutoComplete   "true"/"false" - auto-trigger completion as you type
 #                           (after identifier or trigger chars, debounced).
 #                           Default true; set "false" to use the keybinding only.
+#     <name>.InterceptCommands  "true"/"false" - hook 10x's built-in commands
+#                           (GoToSymbolDefinition, FindSymbolReferences,
+#                           Autocomplete, ShowFunctionArgsInfo) so the default key
+#                           bindings drive the language server for files we
+#                           handle. Default true; set "false" to require the
+#                           per-language <Name>_* functions instead.
 #     <name>.Diagnostics    "true"/"false" - show the diagnostic under the
 #                           cursor in the status bar (default true)
 #     <name>.MaxResults     Max completion items to show, most-relevant first
@@ -1163,6 +1169,44 @@ class LanguageServerClient:
             self.log(f"command panel error: {e}")
             return True
 
+    # 10x's built-in command names (as passed to an intercept handler) mapped to
+    # our LSP feature, keyed by the normalised (lowercased, spaces removed) name.
+    # Intercepting these makes the editor's default key bindings (e.g. F12 for
+    # GoToSymbolDefinition, Ctrl+Space for Autocomplete) drive the language
+    # server for files we handle, with no per-language key binding needed.
+    def _intercept_table(self):
+        return {
+            "gotosymboldefinition": self.goto_definition,
+            "findsymbolreferences": self.find_references,
+            "autocomplete": self.complete,
+            "showfunctionargsinfo": self.signature_help,
+        }
+
+    def _on_intercept_command(self, command=None, *args):
+        """Intercept a built-in editor command. Returns True when we've handled
+        it (so 10x suppresses its default behaviour), else a falsey value so the
+        command runs normally. We only claim a command for files we handle while
+        the server is ready - otherwise the editor's own behaviour stands."""
+        try:
+            if not command or self.setting("InterceptCommands") == "false":
+                return False
+            fn = self._intercept_table().get(command.replace(" ", "").lower())
+            if fn is None:
+                return False
+            if not self.handles(N10X.Editor.GetCurrentFilename()):
+                return False
+            if not self._ready():
+                # Server not up yet: let 10x's default run rather than swallow
+                # the key and do nothing.
+                return False
+            if self._verbose():
+                self.log(f"intercepting command: {command}")
+            fn()
+            return True
+        except Exception as e:
+            self.log(f"intercept command error: {e}")
+            return False
+
     def register(self):
         """Wire this client into the 10x editor events. Call once, on the main
         thread (e.g. via N10X.Editor.CallOnMainThread)."""
@@ -1177,6 +1221,10 @@ class LanguageServerClient:
             N10X.Editor.AddCommandPanelHandlerFunction(self._on_command_panel)
         except Exception as e:
             self.log(f"command panel registration failed: {e}")
+        try:
+            N10X.Editor.AddInterceptCommandFunction(self._on_intercept_command)
+        except Exception as e:
+            self.log(f"command interception unavailable: {e}")
         try:
             cur = N10X.Editor.GetCurrentFilename()
             if self.handles(cur) and self.ensure_started(cur):

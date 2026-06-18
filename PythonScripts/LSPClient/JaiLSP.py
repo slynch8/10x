@@ -32,9 +32,18 @@
 #   JaiLSP.AutoComplete        "true"/"false" - auto-trigger as you type (default true)
 #   JaiLSP.Diagnostics         "true"/"false" - line diagnostic in status bar (default true)
 #   JaiLSP.MaxResults          max completion items shown, most-relevant first (default 50)
+#   JaiLSP.InterceptCommands   "true"/"false" - drive the language server from
+#                              10x's built-in GoToSymbolDefinition /
+#                              FindSymbolReferences / Autocomplete /
+#                              ShowFunctionArgsInfo commands so the editor's
+#                              default key bindings work (default true)
 #   JaiLSP.LogVerbose          "true"/"false" - log server traffic (default false)
 #
-# KEY BINDINGS (Settings -> Key Bindings) - bind the functions you want:
+# KEY BINDINGS - with InterceptCommands on (the default), 10x's standard
+# bindings for GoToSymbolDefinition, FindSymbolReferences, Autocomplete and
+# ShowFunctionArgsInfo already drive the language server in Jai files; no
+# setup needed. To bind the functions explicitly instead (Settings -> Key
+# Bindings):
 #   Control Space:       JaiLSP_Completion()
 #   F12:                 JaiLSP_GotoDefinition()
 #   Control K:           JaiLSP_Hover()
