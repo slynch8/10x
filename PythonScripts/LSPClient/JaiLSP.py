@@ -1,0 +1,115 @@
+# JaiLSP.py - Jai language support for 10x (10xeditor.com)
+#
+# A thin configuration layer on top of the generic LSPClient module (same
+# folder). It points the generic Language Server Protocol client at jails, the
+# Jai Language Server (https://github.com/SogoCZE/jails), and exposes the
+# editor features: completion, hover docs, signature help, go-to-definition,
+# find-references and live diagnostics.
+#
+# ---------------------------------------------------------------------------
+# INSTALL
+#   1. Copy the LSPClient folder (this file lives alongside LSPClient.py) to:
+#          %appdata%\10x\PythonScripts
+#   2. Install jails so that "jails" (jails.exe) is on your PATH, or set
+#      JaiLSP.Command to its full path. Build instructions:
+#          https://github.com/SogoCZE/jails
+#      jails needs to know where the Jai compiler is; follow its README to
+#      point it at your jai/ install (typically via its own config).
+#   3. Add a jails.json to your project root so jails knows the build entry
+#      point (the file you pass to the compiler). Minimal example:
+#          {
+#            "buildRoot": "main.jai"
+#          }
+#      Without it, jails falls back to treating the opened file's folder as the
+#      workspace, which gives weaker cross-file results.
+#
+# SETTINGS (Settings.10x_settings)
+#   JaiLSP.Command             Command line used to launch the server.
+#                              Default: "jails". Examples:
+#                                  JaiLSP.Command: jails
+#                                  JaiLSP.Command: C:/tools/jails/jails.exe
+#   JaiLSP.Enabled             "true"/"false" (default true)
+#   JaiLSP.AutoComplete        "true"/"false" - auto-trigger as you type (default false)
+#   JaiLSP.Diagnostics         "true"/"false" - line diagnostic in status bar (default true)
+#   JaiLSP.MaxResults          max completion items shown, most-relevant first (default 50)
+#   JaiLSP.LogVerbose          "true"/"false" - log server traffic (default false)
+#
+# KEY BINDINGS (Settings -> Key Bindings) - bind the functions you want:
+#   Control Space:       JaiLSP_Completion()
+#   F12:                 JaiLSP_GotoDefinition()
+#   Control K:           JaiLSP_Hover()
+#   Shift F12:           JaiLSP_FindReferences()
+#   Control Shift Space: JaiLSP_SignatureHelp()
+#   (no binding needed)  JaiLSP_ShowDiagnostics()
+#   (no binding needed)  JaiLSP_Restart()
+# ---------------------------------------------------------------------------
+
+import os
+import sys
+
+import N10X
+
+try:
+    from LSPClient import LanguageServerClient
+except ImportError:
+    # 10x normally puts every PythonScripts subfolder on sys.path, so the bare
+    # import above works. If it didn't, add this file's own folder (which also
+    # contains LSPClient.py) to sys.path and retry.
+    try:
+        _here = os.path.dirname(os.path.abspath(__file__))
+        if _here not in sys.path:
+            sys.path.append(_here)
+    except NameError:
+        pass
+    from LSPClient import LanguageServerClient
+
+
+_client = LanguageServerClient(
+    name="JaiLSP",
+    language_id="jai",
+    extensions=(".jai",),
+    default_command="jails",
+    # "." for member access on structs/enums. Jai has no "::"-style path
+    # operator (constants are "name :: value"), so a single trigger char.
+    trigger_chars=".",
+    # jails reads the build entry point from jails.json at the project root;
+    # prefer that, then fall back to common Jai build files / a repo root.
+    root_markers=("jails.json", "first.jai", "build.jai", "main.jai", ".git"),
+)
+
+
+# --- commands to bind to keys ----------------------------------------------
+
+def JaiLSP_Completion():
+    _client.complete()
+
+
+def JaiLSP_Hover():
+    _client.hover()
+
+
+def JaiLSP_SignatureHelp():
+    _client.signature_help()
+
+
+def JaiLSP_GotoDefinition():
+    _client.goto_definition()
+
+
+def JaiLSP_FindReferences():
+    _client.find_references()
+
+
+def JaiLSP_ShowDiagnostics():
+    _client.show_all_diagnostics()
+
+
+def JaiLSP_Restart():
+    _client.restart()
+
+
+def JaiLSP_Status():
+    _client.status()
+
+
+N10X.Editor.CallOnMainThread(_client.register)
