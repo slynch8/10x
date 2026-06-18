@@ -690,18 +690,29 @@ class LanguageServerClient:
         # Order by the server's relevance ranking (sortText). Servers like
         # rust-analyzer encode "most relevant first" there; falling back to the
         # label keeps a stable order for items that omit it.
+        prefix = self._line_prefix()
+        word = self._completion_word().lower()
+        # Narrow to items that match what's been typed after the trigger. Many
+        # servers (ols, rust-analyzer) return the whole member/scope set after a
+        # "." and expect the client to filter as the user types. Match against
+        # filterText (the field intended for this) when present, else the label.
+        if word:
+            def _match(it):
+                return (it.get("filterText") or it.get("label") or "").lower()
+            items = [it for it in items if _match(it).startswith(word)]
+        # Order by the server's relevance ranking (sortText) so the closest
+        # match - e.g. "found" - sits at the top; label breaks ties stably.
         items = sorted(items, key=lambda it: (it.get("sortText") is None,
                                               it.get("sortText") or "",
                                               it.get("label") or ""))
-        prefix = self._line_prefix()
         limit = self._max_results()
         if self._verbose():
             try:
                 x, y = N10X.Editor.GetCursorPos()
             except Exception:
                 x, y = ("?", "?")
-            self.log(f"completion: {len(items)} items (cap {limit}); "
-                     f"cursor=({x},{y}) line_prefix={prefix!r}")
+            self.log(f"completion: {len(items)} items after filter (cap {limit}); "
+                     f"cursor=({x},{y}) word={word!r} line_prefix={prefix!r}")
         labels, seen = [], set()
         for it in items:
             text = self._completion_insert_text(it, prefix)
@@ -734,6 +745,17 @@ class LanguageServerClient:
             return ""
         x, _ = N10X.Editor.GetCursorPos()
         return line[:x]
+
+    def _completion_word(self):
+        """The identifier fragment immediately before the cursor (e.g. "f" in
+        "tile.f"). Used to filter the server's items down to what the user has
+        actually typed. Empty right after a trigger char like "." (so the full
+        member set is shown)."""
+        prefix = self._line_prefix()
+        i = len(prefix)
+        while i > 0 and (prefix[i - 1].isalnum() or prefix[i - 1] == "_"):
+            i -= 1
+        return prefix[i:]
 
     def _completion_insert_text(self, item, prefix):
         """Turn an LSP completion item into the string to hand 10x.
