@@ -910,12 +910,20 @@ class LanguageServerClient:
         if error or not result:
             N10X.Editor.SetStatusBarText(f"{self.name}: no references found")
             return
-        self.log(f"{len(result)} reference(s):")
+        seen, locs = set(), []
         for loc in result:
+            path = uri_to_path(loc.get("uri", ""))
             line = loc.get("range", {}).get("start", {}).get("line", 0) + 1
-            self.log(f"  {uri_to_path(loc.get('uri', ''))}:{line}")
+            key = (path, line)
+            if key in seen:
+                continue
+            seen.add(key)
+            locs.append((path, line))
+        self.log(f"{len(locs)} reference(s):")
+        for path, line in locs:
+            self.log(f"  {path}:{line}")
         N10X.Editor.SetStatusBarText(
-            f"{self.name}: {len(result)} reference(s) - see output panel")
+            f"{self.name}: {len(locs)} reference(s) - see output panel")
 
     # -- public commands (wire these to keybindings) ----------------------
 
@@ -1134,7 +1142,15 @@ class LanguageServerClient:
             prefix = self.name.lower()
             if not low.startswith(prefix):
                 return False
-            cmd = low[len(prefix):].lstrip(" :_-").replace(" ", "").replace("_", "")
+            rest = low[len(prefix):]
+            # Only handle the friendly "<name> <command>" form (space/colon/dash
+            # separator). A bare "<Name>_<Func>" string is one of our exported
+            # functions, which 10x executes directly from the command panel - if
+            # we matched it here too the command would run twice (the doubled
+            # find-references output).
+            if rest and rest[0] not in " :-":
+                return False
+            cmd = rest.lstrip(" :_-").replace(" ", "").replace("_", "")
             fn = self._command_table().get(cmd)
             if fn is None:
                 self.log(f"unknown command '{text}'. Try: {self.name} status | "
