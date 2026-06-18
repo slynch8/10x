@@ -332,6 +332,8 @@ class LanguageServerClient:
         self._last_status_line = -1
         self._next_start_attempt = 0.0  # backoff for auto-starting the server
         self._verbose_flag = False       # cached so background threads can read it
+        self._retry_due = 0.0            # time.time() at which to run _retry_action
+        self._retry_action = None        # deferred re-request (see _schedule_retry)
 
     # -- logging / settings ------------------------------------------------
 
@@ -539,6 +541,13 @@ class LanguageServerClient:
         rid = self.conn.request(method, params)
         self.pending[rid] = handler
         return rid
+
+    def _schedule_retry(self, action, delay=0.4):
+        """Run `action` once on a later update tick. Used to re-issue a request
+        that came back empty because the server hadn't finished analysing the
+        file yet (common right after a file/workspace opens)."""
+        self._retry_action = action
+        self._retry_due = time.time() + delay
 
     # -- main-thread message pump -----------------------------------------
 
@@ -784,9 +793,18 @@ class LanguageServerClient:
         sig = sigs[active] if active < len(sigs) else sigs[0]
         N10X.Editor.SetStatusBarText(f"{self.name}: " + sig.get("label", ""))
 
-    def _on_definition(self, result, error):
+    def _on_definition(self, result, error, retry=0):
         loc = first_location(result)
         if not loc:
+            # rust-analyzer (and other servers) answer null until the file's
+            # crate/workspace has finished loading, which is why a cold
+            # go-to-definition "only works after editing the file". Re-issue the
+            # request a couple of times before giving up.
+            if not error and retry < 2:
+                self._schedule_retry(
+                    lambda r=retry: self.goto_definition(_retry=r + 1),
+                    delay=0.4 * (retry + 1))
+                return
             N10X.Editor.SetStatusBarText(f"{self.name}: no definition found")
             return
         uri, rng = loc
@@ -860,12 +878,13 @@ class LanguageServerClient:
         self.sync_current(force=True)
         self._send_request("textDocument/signatureHelp", params, self._on_signature)
 
-    def goto_definition(self):
+    def goto_definition(self, _retry=0):
         params = self._doc_pos_params()
         if params is None:
             return
         self.sync_current(force=True)
-        self._send_request("textDocument/definition", params, self._on_definition)
+        self._send_request("textDocument/definition", params,
+                           lambda r, e: self._on_definition(r, e, _retry))
 
     def find_references(self):
         params = self._doc_pos_params()
@@ -922,6 +941,14 @@ class LanguageServerClient:
         try:
             self.pump()
             now = time.time()
+            # Deferred re-request (e.g. a goto-definition that came back empty
+            # while the server was still indexing) fires as soon as it's due.
+            if self._retry_action and now >= self._retry_due:
+                action = self._retry_action
+                self._retry_action = None
+                self._retry_due = 0.0
+                if self._ready():
+                    action()
             # Completion fires as soon as it's due (not throttled).
             if (self._ready() and self._completion_due
                     and now >= self._completion_due):
