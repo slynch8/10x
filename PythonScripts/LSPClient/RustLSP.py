@@ -85,6 +85,8 @@ _client = LanguageServerClient(
     # workspace; rust-project.json covers non-Cargo projects. (".git" is left
     # out so a git submodule's own .git doesn't get picked as the root.)
     root_markers=("Cargo.toml", "rust-project.json"),
+    # Skip Cargo's build output in the file-watch scan.
+    ignore_dirs=("target",),
 )
 
 

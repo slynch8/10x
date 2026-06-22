@@ -86,6 +86,8 @@ _client = LanguageServerClient(
     # root marker so the right collections/build dir are picked up. (".git" is
     # left out so a git submodule's own .git doesn't get picked as the root.)
     root_markers=("ols.json", "ols.json5"),
+    # Skip OLS's on-disk cache in the file-watch scan.
+    ignore_dirs=(".ols-cache",),
 )
 
 

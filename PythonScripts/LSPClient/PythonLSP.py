@@ -84,6 +84,10 @@ _client = LanguageServerClient(
     default_command="pylsp",
     fallback_argv=[sys.executable, "-m", "pylsp"],
     trigger_chars=".",
+    # Skip virtualenvs and tool caches in the file-watch scan.
+    ignore_dirs=("__pycache__", ".venv", "venv", "env", "__pypackages__",
+                 ".mypy_cache", ".pytest_cache", ".ruff_cache",
+                 ".tox", ".nox", ".eggs"),
 )
 
 

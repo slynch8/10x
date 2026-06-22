@@ -87,6 +87,14 @@ _SEVERITY_LEVELS = {"error": 1, "errors": 1, "warning": 2, "warnings": 2,
 _DEFAULT_ROOT_MARKERS = ("pyproject.toml", "setup.py", "setup.cfg",
                          "requirements.txt", "Pipfile", "package.json",
                          "Cargo.toml", "go.mod", "tsconfig.json")
+# Language-agnostic directories the workspace file-watch scan never descends
+# into (VCS/editor metadata, generic build/dependency output) - keeps the
+# periodic mtime walk cheap. Language-specific dirs (e.g. Rust's "target",
+# Python venvs) are passed per-client via LanguageServerClient(ignore_dirs=...)
+# so adding a language never means editing this module.
+_COMMON_IGNORE_DIRS = frozenset((
+    ".git", ".svn", ".hg", ".idea", ".vs", ".vscode",
+    "node_modules", "build", "dist", ".cache"))
 
 
 def _log(tag, msg):
@@ -378,11 +386,17 @@ class LanguageServerClient:
                         "<name>.AutoComplete" is true (e.g. ".").
         root_markers    Optional iterable of project-root marker filenames.
         init_options    Optional dict passed as initializationOptions.
+        ignore_dirs     Optional iterable of language-specific directory names
+                        the workspace file-watch scan should skip (e.g.
+                        ("target",) for Rust). Merged with the common set
+                        (_COMMON_IGNORE_DIRS); keep language-specific entries
+                        here in the per-language script rather than in this
+                        module so new languages don't need to edit it.
     """
 
     def __init__(self, name, language_id, extensions, default_command="",
                  fallback_argv=None, trigger_chars="", root_markers=None,
-                 init_options=None):
+                 init_options=None, ignore_dirs=None):
         self.name = name
         self.language_id = language_id
         self.extensions = tuple(extensions)
@@ -391,6 +405,9 @@ class LanguageServerClient:
         self.trigger_chars = trigger_chars or ""
         self.root_markers = tuple(root_markers) if root_markers else _DEFAULT_ROOT_MARKERS
         self.init_options = init_options or {}
+        # Directories the file-watch scan skips: the common set plus any the
+        # language script supplied.
+        self.ignore_dirs = _COMMON_IGNORE_DIRS | frozenset(ignore_dirs or ())
 
         self.conn = None
         self.initialized = False
@@ -410,6 +427,15 @@ class LanguageServerClient:
         self._verbose_flag = False       # cached so background threads can read it
         self._retry_due = 0.0            # time.time() at which to run _retry_action
         self._retry_action = None        # deferred re-request (see _schedule_retry)
+        # Watched-file support. Servers like ols keep an in-memory workspace
+        # index and refresh an unopened file only when told it changed on disk
+        # (via workspace/didChangeWatchedFiles). rust-analyzer watches the FS
+        # itself and pylsp re-reads on demand, so they don't register a watcher
+        # with us; ols does, which is what enables our polling scan below.
+        self._watch_enabled = False      # server asked us to watch files
+        self._watch_mtimes = {}          # path -> mtime, baseline for diffing
+        self._last_watch_scan = 0.0
+        self._watch_interval = 2.0       # seconds between workspace mtime scans
 
     # -- logging / settings ------------------------------------------------
 
@@ -489,6 +515,12 @@ class LanguageServerClient:
                     "configuration": True,
                     "workspaceFolders": True,
                     "didChangeConfiguration": {"dynamicRegistration": True},
+                    # Let servers register file watchers with us. We don't watch
+                    # the FS via the OS; instead, when a server registers we run
+                    # a throttled mtime scan of the workspace (see _scan_watched
+                    # _files) and report changes. This keeps ols's index fresh
+                    # for files edited while not open in the editor.
+                    "didChangeWatchedFiles": {"dynamicRegistration": True},
                 },
                 "textDocument": {
                     "synchronization": {"didSave": True, "willSave": False,
@@ -546,6 +578,10 @@ class LanguageServerClient:
         self.pending.clear()
         self.docs.clear()
         self.diagnostics.clear()
+        # Watchers are per-connection (re-registered by the server on the next
+        # initialize), so drop them with the server.
+        self._watch_enabled = False
+        self._watch_mtimes = {}
 
     # -- document sync -----------------------------------------------------
 
@@ -692,9 +728,87 @@ class LanguageServerClient:
         elif method == "workspace/workspaceFolders":
             self.conn.respond(rid, [{"uri": self.root_uri,
                                      "name": os.path.basename(self.root_path) or "root"}])
-        else:
-            # registerCapability, workDoneProgress/create, etc. - just ack.
+        elif method == "client/registerCapability":
+            self._apply_registrations((params or {}).get("registrations", []))
             self.conn.respond(rid, None)
+        elif method == "client/unregisterCapability":
+            self._apply_unregistrations((params or {}).get("unregisterations", []))
+            self.conn.respond(rid, None)
+        else:
+            # workDoneProgress/create, etc. - just ack.
+            self.conn.respond(rid, None)
+
+    def _apply_registrations(self, registrations):
+        for reg in registrations or []:
+            if reg.get("method") == "workspace/didChangeWatchedFiles":
+                # The server wants us to tell it when workspace files change.
+                # Enable our polling scan and seed the baseline so the first
+                # scan only reports genuine changes, not the whole tree.
+                if not self._watch_enabled:
+                    self._watch_enabled = True
+                    self._watch_mtimes = self._snapshot_watched_files()
+                    self._last_watch_scan = time.time()
+                if self._verbose():
+                    self.log("file watching enabled (server registered "
+                             "workspace/didChangeWatchedFiles)")
+
+    def _apply_unregistrations(self, unregistrations):
+        for reg in unregistrations or []:
+            if reg.get("method") == "workspace/didChangeWatchedFiles":
+                self._watch_enabled = False
+                self._watch_mtimes = {}
+
+    def _snapshot_watched_files(self):
+        """Map every workspace file we handle to its mtime. Cheap enough to run
+        on a few-second cadence; heavy/irrelevant directories are skipped. Used
+        as the baseline for detecting create/change/delete between scans."""
+        snap = {}
+        root = self.root_path
+        if not root or not os.path.isdir(root):
+            return snap
+        ignore = self.ignore_dirs
+        for dirpath, dirnames, filenames in os.walk(root):
+            # Prune noisy directories in place so os.walk never descends them.
+            dirnames[:] = [d for d in dirnames if d not in ignore]
+            for fn in filenames:
+                if not fn.endswith(self.extensions):
+                    continue
+                path = os.path.join(dirpath, fn)
+                try:
+                    snap[path] = os.path.getmtime(path)
+                except OSError:
+                    pass
+        return snap
+
+    def _scan_watched_files(self, now):
+        """Diff the workspace against the last snapshot and tell the server
+        about any created/changed/deleted files it cares about. This is what
+        keeps ols's index correct for files edited while not open (e.g. a
+        project-wide rename touching an unopened definition file)."""
+        if not (self._watch_enabled and self._ready()):
+            return
+        if now - self._last_watch_scan < self._watch_interval:
+            return
+        self._last_watch_scan = now
+        new = self._snapshot_watched_files()
+        old = self._watch_mtimes
+        changes = []
+        for path, mtime in new.items():
+            if path not in old:
+                changes.append((path, 1))           # Created
+            elif mtime != old[path]:
+                changes.append((path, 2))           # Changed
+        for path in old:
+            if path not in new:
+                changes.append((path, 3))           # Deleted
+        self._watch_mtimes = new
+        if not changes:
+            return
+        if self._verbose():
+            self.log(f"watched files changed: {len(changes)} "
+                     f"(notifying {self.name} server)")
+        self.conn.notify("workspace/didChangeWatchedFiles", {
+            "changes": [{"uri": path_to_uri(p), "type": t} for p, t in changes]})
 
     def _handle_notification(self, method, params):
         if method == "textDocument/publishDiagnostics":
@@ -1162,6 +1276,10 @@ class LanguageServerClient:
                 self._reconcile_open_files(now)
                 if self._ready():
                     self.sync_current()
+                    # Self-throttled (no-op unless this server registered a
+                    # watcher and the scan interval has elapsed). Of our current
+                    # servers only ols registers one; rust-analyzer/pylsp don't.
+                    self._scan_watched_files(now)
         except Exception as e:
             self.log(f"update error: {e}")
 
