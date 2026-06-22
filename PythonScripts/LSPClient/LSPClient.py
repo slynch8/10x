@@ -992,8 +992,13 @@ class LanguageServerClient:
             return
         uri, rng = loc
         start = rng.get("start", {})
-        N10X.Editor.OpenFile(uri_to_path(uri))
-        N10X.Editor.SetCursorPos((start.get("character", 0), start.get("line", 0)))
+        pos = (start.get("character", 0), start.get("line", 0))
+        path = uri_to_path(uri)
+        # Pass the target position straight to OpenFile so the file opens at the
+        # definition. Opening first and then moving the cursor records the top
+        # of the file (the initial cursor spot) in the cursor history, which
+        # clutters jump-back navigation.
+        N10X.Editor.OpenFile(path, N10X.Editor.GetCurrentPanelGridPos(), pos)
         N10X.Editor.ScrollCursorIntoView()
 
     def _on_references(self, result, error):
