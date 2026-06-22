@@ -13,6 +13,16 @@
 #   2. Install a Python language server, e.g.:
 #          pip install python-lsp-server
 #      (or:  pip install pyright   and set PythonLSP.Command - see below)
+#   3. Install a linter so you get DIAGNOSTICS (errors/warnings). A bare
+#      "pip install python-lsp-server" ships only jedi, so completion, hover
+#      and go-to-definition work but no diagnostics are ever produced. Add at
+#      least pyflakes (genuine errors) - pycodestyle adds style warnings:
+#          pip install pyflakes pycodestyle
+#      or pull in every pylsp plugin at once:
+#          pip install "python-lsp-server[all]"
+#      Install into the SAME Python that runs pylsp; it auto-detects plugins on
+#      startup, so restart the server afterwards (PythonLSP_Restart()).
+#      (pyright bundles its own type checker, so this step is pylsp-specific.)
 #
 # SETTINGS (Settings.10x_settings)
 #   PythonLSP.Command          Command line used to launch the server.

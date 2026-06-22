@@ -66,6 +66,10 @@ import N10X
 
 _NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 _SEVERITY = {1: "Error", 2: "Warning", 3: "Info", 4: "Hint"}
+# LSP severity -> MSVC compiler keyword. 10x parses build output in the Visual
+# Studio "file(line,col): <keyword> CODE: message" style; error/warning/note are
+# the keywords it recognises, so info and hint are folded onto "note".
+_MSVC_SEVERITY = {1: "error", 2: "warning", 3: "note", 4: "note"}
 _DEFAULT_ROOT_MARKERS = ("pyproject.toml", "setup.py", "setup.cfg",
                          "requirements.txt", ".git", "Pipfile", "package.json",
                          "Cargo.toml", "go.mod", "tsconfig.json")
@@ -701,6 +705,50 @@ class LanguageServerClient:
             N10X.Editor.SetStatusBarText(
                 f"{self.name}: {errs} error(s), {warns} warning(s)")
         self._last_status_line = -1  # force refresh on next cursor move
+        self._publish_to_build_output()
+
+    def _publish_to_build_output(self):
+        """Render every known diagnostic into 10x's build output as MSVC-style
+        compiler lines so they appear as navigable errors/warnings.
+
+        publishDiagnostics replaces the full diagnostic set for one file at a
+        time, so we clear and re-emit all files' diagnostics on each update.
+        That keeps the build output in sync with the server without dropping
+        entries for files other than the one that just changed.
+        """
+        if self.setting("Diagnostics") == "false":
+            return
+        try:
+            if not N10X.Editor.IsBuildPanelOpen():
+                N10X.Editor.ShowBuildOutput()
+            N10X.Editor.ClearBuildOutput()
+        except AttributeError:
+            return  # older 10x without the build-output API; nothing to do
+        lines = []
+        for uri, diags in self.diagnostics.items():
+            if not diags:
+                continue
+            path = uri_to_path(uri)
+            for d in sorted(diags, key=lambda x: x.get("range", {})
+                            .get("start", {}).get("line", 0)):
+                start = d.get("range", {}).get("start", {})
+                line = start.get("line", 0) + 1
+                col = start.get("character", 0) + 1
+                sev = _MSVC_SEVERITY.get(d.get("severity", 1), "error")
+                code = d.get("code", "")
+                code = f" {code}" if code not in ("", None) else ""
+                src = d.get("source", "")
+                src = f"{src}: " if src else ""
+                # Collapse multi-line messages so each diagnostic is one line.
+                msg = " ".join(str(d.get("message", "")).splitlines())
+                # Visual Studio format: path(line,col): severity CODE: message
+                lines.append(f"{path}({line},{col}): {sev}{code}: {src}{msg}")
+        if lines:
+            N10X.Editor.LogToBuildOutput("\n".join(lines) + "\n")
+        try:
+            N10X.Editor.ParseBuildOutput()
+        except AttributeError:
+            pass
 
     def show_line_diagnostic(self):
         if self.setting("Diagnostics") == "false":
