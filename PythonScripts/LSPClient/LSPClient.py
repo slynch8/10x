@@ -875,11 +875,9 @@ class LanguageServerClient:
                      f"cursor=({x},{y}) word={word!r} line_prefix={prefix!r}")
         labels, seen = [], set()
         for it in items:
-            text = self._completion_insert_text(it, prefix)
+            text = self._completion_full_text(it)
             if self._verbose() and len(labels) < 5:
-                edit = it.get("textEdit") or {}
-                raw = edit.get("newText") or it.get("insertText") or it.get("label")
-                self.log(f"   raw={raw!r} -> insert={text!r}")
+                self.log(f"   item label={it.get('label')!r} -> insert={text!r}")
             if text and text not in seen:
                 seen.add(text)
                 labels.append(text)
@@ -917,37 +915,37 @@ class LanguageServerClient:
             i -= 1
         return prefix[i:]
 
-    def _completion_insert_text(self, item, prefix):
-        """Turn an LSP completion item into the string to hand 10x.
-
-        On accept, 10x inserts our string at the cursor and deletes nothing -
-        so whatever the user has already typed before the cursor stays put.
-        LSP items, however, give the full word/qualifier (e.g. "UpdateCursorMode"
-        after typing "Update", or "Mode.VISUAL" after "Mode."). We strip the
-        leading part of the item that duplicates the text already on the line
-        immediately before the cursor, leaving only the remainder to insert.
-        """
+    def _completion_full_text(self, item):
+        """The complete text to insert for an item - the whole word/qualifier
+        (e.g. "found", "UpdateCursorMode"), with no stripping. 10x replaces the
+        partially-typed word for us (see _completion_replace_pos), so it wants
+        the full suggestion rather than just the not-yet-typed remainder."""
         edit = item.get("textEdit") or {}
-        raw = edit.get("newText") or item.get("insertText") or item.get("label")
-        if not raw:
-            return ""
-        # Longest suffix of `prefix` that the item also starts with (matched
-        # case-insensitively so e.g. "upd" still lines up with "Update").
-        overlap = 0
-        for k in range(min(len(prefix), len(raw)), 0, -1):
-            if prefix[-k:].lower() == raw[:k].lower():
-                overlap = k
-                break
-        return raw[overlap:]
+        return (edit.get("newText") or item.get("insertText")
+                or item.get("label") or "")
+
+    def _completion_replace_pos(self):
+        """(x, y) where the word being completed begins. Passed to
+        ShowAutocomplete so that, on accept, 10x replaces the partially-typed
+        word with the chosen full suggestion instead of inserting at the cursor
+        (which would duplicate the typed prefix, e.g. "tile.ffound")."""
+        x, y = N10X.Editor.GetCursorPos()
+        return (x - len(self._completion_word()), y)
 
     def _show_autocomplete(self, labels):
-        """Call 10x's ShowAutocomplete, tolerant of signature/format differences."""
-        pos = N10X.Editor.GetCursorPos()
+        """Call 10x's ShowAutocomplete, tolerant of signature/format differences.
+
+        We pass the start of the word under the cursor as the position so 10x
+        replaces that word with the full suggestion. The no-position fallbacks
+        are last-resort only (a very different ShowAutocomplete signature); with
+        full-text labels they would duplicate the typed prefix, so they sit
+        after every position-aware form."""
+        pos = self._completion_replace_pos()
         attempts = (
             lambda: N10X.Editor.ShowAutocomplete(labels, pos),
-            lambda: N10X.Editor.ShowAutocomplete(labels),
             lambda: N10X.Editor.ShowAutocomplete([{"text": l} for l in labels], pos),
             lambda: N10X.Editor.ShowAutocomplete([{"label": l} for l in labels], pos),
+            lambda: N10X.Editor.ShowAutocomplete(labels),
         )
         last_err = None
         for attempt in attempts:
