@@ -39,6 +39,10 @@
 #                           per-language <Name>_* functions instead.
 #     <name>.Diagnostics    "true"/"false" - show the diagnostic under the
 #                           cursor in the status bar (default true)
+#     <name>.DiagnosticsLevel  lowest severity to show: error | warning | info |
+#                           hint. e.g. "error" shows errors only, "warning"
+#                           shows errors+warnings (default "hint" = show all).
+#                           Applies to the status bar and build output.
 #     <name>.MaxResults     Max completion items to show, most-relevant first
 #                           (default 50). Useful for servers like rust-analyzer
 #                           that return the whole scope.
@@ -70,6 +74,13 @@ _SEVERITY = {1: "Error", 2: "Warning", 3: "Info", 4: "Hint"}
 # Studio "file(line,col): <keyword> CODE: message" style; error/warning/note are
 # the keywords it recognises, so info and hint are folded onto "note".
 _MSVC_SEVERITY = {1: "error", 2: "warning", 3: "note", 4: "note"}
+# "<name>.DiagnosticsLevel" value -> the highest LSP severity *number* to show
+# (1=Error is most severe, 4=Hint least). A diagnostic is displayed only when
+# its severity number is <= this threshold, so "error" shows errors only,
+# "warning" shows errors+warnings, etc. Default ("hint") shows everything.
+_SEVERITY_LEVELS = {"error": 1, "errors": 1, "warning": 2, "warnings": 2,
+                    "info": 3, "information": 3, "hint": 4, "hints": 4,
+                    "all": 4}
 _DEFAULT_ROOT_MARKERS = ("pyproject.toml", "setup.py", "setup.cfg",
                          "requirements.txt", ".git", "Pipfile", "package.json",
                          "Cargo.toml", "go.mod", "tsconfig.json")
@@ -692,6 +703,19 @@ class LanguageServerClient:
 
     # -- diagnostics -------------------------------------------------------
 
+    def _min_severity(self):
+        """Highest LSP severity number to display (1=Error..4=Hint); anything
+        less severe (higher number) is hidden. Set "<name>.DiagnosticsLevel" to
+        error|warning|info|hint. Default shows everything."""
+        val = (self.setting("DiagnosticsLevel", "hint") or "hint").strip().lower()
+        return _SEVERITY_LEVELS.get(val, 4)
+
+    def _visible_diags(self, diags):
+        """Filter diagnostics down to those at or above the configured severity
+        threshold. Missing severity is treated as Error (always shown)."""
+        thr = self._min_severity()
+        return [d for d in diags if d.get("severity", 1) <= thr]
+
     def _on_diagnostics(self, params):
         uri = params.get("uri")
         if uri is None:
@@ -702,8 +726,11 @@ class LanguageServerClient:
         warns = sum(1 for d in diags if d.get("severity") == 2)
         cur = N10X.Editor.GetCurrentFilename()
         if cur and path_to_uri(cur) == uri:
-            N10X.Editor.SetStatusBarText(
-                f"{self.name}: {errs} error(s), {warns} warning(s)")
+            # Only summarise severities the user actually wants shown.
+            parts = [f"{errs} error(s)"]
+            if self._min_severity() >= 2:
+                parts.append(f"{warns} warning(s)")
+            N10X.Editor.SetStatusBarText(f"{self.name}: " + ", ".join(parts))
         self._last_status_line = -1  # force refresh on next cursor move
         self._publish_to_build_output()
 
@@ -726,6 +753,7 @@ class LanguageServerClient:
             return  # older 10x without the build-output API; nothing to do
         lines = []
         for uri, diags in self.diagnostics.items():
+            diags = self._visible_diags(diags)
             if not diags:
                 continue
             path = uri_to_path(uri)
@@ -756,7 +784,7 @@ class LanguageServerClient:
         filename = N10X.Editor.GetCurrentFilename()
         if not self.handles(filename):
             return
-        diags = self.diagnostics.get(path_to_uri(filename))
+        diags = self._visible_diags(self.diagnostics.get(path_to_uri(filename)) or [])
         if not diags:
             return
         _, y = N10X.Editor.GetCursorPos()
@@ -777,7 +805,14 @@ class LanguageServerClient:
         filename = N10X.Editor.GetCurrentFilename()
         if not filename:
             return
-        diags = self.diagnostics.get(path_to_uri(filename), [])
+        # Only respond for files this client handles. Several language clients
+        # register the same command/intercept hooks, so a single "show
+        # diagnostics" reaches all of them; without this guard the clients that
+        # don't handle the current file (e.g. JaiLSP on a .py file) would each
+        # overwrite the status bar with their own "no diagnostics" message.
+        if not self.handles(filename):
+            return
+        diags = self._visible_diags(self.diagnostics.get(path_to_uri(filename), []))
         if not diags:
             N10X.Editor.SetStatusBarText(f"{self.name}: no diagnostics")
             return

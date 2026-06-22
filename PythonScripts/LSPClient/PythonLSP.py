@@ -34,6 +34,8 @@
 #   PythonLSP.Enabled          "true"/"false" (default true)
 #   PythonLSP.AutoComplete     "true"/"false" - auto-trigger as you type (default true)
 #   PythonLSP.Diagnostics      "true"/"false" - line diagnostic in status bar (default true)
+#   PythonLSP.DiagnosticsLevel lowest severity to show: error|warning|info|hint
+#                              e.g. "error" shows errors only (default "hint" = all)
 #   PythonLSP.InterceptCommands "true"/"false" - drive the language server from
 #                              10x's built-in GoToSymbolDefinition /
 #                              FindSymbolReferences / Autocomplete /

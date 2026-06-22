@@ -30,6 +30,8 @@
 #   RustLSP.Enabled            "true"/"false" (default true)
 #   RustLSP.AutoComplete       "true"/"false" - auto-trigger as you type (default true)
 #   RustLSP.Diagnostics        "true"/"false" - line diagnostic in status bar (default true)
+#   RustLSP.DiagnosticsLevel   lowest severity to show: error|warning|info|hint
+#                              e.g. "error" shows errors only (default "hint" = all)
 #   RustLSP.MaxResults         max completion items shown, most-relevant first (default 50)
 #   RustLSP.InterceptCommands  "true"/"false" - drive the language server from
 #                              10x's built-in GoToSymbolDefinition /

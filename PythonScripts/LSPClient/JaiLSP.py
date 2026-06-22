@@ -31,6 +31,8 @@
 #   JaiLSP.Enabled             "true"/"false" (default true)
 #   JaiLSP.AutoComplete        "true"/"false" - auto-trigger as you type (default true)
 #   JaiLSP.Diagnostics         "true"/"false" - line diagnostic in status bar (default true)
+#   JaiLSP.DiagnosticsLevel    lowest severity to show: error|warning|info|hint
+#                              e.g. "error" shows errors only (default "hint" = all)
 #   JaiLSP.MaxResults          max completion items shown, most-relevant first (default 50)
 #   JaiLSP.InterceptCommands   "true"/"false" - drive the language server from
 #                              10x's built-in GoToSymbolDefinition /
