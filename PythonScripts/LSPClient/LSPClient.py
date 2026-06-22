@@ -81,8 +81,11 @@ _MSVC_SEVERITY = {1: "error", 2: "warning", 3: "note", 4: "note"}
 _SEVERITY_LEVELS = {"error": 1, "errors": 1, "warning": 2, "warnings": 2,
                     "info": 3, "information": 3, "hint": 4, "hints": 4,
                     "all": 4}
+# Note: ".git" is deliberately NOT a marker. A git submodule has its own .git
+# entry, so find_project_root (which stops at the innermost dir with a marker)
+# would pick the submodule rather than walking up to the real workspace root.
 _DEFAULT_ROOT_MARKERS = ("pyproject.toml", "setup.py", "setup.cfg",
-                         "requirements.txt", ".git", "Pipfile", "package.json",
+                         "requirements.txt", "Pipfile", "package.json",
                          "Cargo.toml", "go.mod", "tsconfig.json")
 
 

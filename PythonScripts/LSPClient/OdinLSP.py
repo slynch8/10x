@@ -83,8 +83,9 @@ _client = LanguageServerClient(
     default_command="ols",
     trigger_chars=".",
     # OLS reads its config from ols.json at the project root; prefer that as the
-    # root marker so the right collections/build dir are picked up.
-    root_markers=("ols.json", "ols.json5", ".git"),
+    # root marker so the right collections/build dir are picked up. (".git" is
+    # left out so a git submodule's own .git doesn't get picked as the root.)
+    root_markers=("ols.json", "ols.json5"),
 )
 
 

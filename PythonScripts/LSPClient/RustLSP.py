@@ -82,8 +82,9 @@ _client = LanguageServerClient(
     # "." for fields/methods, ":" for "::" path segments.
     trigger_chars=".:",
     # Prefer the Cargo manifest as the project root so rust-analyzer loads the
-    # workspace; rust-project.json covers non-Cargo projects.
-    root_markers=("Cargo.toml", "rust-project.json", ".git"),
+    # workspace; rust-project.json covers non-Cargo projects. (".git" is left
+    # out so a git submodule's own .git doesn't get picked as the root.)
+    root_markers=("Cargo.toml", "rust-project.json"),
 )
 
 

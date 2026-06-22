@@ -84,8 +84,9 @@ _client = LanguageServerClient(
     # operator (constants are "name :: value"), so a single trigger char.
     trigger_chars=".",
     # jails reads the build entry point from jails.json at the project root;
-    # prefer that, then fall back to common Jai build files / a repo root.
-    root_markers=("jails.json", "first.jai", "build.jai", "main.jai", ".git"),
+    # prefer that, then fall back to common Jai build files. (".git" is left out
+    # so a git submodule's own .git doesn't get picked as the root.)
+    root_markers=("jails.json", "first.jai", "build.jai", "main.jai"),
 )
 
 
