@@ -423,6 +423,11 @@ class LanguageServerClient:
         self._completion_due = 0.0   # time.time() at which to auto-fire completion
         self._auto_delay = 0.12      # debounce window for as-you-type completion
         self._last_completion_id = None  # newest in-flight completion request id
+        self._completion_inflight = False  # a completion request is awaiting reply
+        self._completion_req_pos = None  # cursor (x, y) when that request was sent
+        self._autocomplete_visible = False  # our completion popup is on screen
+        self._last_cursor_pos = None     # (x, y) at the previous cursor-move event
+        self._last_line_text = None      # current line text at that event (edit vs move)
         self._last_status_line = -1
         self._next_start_attempt = 0.0  # backoff for auto-starting the server
         self._verbose_flag = False       # cached so background threads can read it
@@ -957,6 +962,22 @@ class LanguageServerClient:
                 self.log(f"completion: ignoring stale response (req {rid}, "
                          f"latest {self._last_completion_id})")
             return
+        # This is the reply to the newest request: nothing is in flight now.
+        self._completion_inflight = False
+        # Drop the reply if the editing point moved since we asked. This is the
+        # race fix for accepting a suggestion: the accept inserts text and moves
+        # the cursor, and a slightly-late completion reply would otherwise pop the
+        # list straight back up. Unlike the cursor-move guard this needs no
+        # ordering between events - we simply compare positions when the reply
+        # actually arrives.
+        if self._completion_req_pos is not None:
+            try:
+                if N10X.Editor.GetCursorPos() != self._completion_req_pos:
+                    if self._verbose():
+                        self.log("completion: cursor moved since request; dropping reply")
+                    return
+            except Exception:
+                pass
         if error:
             self.log(f"completion error: {error}")
             return
@@ -968,6 +989,8 @@ class LanguageServerClient:
         if not items:
             if self._verbose():
                 self.log("completion: 0 items returned by server")
+            if self._autocomplete_visible:
+                self._hide_autocomplete()
             return
         # Order by the server's relevance ranking (sortText). Servers like
         # rust-analyzer encode "most relevant first" there; falling back to the
@@ -1006,6 +1029,10 @@ class LanguageServerClient:
                 if len(labels) >= limit:
                     break
         if not labels:
+            # Nothing matches what's typed now (e.g. the word was edited down to
+            # a prefix no item shares). Don't leave a stale list on screen.
+            if self._autocomplete_visible:
+                self._hide_autocomplete()
             return
         self._show_autocomplete(labels)
 
@@ -1073,11 +1100,37 @@ class LanguageServerClient:
         for attempt in attempts:
             try:
                 attempt()
+                self._autocomplete_visible = True
                 return True
             except Exception as e:
                 last_err = e
         self.log(f"ShowAutocomplete failed for all formats: {last_err}")
         return False
+
+    def _hide_autocomplete(self):
+        """Dismiss the autocomplete popup. Completion is word-scoped, so a
+        word-breaking key (space, punctuation, newline) ends the current
+        identifier and the in-progress list is no longer relevant. 10x doesn't
+        close our popup on its own in that case, so we do it explicitly.
+
+        Also cancels any pending as-you-type request and drops the newest
+        in-flight request id, so a completion response that arrives after the
+        word ended can't re-open the list a moment later."""
+        self._completion_due = 0.0
+        self._last_completion_id = None
+        self._completion_inflight = False
+        if not self._autocomplete_visible:
+            return  # nothing on screen to dismiss
+        self._autocomplete_visible = False
+        # We know ShowAutocomplete exists; an empty list dismisses the popup.
+        # HideAutocomplete is tried first in case the build exposes it.
+        for attempt in (lambda: N10X.Editor.HideAutocomplete(),
+                        lambda: N10X.Editor.ShowAutocomplete([])):
+            try:
+                attempt()
+                return
+            except Exception:
+                continue
 
     def _show_hover_box(self, text, pos):
         """Display `text` in 10x's inline hover box at `pos` (an (x, y) cursor
@@ -1203,6 +1256,14 @@ class LanguageServerClient:
         # replies would otherwise land later and clobber the right list. Tag the
         # handler with its id so _on_completion can drop stale responses.
         self._last_completion_id = rid
+        self._completion_inflight = rid is not None
+        # Remember where we asked. If the cursor has moved by the time the reply
+        # lands (the user accepted a suggestion, clicked away or backspaced), the
+        # reply is stale and must not re-open the popup - see _on_completion.
+        try:
+            self._completion_req_pos = N10X.Editor.GetCursorPos()
+        except Exception:
+            self._completion_req_pos = None
         if rid is not None:
             self.pending[rid] = (lambda res, err, _id=rid:
                                  self._on_completion(res, err, _id))
@@ -1298,9 +1359,61 @@ class LanguageServerClient:
             return
         if ch in self.trigger_chars or ch.isalnum() or ch == "_":
             self._completion_due = time.time() + self._auto_delay
+        else:
+            # A word-breaking char (space, punctuation, etc.) ends the current
+            # identifier, so the in-progress completion list no longer applies -
+            # dismiss it (completion is word-scoped).
+            self._hide_autocomplete()
 
     def _on_cursor_moved(self, *args):
         try:
+            try:
+                cur = N10X.Editor.GetCursorPos()
+            except Exception:
+                cur = None
+            try:
+                line = N10X.Editor.GetCurrentLine() or ""
+            except Exception:
+                line = None
+            prev = self._last_cursor_pos
+            prev_line = self._last_line_text
+            self._last_cursor_pos = cur
+            self._last_line_text = line
+            # Keep the popup tied to the word being edited; react to how the
+            # cursor moved (only while something completion-related is live). The
+            # key distinction is an *edit* (the line's text changed) versus a pure
+            # cursor *move* (arrow keys, click), which must leave the list alone:
+            #   - moved to another line: abandon the word, dismiss.
+            #   - same line, no text change: caret moved through the text without
+            #     editing it - leave the list exactly as-is (don't re-filter or
+            #     dismiss); the suggestions still belong to that word.
+            #   - same line, edited, +1: forward typing, left to _on_char_key
+            #     (re-arms on word chars, dismisses on word-breakers).
+            #   - same line, edited, leftward: backspace/delete - stay open while a
+            #     word remains and re-arm a debounced re-filter to track the
+            #     shorter prefix; dismiss only once the whole word is gone.
+            #   - same line, edited, bigger jump: accepting a suggestion (inserts
+            #     the remainder) or a multi-char edit - the list no longer applies.
+            if (prev is not None and cur is not None and cur != prev
+                    and (self._completion_due or self._completion_inflight
+                         or self._autocomplete_visible)):
+                same_line = (cur[1] == prev[1])
+                dx = cur[0] - prev[0]
+                edited = (prev_line is not None and line is not None
+                          and line != prev_line)
+                if not same_line:
+                    self._hide_autocomplete()
+                elif not edited:
+                    pass  # caret moved through the word; leave the list untouched
+                elif dx == 1:
+                    pass  # forward typing
+                elif dx < 0:
+                    if self._completion_word():
+                        self._completion_due = time.time() + self._auto_delay
+                    else:
+                        self._hide_autocomplete()  # entire word deleted
+                else:
+                    self._hide_autocomplete()  # accept / multi-char insert
             self.show_line_diagnostic()
         except Exception:
             pass
