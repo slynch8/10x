@@ -44,8 +44,8 @@
 #     <name>.Diagnostics    "true"/"false" - show the diagnostic under the
 #                           cursor in the status bar (default true)
 #     <name>.DiagnosticsLevel  lowest severity to show: error | warning | info |
-#                           hint. e.g. "error" shows errors only, "warning"
-#                           shows errors+warnings (default "hint" = show all).
+#                           hint. e.g. "warning" shows errors+warnings, "hint"
+#                           shows everything (default "error" = errors only).
 #                           Applies to the status bar and build output.
 #     <name>.MaxResults     Max completion items to show, most-relevant first
 #                           (default 50). Useful for servers like rust-analyzer
@@ -842,9 +842,9 @@ class LanguageServerClient:
     def _min_severity(self):
         """Highest LSP severity number to display (1=Error..4=Hint); anything
         less severe (higher number) is hidden. Set "<name>.DiagnosticsLevel" to
-        error|warning|info|hint. Default shows everything."""
-        val = (self.setting("DiagnosticsLevel", "hint") or "hint").strip().lower()
-        return _SEVERITY_LEVELS.get(val, 4)
+        error|warning|info|hint. Default ("error") shows errors only."""
+        val = (self.setting("DiagnosticsLevel", "error") or "error").strip().lower()
+        return _SEVERITY_LEVELS.get(val, 1)
 
     def _visible_diags(self, diags):
         """Filter diagnostics down to those at or above the configured severity
