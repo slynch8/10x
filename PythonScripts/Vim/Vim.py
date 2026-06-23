@@ -498,6 +498,8 @@ def EnterCommandMode(pop_undo_group=True):
 
         was_visual = InVisualMode()
         N10X.Editor.ResetCursorBlink()
+        # Hide auto complete
+        N10X.Editor.ShowAutocomplete([])
 
         if not was_visual and not g_Mode == Mode.COMMANDLINE:
             if pop_undo_group:
