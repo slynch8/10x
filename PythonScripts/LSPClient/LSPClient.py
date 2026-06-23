@@ -658,11 +658,15 @@ class LanguageServerClient:
 
     # -- request helpers ---------------------------------------------------
 
-    def _doc_pos_params(self):
+    def _doc_pos_params(self, pos=None):
         filename = N10X.Editor.GetCurrentFilename()
         if not self.handles(filename):
             return None
         x, y = N10X.Editor.GetCursorPos()
+        if pos is not None:
+            x = pos[0]
+            y = pos[1]
+            
         return {"textDocument": {"uri": path_to_uri(filename)},
                 "position": {"line": y, "character": x}}
 
@@ -1221,14 +1225,15 @@ class LanguageServerClient:
         self.log(f"  handled         : {self.handles(fn)}")
         self.log(f"  open documents  : {len(self.docs)}")
 
-    def hover(self):
-        params = self._doc_pos_params()
+    def hover(self, pos=None):
+        params = self._doc_pos_params(pos)
         if params is None:
             return
         self.sync_current(force=True)
-        # Capture where the request was made so the async reply can place the
+        # If pos is none capture where the request was made so the async reply can place the
         # hover box there (the cursor may move before the server answers).
-        pos = N10X.Editor.GetCursorPos()
+        if pos is None:
+            pos = N10X.Editor.GetCursorPos()
         self._send_request("textDocument/hover", params,
                            lambda r, e: self._on_hover(r, e, pos))
 
@@ -1471,6 +1476,9 @@ class LanguageServerClient:
         except Exception as e:
             self.log(f"intercept command error: {e}")
             return False
+    
+    def _on_mouse_hover(self, pos):
+        self.hover(pos)
 
     def register(self):
         """Wire this client into the 10x editor events. Call once, on the main
@@ -1495,5 +1503,9 @@ class LanguageServerClient:
             if self.handles(cur) and self.ensure_started(cur):
                 self.did_open(cur)
         except Exception:
+            pass
+        try:
+            N10X.Editor.AddSymbolMouseHoverFunction(self._on_mouse_hover)
+        except Exception as e:
             pass
         self.log(f"registered (server: {' '.join(self._server_argv())})")
