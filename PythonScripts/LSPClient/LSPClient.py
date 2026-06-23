@@ -1145,20 +1145,41 @@ class LanguageServerClient:
         if error or not result:
             N10X.Editor.SetStatusBarText(f"{self.name}: no references found")
             return
-        seen, locs = set(), []
+        # Build (filename, line, index, length) tuples for ShowSymbolReferences.
+        # Coordinates are 0-based to match the rest of 10x's API (GetCursorPos /
+        # OpenFile). `length` is the symbol's width when its range stays on one
+        # line; 0 lets 10x work it out (e.g. multi-line or zero-width ranges).
+        seen, items = set(), []
         for loc in result:
             path = uri_to_path(loc.get("uri", ""))
-            line = loc.get("range", {}).get("start", {}).get("line", 0) + 1
-            key = (path, line)
+            rng = loc.get("range", {})
+            start = rng.get("start", {})
+            line = start.get("line", 0)
+            index = start.get("character", 0)
+            key = (path, line, index)
             if key in seen:
                 continue
             seen.add(key)
-            locs.append((path, line))
-        self.log(f"{len(locs)} reference(s):")
-        for path, line in locs:
-            self.log(f"  {path}:{line}")
-        N10X.Editor.SetStatusBarText(
-            f"{self.name}: {len(locs)} reference(s) - see output panel")
+            end = rng.get("end", {})
+            length = (end.get("character", index) - index
+                      if end.get("line", line) == line else 0)
+            if length < 0:
+                length = 0
+            items.append((path, line, index, length))
+        if not items:
+            N10X.Editor.SetStatusBarText(f"{self.name}: no references found")
+            return
+        try:
+            N10X.Editor.ShowSymbolReferences(items)
+        except AttributeError:
+            # Older 10x without ShowSymbolReferences: log to the output panel.
+            self.log(f"{len(items)} reference(s):")
+            for path, line, index, _ in items:
+                self.log(f"  {path}:{line + 1}:{index + 1}")
+            N10X.Editor.SetStatusBarText(
+                f"{self.name}: {len(items)} reference(s) - see output panel")
+        except Exception as e:
+            self.log(f"ShowSymbolReferences failed: {e}")
 
     # -- public commands (wire these to keybindings) ----------------------
 
