@@ -1094,25 +1094,16 @@ class LanguageServerClient:
         """Call 10x's ShowAutocomplete, tolerant of signature/format differences.
 
         We pass the start of the word under the cursor as the position so 10x
-        replaces that word with the full suggestion. The no-position fallbacks
-        are last-resort only (a very different ShowAutocomplete signature); with
-        full-text labels they would duplicate the typed prefix, so they sit
-        after every position-aware form."""
+        replaces that word with the full suggestion.""" 
+        print("show auto complete")
         pos = self._completion_replace_pos()
-        attempts = (
-            lambda: N10X.Editor.ShowAutocomplete(labels, pos),
-            lambda: N10X.Editor.ShowAutocomplete([{"text": l} for l in labels], pos),
-            lambda: N10X.Editor.ShowAutocomplete([{"label": l} for l in labels], pos),
-            lambda: N10X.Editor.ShowAutocomplete(labels),
-        )
         last_err = None
-        for attempt in attempts:
-            try:
-                attempt()
-                self._autocomplete_visible = True
-                return True
-            except Exception as e:
-                last_err = e
+        try:
+            N10X.Editor.ShowAutocomplete(labels, pos)
+            self._autocomplete_visible = True
+            return True
+        except Exception as e:
+            last_err = e
         self.log(f"ShowAutocomplete failed for all formats: {last_err}")
         return False
 
@@ -1132,14 +1123,11 @@ class LanguageServerClient:
             return  # nothing on screen to dismiss
         self._autocomplete_visible = False
         # We know ShowAutocomplete exists; an empty list dismisses the popup.
-        # HideAutocomplete is tried first in case the build exposes it.
-        for attempt in (lambda: N10X.Editor.HideAutocomplete(),
-                        lambda: N10X.Editor.ShowAutocomplete([])):
-            try:
-                attempt()
-                return
-            except Exception:
-                continue
+        try:
+            N10X.Editor.ShowAutocomplete([])
+            return
+        except Exception:
+            pass
 
     def _show_hover_box(self, text, pos):
         """Display `text` in 10x's inline hover box at `pos` (an (x, y) cursor
