@@ -33,10 +33,10 @@
 #                           Default true; set "false" to use the keybinding only.
 #     <name>.InterceptCommands  "true"/"false" - hook 10x's built-in commands
 #                           (GoToSymbolDefinition, FindSymbolReferences,
-#                           Autocomplete, ShowFunctionArgsInfo) so the default key
-#                           bindings drive the language server for files we
-#                           handle. Default true; set "false" to require the
-#                           per-language <Name>_* functions instead.
+#                           Autocomplete, ShowFunctionArgsInfo, ShowSymbolInfo)
+#                           so the default key bindings drive the language server
+#                           for files we handle. Default true; set "false" to
+#                           require the per-language <Name>_* functions instead.
 #     <name>.Diagnostics    "true"/"false" - show the diagnostic under the
 #                           cursor in the status bar (default true)
 #     <name>.DiagnosticsLevel  lowest severity to show: error | warning | info |
@@ -1074,21 +1074,46 @@ class LanguageServerClient:
         self.log(f"ShowAutocomplete failed for all formats: {last_err}")
         return False
 
-    def _on_hover(self, result, error):
+    def _show_hover_box(self, text, pos):
+        """Display `text` in 10x's inline hover box at `pos` (an (x, y) cursor
+        position). Falls back to a message box / status bar on older builds that
+        predate the ShowHoverBox API."""
+        if pos is None:
+            try:
+                pos = N10X.Editor.GetCursorPos()
+            except Exception:
+                pos = None
+        try:
+            N10X.Editor.ShowHoverBox(pos, text)
+            return
+        except AttributeError:
+            pass  # older 10x without ShowHoverBox; fall back below
+        except Exception as e:
+            self.log(f"ShowHoverBox failed: {e}")
+        try:
+            N10X.Editor.ShowMessageBox(self.name, text)
+        except Exception:
+            N10X.Editor.SetStatusBarText(f"{self.name}: " + " ".join(text.splitlines()))
+
+    def _on_hover(self, result, error, pos=None):
         text = extract_markup(result.get("contents")) if result else ""
         if not text.strip():
             N10X.Editor.SetStatusBarText(f"{self.name}: no hover info")
             return
-        N10X.Editor.ShowMessageBox(f"{self.name} Hover", text)
+        self._show_hover_box(text, pos)
 
-    def _on_signature(self, result, error):
+    def _on_signature(self, result, error, pos=None):
         if error or not result or not result.get("signatures"):
             N10X.Editor.SetStatusBarText(f"{self.name}: no signature")
             return
         sigs = result["signatures"]
         active = result.get("activeSignature", 0) or 0
         sig = sigs[active] if active < len(sigs) else sigs[0]
-        N10X.Editor.SetStatusBarText(f"{self.name}: " + sig.get("label", ""))
+        label = sig.get("label", "")
+        if not label.strip():
+            N10X.Editor.SetStatusBarText(f"{self.name}: no signature")
+            return
+        self._show_hover_box(label, pos)
 
     def _on_definition(self, result, error, retry=0):
         loc = first_location(result)
@@ -1179,14 +1204,20 @@ class LanguageServerClient:
         if params is None:
             return
         self.sync_current(force=True)
-        self._send_request("textDocument/hover", params, self._on_hover)
+        # Capture where the request was made so the async reply can place the
+        # hover box there (the cursor may move before the server answers).
+        pos = N10X.Editor.GetCursorPos()
+        self._send_request("textDocument/hover", params,
+                           lambda r, e: self._on_hover(r, e, pos))
 
     def signature_help(self):
         params = self._doc_pos_params()
         if params is None:
             return
         self.sync_current(force=True)
-        self._send_request("textDocument/signatureHelp", params, self._on_signature)
+        pos = N10X.Editor.GetCursorPos()
+        self._send_request("textDocument/signatureHelp", params,
+                           lambda r, e: self._on_signature(r, e, pos))
 
     def goto_definition(self, _retry=0):
         params = self._doc_pos_params()
@@ -1387,6 +1418,7 @@ class LanguageServerClient:
             "findsymbolreferences": self.find_references,
             "autocomplete": self.complete,
             "showfunctionargsinfo": self.signature_help,
+            "showsymbolinfo": self.hover,
         }
 
     def _on_intercept_command(self, command=None, *args):

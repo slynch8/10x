@@ -36,15 +36,15 @@
 #   RustLSP.InterceptCommands  "true"/"false" - drive the language server from
 #                              10x's built-in GoToSymbolDefinition /
 #                              FindSymbolReferences / Autocomplete /
-#                              ShowFunctionArgsInfo commands so the editor's
-#                              default key bindings work (default true)
+#                              ShowFunctionArgsInfo / ShowSymbolInfo commands so
+#                              the editor's default key bindings work (default true)
 #   RustLSP.LogVerbose         "true"/"false" - log server traffic (default false)
 #
 # KEY BINDINGS - with InterceptCommands on (the default), 10x's standard
-# bindings for GoToSymbolDefinition, FindSymbolReferences, Autocomplete and
-# ShowFunctionArgsInfo already drive the language server in Rust files; no
-# setup needed. To bind the functions explicitly instead (Settings -> Key
-# Bindings):
+# bindings for GoToSymbolDefinition, FindSymbolReferences, Autocomplete,
+# ShowFunctionArgsInfo and ShowSymbolInfo already drive the language server in
+# Rust files; no setup needed. To bind the functions explicitly instead
+# (Settings -> Key Bindings):
 #   Control Space:       RustLSP_Completion()
 #   F12:                 RustLSP_GotoDefinition()
 #   Control K:           RustLSP_Hover()
