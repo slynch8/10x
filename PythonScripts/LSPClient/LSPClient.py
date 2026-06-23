@@ -32,11 +32,12 @@
 #                           (after identifier or trigger chars, debounced).
 #                           Default true; set "false" to use the keybinding only.
 #     <name>.InterceptCommands  "true"/"false" - hook 10x's built-in commands
-#                           (GoToSymbolDefinition, FindSymbolReferences,
-#                           Autocomplete, ShowFunctionArgsInfo, ShowSymbolInfo)
-#                           so the default key bindings drive the language server
-#                           for files we handle. Default true; set "false" to
-#                           require the per-language <Name>_* functions instead.
+#                           (GoToSymbolDefinition, GoToSymbolDefinitionUnderMouse,
+#                           FindSymbolReferences, Autocomplete,
+#                           ShowFunctionArgsInfo, ShowSymbolInfo) so the default
+#                           key bindings drive the language server for files we
+#                           handle. Default true; set "false" to require the
+#                           per-language <Name>_* functions instead.
 #     <name>.Diagnostics    "true"/"false" - show the diagnostic under the
 #                           cursor in the status bar (default true)
 #     <name>.DiagnosticsLevel  lowest severity to show: error | warning | info |
@@ -1412,9 +1413,13 @@ class LanguageServerClient:
     # Intercepting these makes the editor's default key bindings (e.g. F12 for
     # GoToSymbolDefinition, Ctrl+Space for Autocomplete) drive the language
     # server for files we handle, with no per-language key binding needed.
+    # GoToSymbolDefinitionUnderMouse reuses the goto_definition handler: 10x moves
+    # the caret to the symbol under the mouse before the command fires, so reading
+    # the cursor position (as goto_definition does) targets the right symbol.
     def _intercept_table(self):
         return {
             "gotosymboldefinition": self.goto_definition,
+            "gotosymboldefinitionundermouse": self.goto_definition,
             "findsymbolreferences": self.find_references,
             "autocomplete": self.complete,
             "showfunctionargsinfo": self.signature_help,
