@@ -22,13 +22,18 @@
 #          }
 #      Without it, jails falls back to treating the opened file's folder as the
 #      workspace, which gives weaker cross-file results.
+#   4. Enable it (opt-in). Add to Settings.10x_settings:
+#          JaiLSP.Enabled: true
+#      then restart 10x. Until you do this the client is completely inert.
 #
 # SETTINGS (Settings.10x_settings)
 #   JaiLSP.Command             Command line used to launch the server.
 #                              Default: "jails". Examples:
 #                                  JaiLSP.Command: jails
 #                                  JaiLSP.Command: C:/tools/jails/jails.exe
-#   JaiLSP.Enabled             "true"/"false" (default true)
+#   JaiLSP.Enabled             "true"/"false" - OPT-IN, default false. Set this
+#                              to "true" to turn the client on (then restart 10x);
+#                              until then it is completely inert.
 #   JaiLSP.AutoComplete        "true"/"false" - auto-trigger as you type (default true)
 #   JaiLSP.Diagnostics         "true"/"false" - line diagnostic in status bar (default true)
 #   JaiLSP.DiagnosticsLevel    lowest severity to show: error|warning|info|hint

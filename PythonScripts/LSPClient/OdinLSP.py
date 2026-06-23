@@ -24,13 +24,18 @@
 #            "enable_hover": true,
 #            "enable_snippets": true
 #          }
+#   4. Enable it (opt-in). Add to Settings.10x_settings:
+#          OdinLSP.Enabled: true
+#      then restart 10x. Until you do this the client is completely inert.
 #
 # SETTINGS (Settings.10x_settings)
 #   OdinLSP.Command            Command line used to launch the server.
 #                              Default: "ols". Examples:
 #                                  OdinLSP.Command: ols
 #                                  OdinLSP.Command: C:/tools/ols/ols.exe
-#   OdinLSP.Enabled            "true"/"false" (default true)
+#   OdinLSP.Enabled            "true"/"false" - OPT-IN, default false. Set this
+#                              to "true" to turn the client on (then restart 10x);
+#                              until then it is completely inert.
 #   OdinLSP.AutoComplete       "true"/"false" - auto-trigger as you type (default true)
 #   OdinLSP.Diagnostics        "true"/"false" - line diagnostic in status bar (default true)
 #   OdinLSP.DiagnosticsLevel   lowest severity to show: error|warning|info|hint

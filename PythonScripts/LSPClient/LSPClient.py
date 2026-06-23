@@ -27,7 +27,10 @@
 # Per-client settings are read from "<name>.<key>" in Settings.10x_settings:
 #     <name>.Command        Command line used to launch the server (overrides
 #                           the default). e.g. "PythonLSP.Command: pylsp"
-#     <name>.Enabled        "true"/"false" (default true)
+#     <name>.Enabled        "true"/"false" - OPT-IN, default false. The client
+#                           is completely inert until this is "true": no server
+#                           is launched and no editor hooks are registered.
+#                           Takes effect on the next 10x restart.
 #     <name>.AutoComplete   "true"/"false" - auto-trigger completion as you type
 #                           (after identifier or trigger chars, debounced).
 #                           Default true; set "false" to use the keybinding only.
@@ -480,10 +483,16 @@ class LanguageServerClient:
             return list(self.fallback_argv)
         return parts
 
+    def is_enabled(self):
+        """Whether this client is turned on. Opt-in: a server stays off (and has
+        no impact at all - see register) until the user explicitly sets
+        "<name>.Enabled: true" in Settings.10x_settings."""
+        return self.setting("Enabled", "false").strip().lower() == "true"
+
     def ensure_started(self, root_hint):
         if self.conn and self.conn.alive:
             return True
-        if self.setting("Enabled") == "false":
+        if not self.is_enabled():
             return False
 
         self.root_path = find_project_root(root_hint, self.root_markers)
@@ -1276,7 +1285,8 @@ class LanguageServerClient:
         """Log the current client state to the output panel (for debugging)."""
         fn = N10X.Editor.GetCurrentFilename()
         self.log("---- status ----")
-        self.log(f"  enabled setting : {self.setting('Enabled') or '(unset=true)'}")
+        self.log(f"  enabled         : {self.is_enabled()} "
+                 f"(setting: {self.setting('Enabled') or '(unset=off)'})")
         self.log(f"  autocomplete    : {self.setting('AutoComplete') or '(unset=true)'}")
         self.log(f"  server argv     : {self._server_argv()}")
         self.log(f"  connection      : {'alive' if (self.conn and self.conn.alive) else 'none/dead'}")
@@ -1595,7 +1605,16 @@ class LanguageServerClient:
 
     def register(self):
         """Wire this client into the 10x editor events. Call once, on the main
-        thread (e.g. via N10X.Editor.CallOnMainThread)."""
+        thread (e.g. via N10X.Editor.CallOnMainThread).
+
+        Opt-in: if "<name>.Enabled" is not "true" we register nothing at all, so
+        a client the user hasn't turned on has zero impact - no event hooks, no
+        server, no command/intercept handlers. Enabling it takes effect on the
+        next 10x restart (when this runs again)."""
+        if not self.is_enabled():
+            self.log(f"disabled; set {self.name}.Enabled: true to turn it on "
+                     f"(then restart 10x)")
+            return
         self._refresh_verbose()
         N10X.Editor.AddOnFileOpenedFunction(self._on_file_opened)
         N10X.Editor.AddPostFileSaveFunction(self._on_post_save)

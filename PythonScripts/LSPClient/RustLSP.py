@@ -20,6 +20,9 @@
 #   3. Open a Cargo project (a folder containing Cargo.toml). rust-analyzer
 #      discovers the workspace and its dependencies from there. Non-Cargo
 #      projects need a rust-project.json at the root.
+#   4. Enable it (opt-in). Add to Settings.10x_settings:
+#          RustLSP.Enabled: true
+#      then restart 10x. Until you do this the client is completely inert.
 #
 # SETTINGS (Settings.10x_settings)
 #   RustLSP.Command            Command line used to launch the server.
@@ -27,7 +30,9 @@
 #                                  RustLSP.Command: rust-analyzer
 #                                  RustLSP.Command: rustup run stable rust-analyzer
 #                                  RustLSP.Command: C:/tools/rust-analyzer.exe
-#   RustLSP.Enabled            "true"/"false" (default true)
+#   RustLSP.Enabled            "true"/"false" - OPT-IN, default false. Set this
+#                              to "true" to turn the client on (then restart 10x);
+#                              until then it is completely inert.
 #   RustLSP.AutoComplete       "true"/"false" - auto-trigger as you type (default true)
 #   RustLSP.Diagnostics        "true"/"false" - line diagnostic in status bar (default true)
 #   RustLSP.DiagnosticsLevel   lowest severity to show: error|warning|info|hint

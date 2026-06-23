@@ -23,6 +23,9 @@
 #      Install into the SAME Python that runs pylsp; it auto-detects plugins on
 #      startup, so restart the server afterwards (PythonLSP_Restart()).
 #      (pyright bundles its own type checker, so this step is pylsp-specific.)
+#   4. Enable it (opt-in). Add to Settings.10x_settings:
+#          PythonLSP.Enabled: true
+#      then restart 10x. Until you do this the client is completely inert.
 #
 # SETTINGS (Settings.10x_settings)
 #   PythonLSP.Command          Command line used to launch the server.
@@ -31,7 +34,9 @@
 #                              Examples:
 #                                  PythonLSP.Command: pylsp
 #                                  PythonLSP.Command: pyright-langserver --stdio
-#   PythonLSP.Enabled          "true"/"false" (default true)
+#   PythonLSP.Enabled          "true"/"false" - OPT-IN, default false. Set this
+#                              to "true" to turn the client on (then restart 10x);
+#                              until then it is completely inert.
 #   PythonLSP.AutoComplete     "true"/"false" - auto-trigger as you type (default true)
 #   PythonLSP.Diagnostics      "true"/"false" - line diagnostic in status bar (default true)
 #   PythonLSP.DiagnosticsLevel lowest severity to show: error|warning|info|hint
