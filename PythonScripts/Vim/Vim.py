@@ -614,13 +614,17 @@ def UpdateVisualModeSelection():
     start = g_VisualModeStartPos
     if g_Mode == Mode.VISUAL:
         SetSelection(start, end, cursor_index=1)
+        # Hide the extra caret that the cursor_index=1 selection introduces;
+        # the visible block cursor is the primary (slot 0).
+        N10X.Editor.SetCursorVisible(1, False)
     elif g_Mode == Mode.VISUAL_LINE:
         SetLineSelection(start[1], end[1], cursor_index=1)
+        N10X.Editor.SetCursorVisible(1, False)
     elif g_Mode == Mode.VISUAL_BLOCK:
+        # SetCursorRectSelect creates a real caret per spanned line, so slot 1
+        # is the caret on the second line - don't hide it here.
         g_VisualBlockModeEndPos = end
         N10X.Editor.SetCursorRectSelect(start, end)
-                             
-    N10X.Editor.SetCursorVisible(1, False)
 
 #------------------------------------------------------------------------
 def SubmitVisualModeSelection():
