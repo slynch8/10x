@@ -3535,6 +3535,59 @@ def HandleInsertModeChar(char):
     return False
 
 #------------------------------------------------------------------------
+def ReplaceVisualSelection(replacement):
+    """
+    Vim 'r' in visual modes: replace every selected character with
+    'replacement', preserving line breaks (and, for block mode, the column
+    range, without padding short lines). Returns the position the cursor
+    should be left at (the top-left of the affected region).
+    """
+    N10X.Editor.PushUndoGroup()
+
+    if g_Mode == Mode.VISUAL_BLOCK:
+        start = g_VisualModeStartPos
+        end = g_VisualBlockModeEndPos
+        y0, y1 = sorted((start[1], end[1]))
+        x0, x1 = sorted((start[0], end[0]))  # x1 is inclusive in block mode
+        for y in range(y0, y1 + 1):
+            line = GetLine(y)
+            length = GetLineLength(y)
+            begin = min(x0, length)
+            stop = min(x1 + 1, length)
+            if stop > begin:
+                line = line[:begin] + replacement * (stop - begin) + line[stop:]
+                N10X.Editor.SetLine(y, line)
+        cursor = (x0, y0)
+
+    elif g_Mode == Mode.VISUAL_LINE:
+        start, end = N10X.Editor.GetCursorSelection(cursor_index=1)
+        y0, y1 = sorted((start[1], end[1]))
+        for y in range(y0, y1 + 1):
+            line = GetLine(y)
+            length = GetLineLength(y)
+            line_ending = line[length:]
+            N10X.Editor.SetLine(y, replacement * length + line_ending)
+        cursor = (0, y0)
+
+    else:  # Mode.VISUAL - end[0] is exclusive (see SetSelection)
+        start, end = N10X.Editor.GetCursorSelection(cursor_index=1)
+        y = start[1]
+        while y <= end[1]:
+            line = GetLine(y)
+            length = GetLineLength(y)
+            if length > 0:
+                begin = min(start[0] if y == start[1] else 0, length)
+                stop = min(end[0] if y == end[1] else length, length)
+                if stop > begin:
+                    line = line[:begin] + replacement * (stop - begin) + line[stop:]
+                    N10X.Editor.SetLine(y, line)
+            y += 1
+        cursor = (start[0], start[1])
+
+    N10X.Editor.PopUndoGroup()
+    return cursor
+
+#------------------------------------------------------------------------
 def HandleVisualModeChar(char):
     global g_Mode
     global g_Command
@@ -3608,7 +3661,17 @@ def HandleVisualModeChar(char):
         SetCursorPos(start[0], start[1])
         EnterInsertMode()
         should_save = True
-    
+
+    elif c == "r":
+        # Wait for the replacement character.
+        return
+
+    elif len(c) == 2 and c[0] == "r":
+        cursor = ReplaceVisualSelection(c[1])
+        EnterCommandMode()
+        SetCursorPos(cursor[0], cursor[1])
+        should_save = True
+
     elif c == "_" or c == "^":
         MoveToFirstNonWhitespace()
 
