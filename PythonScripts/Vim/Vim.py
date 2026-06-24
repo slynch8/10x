@@ -614,13 +614,17 @@ def UpdateVisualModeSelection():
     start = g_VisualModeStartPos
     if g_Mode == Mode.VISUAL:
         SetSelection(start, end, cursor_index=1)
+        # Hide the extra caret that the cursor_index=1 selection introduces;
+        # the visible block cursor is the primary (slot 0).
+        N10X.Editor.SetCursorVisible(1, False)
     elif g_Mode == Mode.VISUAL_LINE:
         SetLineSelection(start[1], end[1], cursor_index=1)
+        N10X.Editor.SetCursorVisible(1, False)
     elif g_Mode == Mode.VISUAL_BLOCK:
+        # SetCursorRectSelect creates a real caret per spanned line, so slot 1
+        # is the caret on the second line - don't hide it here.
         g_VisualBlockModeEndPos = end
         N10X.Editor.SetCursorRectSelect(start, end)
-                             
-    N10X.Editor.SetCursorVisible(1, False)
 
 #------------------------------------------------------------------------
 def SubmitVisualModeSelection():
@@ -2978,6 +2982,72 @@ def HandleCommandModeChar(char):
 
 
 #------------------------------------------------------------------------
+def IncrementNumberUnderCursor(delta):
+    """
+    Vim's Ctrl+A / Ctrl+X. Finds the number at or after the cursor on the
+    current line and adds delta to it. Supports decimal (with optional leading
+    minus) and hexadecimal (0x...) numbers, preserving zero-padded width and
+    hex digit case. The cursor is left on the last digit of the new number.
+    """
+    x, y = N10X.Editor.GetCursorPos()
+    line = N10X.Editor.GetLine(y)
+
+    # Process the line without its line ending, then restore it when writing back.
+    stripped = line.rstrip("\r\n")
+    line_ending = line[len(stripped):]
+    line = stripped
+
+    # Match hex before decimal so '0x1f' isn't split into '0' and '1'.
+    number_re = re.compile(r"0[xX][0-9a-fA-F]+|-?\d+")
+
+    # Vim uses the number the cursor is on, otherwise the next one to the right.
+    match = next((m for m in number_re.finditer(line) if m.end() > x), None)
+    if match is None:
+        return
+
+    text = match.group(0)
+    is_hex = len(text) > 1 and text[1] in "xX"
+
+    if is_hex:
+        prefix = text[:2]
+        digits = text[2:]
+        value = max(0, int(digits, 16) + delta)
+        fmt = "X" if any(ch in "ABCDEF" for ch in digits) else "x"
+        new_digits = format(value, fmt).rjust(len(digits), "0")
+        new_text = prefix + new_digits
+    else:
+        value = int(text) + delta
+        digits = text.lstrip("-")
+        new_digits = str(abs(value))
+        # Preserve leading-zero padding, e.g. '007' -> '008'.
+        if len(digits) > 1 and digits[0] == "0":
+            new_digits = new_digits.rjust(len(digits), "0")
+        new_text = ("-" if value < 0 else "") + new_digits
+
+    new_line = line[:match.start()] + new_text + line[match.end():]
+
+    N10X.Editor.PushUndoGroup()
+    N10X.Editor.SetLine(y, new_line + line_ending)
+    N10X.Editor.PopUndoGroup()
+
+    # Leave the cursor on the last digit of the resulting number, as Vim does.
+    SetCursorPos(x=match.start() + len(new_text) - 1, y=y)
+
+
+#------------------------------------------------------------------------
+def TakePendingRepeatCount():
+    """
+    Returns the count typed before a command key (e.g. the 5 in '5<C-a>') and
+    clears the pending command string. Defaults to 1 when no count was typed.
+    """
+    global g_Command
+    m = re.match(g_RepeatMatch + "$", g_Command)
+    count = int(m.group(1)) if m and m.group(1) else 1
+    g_Command = ""
+    return count
+
+
+#------------------------------------------------------------------------
 def HandleCommandModeKey(key: Key):
     global g_HandlingKey
     global g_Command
@@ -3031,7 +3101,7 @@ def HandleCommandModeKey(key: Key):
         N10X.Editor.ExecuteCommand("NextPanelTab")
    
     elif key == Key("A", control=True):
-        pass # todo
+        IncrementNumberUnderCursor(TakePendingRepeatCount())
    
     elif key == Key("V", control=True):
         if g_VisualBlockModeEnabled: 
@@ -3041,7 +3111,8 @@ def HandleCommandModeKey(key: Key):
         N10X.Editor.ExecuteCommand("Undo")
 
     elif key == Key("X", control=True):
-        pass
+        # Decrement by passing -TakePendingRepeatCount()
+        IncrementNumberUnderCursor(-TakePendingRepeatCount())
 
     elif key == Key("W", control=True):
         g_PaneSwap = True
@@ -3464,6 +3535,59 @@ def HandleInsertModeChar(char):
     return False
 
 #------------------------------------------------------------------------
+def ReplaceVisualSelection(replacement):
+    """
+    Vim 'r' in visual modes: replace every selected character with
+    'replacement', preserving line breaks (and, for block mode, the column
+    range, without padding short lines). Returns the position the cursor
+    should be left at (the top-left of the affected region).
+    """
+    N10X.Editor.PushUndoGroup()
+
+    if g_Mode == Mode.VISUAL_BLOCK:
+        start = g_VisualModeStartPos
+        end = g_VisualBlockModeEndPos
+        y0, y1 = sorted((start[1], end[1]))
+        x0, x1 = sorted((start[0], end[0]))  # x1 is inclusive in block mode
+        for y in range(y0, y1 + 1):
+            line = GetLine(y)
+            length = GetLineLength(y)
+            begin = min(x0, length)
+            stop = min(x1 + 1, length)
+            if stop > begin:
+                line = line[:begin] + replacement * (stop - begin) + line[stop:]
+                N10X.Editor.SetLine(y, line)
+        cursor = (x0, y0)
+
+    elif g_Mode == Mode.VISUAL_LINE:
+        start, end = N10X.Editor.GetCursorSelection(cursor_index=1)
+        y0, y1 = sorted((start[1], end[1]))
+        for y in range(y0, y1 + 1):
+            line = GetLine(y)
+            length = GetLineLength(y)
+            line_ending = line[length:]
+            N10X.Editor.SetLine(y, replacement * length + line_ending)
+        cursor = (0, y0)
+
+    else:  # Mode.VISUAL - end[0] is exclusive (see SetSelection)
+        start, end = N10X.Editor.GetCursorSelection(cursor_index=1)
+        y = start[1]
+        while y <= end[1]:
+            line = GetLine(y)
+            length = GetLineLength(y)
+            if length > 0:
+                begin = min(start[0] if y == start[1] else 0, length)
+                stop = min(end[0] if y == end[1] else length, length)
+                if stop > begin:
+                    line = line[:begin] + replacement * (stop - begin) + line[stop:]
+                    N10X.Editor.SetLine(y, line)
+            y += 1
+        cursor = (start[0], start[1])
+
+    N10X.Editor.PopUndoGroup()
+    return cursor
+
+#------------------------------------------------------------------------
 def HandleVisualModeChar(char):
     global g_Mode
     global g_Command
@@ -3537,7 +3661,17 @@ def HandleVisualModeChar(char):
         SetCursorPos(start[0], start[1])
         EnterInsertMode()
         should_save = True
-    
+
+    elif c == "r":
+        # Wait for the replacement character.
+        return
+
+    elif len(c) == 2 and c[0] == "r":
+        cursor = ReplaceVisualSelection(c[1])
+        EnterCommandMode()
+        SetCursorPos(cursor[0], cursor[1])
+        should_save = True
+
     elif c == "_" or c == "^":
         MoveToFirstNonWhitespace()
 
