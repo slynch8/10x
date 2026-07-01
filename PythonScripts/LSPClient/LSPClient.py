@@ -37,8 +37,10 @@
 #     <name>.InterceptCommands  "true"/"false" - hook 10x's built-in commands
 #                           (GoToSymbolDefinition, GoToSymbolDefinitionUnderMouse,
 #                           FindSymbolReferences, Autocomplete,
-#                           ShowFunctionArgsInfo, ShowSymbolInfo) so the default
-#                           key bindings drive the language server for files we
+#                           ShowFunctionArgsInfo, ShowSymbolInfo, and - when the
+#                           language defines a comment token - ToggleComment /
+#                           CommentLine / UncommentLine) so the default key
+#                           bindings drive the language server for files we
 #                           handle. Default true; set "false" to require the
 #                           per-language <Name>_* functions instead.
 #     <name>.Diagnostics    "true"/"false" - show the diagnostic under the
@@ -388,6 +390,11 @@ class LanguageServerClient:
                         [sys.executable, "-m", "pylsp"]).
         trigger_chars   Characters that auto-trigger completion when
                         "<name>.AutoComplete" is true (e.g. ".").
+        line_comment    Line-comment token for this language (e.g. "//" or "#").
+                        When set, the ToggleComment / CommentLine / UncommentLine
+                        commands comment or uncomment the selected lines with it.
+                        Commenting is a pure editor-side text edit - it does not
+                        use the language server (LSP has no comment API).
         root_markers    Optional iterable of project-root marker filenames.
         init_options    Optional dict passed as initializationOptions.
         ignore_dirs     Optional iterable of language-specific directory names
@@ -400,13 +407,14 @@ class LanguageServerClient:
 
     def __init__(self, name, language_id, extensions, default_command="",
                  fallback_argv=None, trigger_chars="", root_markers=None,
-                 init_options=None, ignore_dirs=None):
+                 init_options=None, ignore_dirs=None, line_comment=""):
         self.name = name
         self.language_id = language_id
         self.extensions = tuple(extensions)
         self.default_command = default_command
         self.fallback_argv = fallback_argv
         self.trigger_chars = trigger_chars or ""
+        self.line_comment = line_comment or ""
         self.root_markers = tuple(root_markers) if root_markers else _DEFAULT_ROOT_MARKERS
         self.init_options = init_options or {}
         # Directories the file-watch scan skips: the common set plus any the
@@ -1321,6 +1329,103 @@ class LanguageServerClient:
         self.sync_current(force=True)
         self._send_request("textDocument/references", params, self._on_references)
 
+    # -- comment toggling --------------------------------------------------
+    # Commenting is a purely editor-side text edit (LSP has no comment API), so
+    # these work without a running server. They act on whole lines: the current
+    # line, or every line touched by the selection.
+
+    def comments_configured(self):
+        """Whether this language defined a line comment token."""
+        return bool(self.line_comment)
+
+    @staticmethod
+    def _split_eol(line):
+        """Split a line from GetLine into (content, trailing_eol) so we can
+        rewrite the content and put the original "\\r\\n"/"\\n" back verbatim."""
+        i = len(line)
+        while i > 0 and line[i - 1] in "\r\n":
+            i -= 1
+        return line[:i], line[i:]
+
+    def _comment_line_range(self):
+        """(y0, y1) inclusive line range a comment command applies to: the
+        selection if there is one, otherwise the single cursor line. A selection
+        that ends at column 0 of a line doesn't include that line."""
+        try:
+            (sx, sy), (ex, ey) = N10X.Editor.GetCursorSelection()
+        except Exception:
+            _, y = N10X.Editor.GetCursorPos()
+            return y, y
+        if (sy, sx) > (ey, ex):
+            sx, sy, ex, ey = ex, ey, sx, sy
+        if (sx, sy) == (ex, ey):
+            return sy, sy  # empty selection == just the cursor line
+        if ey > sy and ex == 0:
+            ey -= 1
+        return sy, ey
+
+    def toggle_comment(self):
+        """Comment or uncomment the current line / selected lines - the ones
+        already commented decide the direction (10x's ToggleComment)."""
+        self._apply_comment("toggle")
+
+    def comment_line(self):
+        """Comment the current line / selected lines (10x's CommentLine)."""
+        self._apply_comment("comment")
+
+    def uncomment_line(self):
+        """Uncomment the current line / selected lines (10x's UncommentLine)."""
+        self._apply_comment("uncomment")
+
+    def _apply_comment(self, mode):
+        """Add or remove the line-comment token across the target line range.
+        `mode` is "comment", "uncomment" or "toggle". No-op (the caller lets
+        10x's default run) when no token is configured or the file isn't ours."""
+        if not self.line_comment:
+            return
+        if not self.handles(N10X.Editor.GetCurrentFilename()):
+            return
+        token = self.line_comment
+        y0, y1 = self._comment_line_range()
+        rows = []
+        for y in range(y0, y1 + 1):
+            content, eol = self._split_eol(N10X.Editor.GetLine(y) or "")
+            rows.append([y, content, eol])
+        nonblank = [c for _, c, _ in rows if c.strip()]
+        if not nonblank:
+            return
+        if mode == "toggle":
+            # Comment unless every non-blank line is already commented.
+            commenting = not all(c.lstrip().startswith(token) for c in nonblank)
+        else:
+            commenting = (mode == "comment")
+        # Comment at the shallowest indent so the tokens line up with the
+        # least-indented code in the block.
+        indent = min(len(c) - len(c.lstrip()) for c in nonblank)
+        N10X.Editor.PushUndoGroup()
+        N10X.Editor.BeginTextUpdate()
+        try:
+            for y, content, eol in rows:
+                if not content.strip():
+                    continue  # leave blank lines untouched
+                stripped = content.lstrip()
+                if commenting:
+                    if stripped.startswith(token):
+                        continue  # already commented; don't double it up
+                    new = content[:indent] + token + " " + content[indent:]
+                else:
+                    if not stripped.startswith(token):
+                        continue  # not commented; nothing to strip
+                    ws = content[:len(content) - len(stripped)]
+                    rest = stripped[len(token):]
+                    if rest.startswith(" "):
+                        rest = rest[1:]
+                    new = ws + rest
+                N10X.Editor.SetLine(y, new + eol)
+        finally:
+            N10X.Editor.EndTextUpdate()
+            N10X.Editor.PopUndoGroup()
+
     # -- 10x event hooks ---------------------------------------------------
 
     def _on_file_opened(self, filename=None, *args):
@@ -1514,6 +1619,10 @@ class LanguageServerClient:
             "diagnostics": self.show_all_diagnostics,
             "showdiagnostics": self.show_all_diagnostics,
             "restart": self.restart,
+            "comment": self.toggle_comment,
+            "togglecomment": self.toggle_comment,
+            "commentline": self.comment_line,
+            "uncommentline": self.uncomment_line,
         }
 
     def _on_command_panel(self, text=None, *args):
@@ -1554,7 +1663,7 @@ class LanguageServerClient:
     # the caret to the symbol under the mouse before the command fires, so reading
     # the cursor position (as goto_definition does) targets the right symbol.
     def _intercept_table(self):
-        return {
+        table = {
             "gotosymboldefinition": self.goto_definition,
             "gotosymboldefinitionundermouse": self.goto_definition,
             "findsymbolreferences": self.find_references,
@@ -1562,6 +1671,13 @@ class LanguageServerClient:
             "showfunctionargsinfo": self.signature_help,
             "showsymbolinfo": self.hover,
         }
+        # Comment commands only when this language configured a comment token;
+        # otherwise leave 10x's built-in commenting in charge.
+        if self.comments_configured():
+            table["togglecomment"] = self.toggle_comment
+            table["commentline"] = self.comment_line
+            table["uncommentline"] = self.uncomment_line
+        return table
 
     def _on_intercept_command(self, command=None, *args):
         """Intercept a built-in editor command. Returns True when we've handled
@@ -1576,9 +1692,11 @@ class LanguageServerClient:
                 return False
             if not self.handles(N10X.Editor.GetCurrentFilename()):
                 return False
-            if not self._ready():
-                # Server not up yet: let 10x's default run rather than swallow
-                # the key and do nothing.
+            # The comment commands are pure text edits and need no server; every
+            # other intercepted command does, so let 10x's default run (rather
+            # than swallow the key and do nothing) until the server is up.
+            offline = (self.toggle_comment, self.comment_line, self.uncomment_line)
+            if fn not in offline and not self._ready():
                 return False
             if self._verbose():
                 self.log(f"intercepting command: {command}")

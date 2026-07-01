@@ -42,20 +42,26 @@
 #   JaiLSP.InterceptCommands   "true"/"false" - drive the language server from
 #                              10x's built-in GoToSymbolDefinition /
 #                              FindSymbolReferences / Autocomplete /
-#                              ShowFunctionArgsInfo / ShowSymbolInfo commands so
-#                              the editor's default key bindings work (default true)
+#                              ShowFunctionArgsInfo / ShowSymbolInfo /
+#                              ToggleComment / CommentLine / UncommentLine
+#                              commands so the editor's default key bindings work
+#                              (default true)
 #   JaiLSP.LogVerbose          "true"/"false" - log server traffic (default false)
 #
 # KEY BINDINGS - with InterceptCommands on (the default), 10x's standard
 # bindings for GoToSymbolDefinition, FindSymbolReferences, Autocomplete,
-# ShowFunctionArgsInfo and ShowSymbolInfo already drive the language server in
-# Jai files; no setup needed. To bind the functions explicitly instead
-# (Settings -> Key Bindings):
+# ShowFunctionArgsInfo, ShowSymbolInfo, ToggleComment, CommentLine and
+# UncommentLine already drive the language server (commenting uses "//") in Jai
+# files; no setup needed. To bind the functions explicitly instead (Settings ->
+# Key Bindings):
 #   Control Space:       JaiLSP_Completion()
 #   F12:                 JaiLSP_GotoDefinition()
 #   Control K:           JaiLSP_Hover()
 #   Shift F12:           JaiLSP_FindReferences()
 #   Control Shift Space: JaiLSP_SignatureHelp()
+#   Control Shift /:      JaiLSP_ToggleComment()   (10x default)
+#   Control K, Control C: JaiLSP_CommentLine()     (10x default)
+#   Control K, Control U: JaiLSP_UncommentLine()   (10x default)
 #   (no binding needed)  JaiLSP_ShowDiagnostics()
 #   (no binding needed)  JaiLSP_Restart()
 # ---------------------------------------------------------------------------
@@ -88,6 +94,7 @@ _client = LanguageServerClient(
     # "." for member access on structs/enums. Jai has no "::"-style path
     # operator (constants are "name :: value"), so a single trigger char.
     trigger_chars=".",
+    line_comment="//",
     # jails reads the build entry point from jails.json at the project root;
     # prefer that, then fall back to common Jai build files. (".git" is left out
     # so a git submodule's own .git doesn't get picked as the root.)
@@ -119,6 +126,18 @@ def JaiLSP_FindReferences():
 
 def JaiLSP_ShowDiagnostics():
     _client.show_all_diagnostics()
+
+
+def JaiLSP_ToggleComment():
+    _client.toggle_comment()
+
+
+def JaiLSP_CommentLine():
+    _client.comment_line()
+
+
+def JaiLSP_UncommentLine():
+    _client.uncomment_line()
 
 
 def JaiLSP_Restart():

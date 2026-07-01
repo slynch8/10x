@@ -44,20 +44,26 @@
 #   PythonLSP.InterceptCommands "true"/"false" - drive the language server from
 #                              10x's built-in GoToSymbolDefinition /
 #                              FindSymbolReferences / Autocomplete /
-#                              ShowFunctionArgsInfo / ShowSymbolInfo commands so
-#                              the editor's default key bindings work (default true)
+#                              ShowFunctionArgsInfo / ShowSymbolInfo /
+#                              ToggleComment / CommentLine / UncommentLine
+#                              commands so the editor's default key bindings work
+#                              (default true)
 #   PythonLSP.LogVerbose       "true"/"false" - log server traffic (default false)
 #
 # KEY BINDINGS - with InterceptCommands on (the default), 10x's standard
 # bindings for GoToSymbolDefinition, FindSymbolReferences, Autocomplete,
-# ShowFunctionArgsInfo and ShowSymbolInfo already drive the language server in
-# Python files; no setup needed. To bind the functions explicitly instead
-# (Settings -> Key Bindings):
+# ShowFunctionArgsInfo, ShowSymbolInfo, ToggleComment, CommentLine and
+# UncommentLine already drive the language server (commenting uses "#") in Python
+# files; no setup needed. To bind the functions explicitly instead (Settings ->
+# Key Bindings):
 #   Control Space:       PythonLSP_Completion()
 #   F12:                 PythonLSP_GotoDefinition()
 #   Control K:           PythonLSP_Hover()
 #   Shift F12:           PythonLSP_FindReferences()
 #   Control Shift Space: PythonLSP_SignatureHelp()
+#   Control Shift /:      PythonLSP_ToggleComment()   (10x default)
+#   Control K, Control C: PythonLSP_CommentLine()     (10x default)
+#   Control K, Control U: PythonLSP_UncommentLine()   (10x default)
 #   (no binding needed)  PythonLSP_ShowDiagnostics()
 #   (no binding needed)  PythonLSP_Restart()
 # ---------------------------------------------------------------------------
@@ -89,6 +95,7 @@ _client = LanguageServerClient(
     default_command="pylsp",
     fallback_argv=[sys.executable, "-m", "pylsp"],
     trigger_chars=".",
+    line_comment="#",
     # Skip virtualenvs and tool caches in the file-watch scan.
     ignore_dirs=("__pycache__", ".venv", "venv", "env", "__pypackages__",
                  ".mypy_cache", ".pytest_cache", ".ruff_cache",
@@ -120,6 +127,18 @@ def PythonLSP_FindReferences():
 
 def PythonLSP_ShowDiagnostics():
     _client.show_all_diagnostics()
+
+
+def PythonLSP_ToggleComment():
+    _client.toggle_comment()
+
+
+def PythonLSP_CommentLine():
+    _client.comment_line()
+
+
+def PythonLSP_UncommentLine():
+    _client.uncomment_line()
 
 
 def PythonLSP_Restart():

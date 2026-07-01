@@ -41,20 +41,26 @@
 #   RustLSP.InterceptCommands  "true"/"false" - drive the language server from
 #                              10x's built-in GoToSymbolDefinition /
 #                              FindSymbolReferences / Autocomplete /
-#                              ShowFunctionArgsInfo / ShowSymbolInfo commands so
-#                              the editor's default key bindings work (default true)
+#                              ShowFunctionArgsInfo / ShowSymbolInfo /
+#                              ToggleComment / CommentLine / UncommentLine
+#                              commands so the editor's default key bindings work
+#                              (default true)
 #   RustLSP.LogVerbose         "true"/"false" - log server traffic (default false)
 #
 # KEY BINDINGS - with InterceptCommands on (the default), 10x's standard
 # bindings for GoToSymbolDefinition, FindSymbolReferences, Autocomplete,
-# ShowFunctionArgsInfo and ShowSymbolInfo already drive the language server in
-# Rust files; no setup needed. To bind the functions explicitly instead
-# (Settings -> Key Bindings):
+# ShowFunctionArgsInfo, ShowSymbolInfo, ToggleComment, CommentLine and
+# UncommentLine already drive the language server (commenting uses "//") in Rust
+# files; no setup needed. To bind the functions explicitly instead (Settings ->
+# Key Bindings):
 #   Control Space:       RustLSP_Completion()
 #   F12:                 RustLSP_GotoDefinition()
 #   Control K:           RustLSP_Hover()
 #   Shift F12:           RustLSP_FindReferences()
 #   Control Shift Space: RustLSP_SignatureHelp()
+#   Control Shift /:      RustLSP_ToggleComment()   (10x default)
+#   Control K, Control C: RustLSP_CommentLine()     (10x default)
+#   Control K, Control U: RustLSP_UncommentLine()   (10x default)
 #   (no binding needed)  RustLSP_ShowDiagnostics()
 #   (no binding needed)  RustLSP_Restart()
 # ---------------------------------------------------------------------------
@@ -86,6 +92,7 @@ _client = LanguageServerClient(
     default_command="rust-analyzer",
     # "." for fields/methods, ":" for "::" path segments.
     trigger_chars=".:",
+    line_comment="//",
     # Prefer the Cargo manifest as the project root so rust-analyzer loads the
     # workspace; rust-project.json covers non-Cargo projects. (".git" is left
     # out so a git submodule's own .git doesn't get picked as the root.)
@@ -119,6 +126,18 @@ def RustLSP_FindReferences():
 
 def RustLSP_ShowDiagnostics():
     _client.show_all_diagnostics()
+
+
+def RustLSP_ToggleComment():
+    _client.toggle_comment()
+
+
+def RustLSP_CommentLine():
+    _client.comment_line()
+
+
+def RustLSP_UncommentLine():
+    _client.uncomment_line()
 
 
 def RustLSP_Restart():

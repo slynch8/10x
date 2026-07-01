@@ -43,20 +43,26 @@
 #   OdinLSP.InterceptCommands  "true"/"false" - drive the language server from
 #                              10x's built-in GoToSymbolDefinition /
 #                              FindSymbolReferences / Autocomplete /
-#                              ShowFunctionArgsInfo / ShowSymbolInfo commands so
-#                              the editor's default key bindings work (default true)
+#                              ShowFunctionArgsInfo / ShowSymbolInfo /
+#                              ToggleComment / CommentLine / UncommentLine
+#                              commands so the editor's default key bindings work
+#                              (default true)
 #   OdinLSP.LogVerbose         "true"/"false" - log server traffic (default false)
 #
 # KEY BINDINGS - with InterceptCommands on (the default), 10x's standard
 # bindings for GoToSymbolDefinition, FindSymbolReferences, Autocomplete,
-# ShowFunctionArgsInfo and ShowSymbolInfo already drive the language server in
-# Odin files; no setup needed. To bind the functions explicitly instead
-# (Settings -> Key Bindings):
+# ShowFunctionArgsInfo, ShowSymbolInfo, ToggleComment, CommentLine and
+# UncommentLine already drive the language server (commenting uses "//") in Odin
+# files; no setup needed. To bind the functions explicitly instead (Settings ->
+# Key Bindings):
 #   Control Space:       OdinLSP_Completion()
 #   F12:                 OdinLSP_GotoDefinition()
 #   Control K:           OdinLSP_Hover()
 #   Shift F12:           OdinLSP_FindReferences()
 #   Control Shift Space: OdinLSP_SignatureHelp()
+#   Control Shift /:      OdinLSP_ToggleComment()   (10x default)
+#   Control K, Control C: OdinLSP_CommentLine()     (10x default)
+#   Control K, Control U: OdinLSP_UncommentLine()   (10x default)
 #   (no binding needed)  OdinLSP_ShowDiagnostics()
 #   (no binding needed)  OdinLSP_Restart()
 # ---------------------------------------------------------------------------
@@ -87,6 +93,7 @@ _client = LanguageServerClient(
     extensions=(".odin",),
     default_command="ols",
     trigger_chars=".",
+    line_comment="//",
     # OLS reads its config from ols.json at the project root; prefer that as the
     # root marker so the right collections/build dir are picked up. (".git" is
     # left out so a git submodule's own .git doesn't get picked as the root.)
@@ -120,6 +127,18 @@ def OdinLSP_FindReferences():
 
 def OdinLSP_ShowDiagnostics():
     _client.show_all_diagnostics()
+
+
+def OdinLSP_ToggleComment():
+    _client.toggle_comment()
+
+
+def OdinLSP_CommentLine():
+    _client.comment_line()
+
+
+def OdinLSP_UncommentLine():
+    _client.uncomment_line()
 
 
 def OdinLSP_Restart():
