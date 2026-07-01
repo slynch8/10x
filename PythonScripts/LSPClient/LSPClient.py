@@ -43,6 +43,11 @@
 #                           bindings drive the language server for files we
 #                           handle. Default true; set "false" to require the
 #                           per-language <Name>_* functions instead.
+#     <name>.Commenting     "true"/"false" - handle 10x's ToggleComment /
+#                           CommentLine / UncommentLine for files we handle,
+#                           using the language's comment token (default true).
+#                           Set "false" to fall back to 10x's built-in
+#                           commenting. Only applies when a token is configured.
 #     <name>.Diagnostics    "true"/"false" - show the diagnostic under the
 #                           cursor in the status bar (default true)
 #     <name>.DiagnosticsLevel  lowest severity to show: error | warning | info |
@@ -1284,6 +1289,9 @@ class LanguageServerClient:
         self.log(f"  enabled         : {self.is_enabled()} "
                  f"(setting: {self.setting('Enabled') or '(unset=off)'})")
         self.log(f"  autocomplete    : {self.setting('AutoComplete') or '(unset=true)'}")
+        self.log(f"  commenting      : {self.commenting_enabled()} "
+                 f"(setting: {self.setting('Commenting') or '(unset=on)'}, "
+                 f"token: {self.line_comment or 'none'})")
         self.log(f"  server argv     : {self._server_argv()}")
         self.log(f"  connection      : {'alive' if (self.conn and self.conn.alive) else 'none/dead'}")
         self.log(f"  initialized     : {self.initialized}")
@@ -1334,9 +1342,14 @@ class LanguageServerClient:
     # these work without a running server. They act on whole lines: the current
     # line, or every line touched by the selection.
 
-    def comments_configured(self):
-        """Whether this language defined a line comment token."""
-        return bool(self.line_comment)
+    def commenting_enabled(self):
+        """Whether the comment commands (ToggleComment / CommentLine /
+        UncommentLine) are active: the language defined a line-comment token and
+        the "<name>.Commenting" setting isn't turned off. Default on; set
+        "<name>.Commenting: false" to hand commenting back to 10x's built-in."""
+        if not self.line_comment:
+            return False
+        return self.setting("Commenting", "true").strip().lower() != "false"
 
     @staticmethod
     def _split_eol(line):
@@ -1380,8 +1393,8 @@ class LanguageServerClient:
     def _apply_comment(self, mode):
         """Add or remove the line-comment token across the target line range.
         `mode` is "comment", "uncomment" or "toggle". No-op (the caller lets
-        10x's default run) when no token is configured or the file isn't ours."""
-        if not self.line_comment:
+        10x's default run) when commenting is disabled or the file isn't ours."""
+        if not self.commenting_enabled():
             return
         if not self.handles(N10X.Editor.GetCurrentFilename()):
             return
@@ -1671,9 +1684,10 @@ class LanguageServerClient:
             "showfunctionargsinfo": self.signature_help,
             "showsymbolinfo": self.hover,
         }
-        # Comment commands only when this language configured a comment token;
-        # otherwise leave 10x's built-in commenting in charge.
-        if self.comments_configured():
+        # Comment commands only when commenting is enabled (a token is
+        # configured and "<name>.Commenting" isn't off); otherwise leave 10x's
+        # built-in commenting in charge.
+        if self.commenting_enabled():
             table["togglecomment"] = self.toggle_comment
             table["commentline"] = self.comment_line
             table["uncommentline"] = self.uncomment_line

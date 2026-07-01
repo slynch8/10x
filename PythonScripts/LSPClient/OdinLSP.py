@@ -47,6 +47,9 @@
 #                              ToggleComment / CommentLine / UncommentLine
 #                              commands so the editor's default key bindings work
 #                              (default true)
+#   OdinLSP.Commenting         "true"/"false" - handle ToggleComment /
+#                              CommentLine / UncommentLine using "//" (default
+#                              true); set false for 10x's built-in commenting
 #   OdinLSP.LogVerbose         "true"/"false" - log server traffic (default false)
 #
 # KEY BINDINGS - with InterceptCommands on (the default), 10x's standard
