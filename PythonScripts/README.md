@@ -19,6 +19,8 @@ PythonBlack.py                      |Formats python scripts using black after sa
 LSPClient.py                        |Generic, reusable Language Server Protocol client (completion, hover, go-to-definition, references, diagnostics) that any language script can drive. The LSPClient folder also contains PythonLSP.py
 PythonLSP.py                        |Python language support (completion, hover, go-to-definition, references, diagnostics) - configures LSPClient.py to use pylsp (lives in the LSPClient folder, alongside LSPClient.py)
 OdinLSP.py                          |Odin language support (completion, hover, go-to-definition, references, diagnostics) - configures LSPClient.py to use OLS (lives in the LSPClient folder, alongside LSPClient.py)
+RustLSP.py                          |Rust language support (completion, hover, go-to-definition, references, diagnostics) - configures LSPClient.py to use rust-analyzer (lives in the LSPClient folder, alongside LSPClient.py)
+JaiLSP.py                           |Jai language support (completion, hover, go-to-definition, references, diagnostics) - configures LSPClient.py to use jails (lives in the LSPClient folder, alongside LSPClient.py)
 PythonAutopep.py                    |Formats python scripts using autopep after saving 
 QuickPane.py                        |This script tries to simulate vim's "vsplit" and "only" commands
 RemedyBG.py                         |RemedyBG debugger integration
