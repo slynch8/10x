@@ -177,6 +177,27 @@ def extract_markup(contents):
     return str(contents)
 
 
+def strip_code_fences(text):
+    """Drop Markdown code-fence lines (``` or ```lang) while keeping the code
+    inside them. 10x's hover box shows text verbatim rather than rendering
+    Markdown, so fences a server wraps content in - e.g. OLS emits every Odin
+    signature as "```odin\\n<sig>\\n```" - would otherwise show up as literal ```
+    lines. Only whole-line fences are removed; inline `code` spans, the "---"
+    section separators and everything else are left as-is."""
+    if not text or "```" not in text:
+        return text
+    out = []
+    in_fence = False
+    for line in text.split("\n"):
+        if line.lstrip().startswith("```"):
+            in_fence = not in_fence  # toggle: this line opens or closes a block
+            continue                 # and is dropped either way
+        out.append(line)
+    # Trim only blank lines the stripping may have left at the very ends; keep
+    # interior blank lines (they separate sections) and any code indentation.
+    return "\n".join(out).strip("\n")
+
+
 def first_location(result):
     """Normalise Location | Location[] | LocationLink[] to (uri, range)."""
     if not result:
@@ -1164,7 +1185,7 @@ class LanguageServerClient:
             N10X.Editor.SetStatusBarText(f"{self.name}: " + " ".join(text.splitlines()))
 
     def _on_hover(self, result, error, pos=None):
-        text = extract_markup(result.get("contents")) if result else ""
+        text = strip_code_fences(extract_markup(result.get("contents"))) if result else ""
         if not text.strip():
             N10X.Editor.SetStatusBarText(f"{self.name}: no hover info")
             return
