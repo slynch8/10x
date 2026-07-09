@@ -70,6 +70,7 @@
 # ---------------------------------------------------------------------------
 
 import os
+import glob
 import json
 import time
 import queue
@@ -151,12 +152,20 @@ def uri_to_path(uri):
 
 
 def find_project_root(file_path, markers):
-    """Walk up from a file looking for a project marker; fall back to its dir."""
+    """Walk up from a file looking for a project marker; fall back to its dir.
+
+    A marker is normally a literal filename (e.g. "Cargo.toml"), but one that
+    contains a shell wildcard ("*" or "?") is matched as a glob against the
+    directory's contents - so a language whose project files are variably named
+    (e.g. C#'s "*.sln"/"*.csproj") can still find its root."""
     d = os.path.dirname(os.path.abspath(file_path))
     cur = d
     while True:
         for m in markers:
-            if os.path.exists(os.path.join(cur, m)):
+            if "*" in m or "?" in m:
+                if glob.glob(os.path.join(cur, m)):
+                    return cur
+            elif os.path.exists(os.path.join(cur, m)):
                 return cur
         parent = os.path.dirname(cur)
         if parent == cur:
@@ -423,6 +432,12 @@ class LanguageServerClient:
                         use the language server (LSP has no comment API).
         root_markers    Optional iterable of project-root marker filenames.
         init_options    Optional dict passed as initializationOptions.
+        on_initialized  Optional callback(client) invoked once, right after the
+                        server replies to "initialize" and we've sent the
+                        "initialized" notification. Lets a language script do
+                        server-specific post-init work - e.g. the Roslyn C#
+                        server does not auto-load a project, so CSharpLSP uses
+                        this to send its custom "solution/open" notification.
         ignore_dirs     Optional iterable of language-specific directory names
                         the workspace file-watch scan should skip (e.g.
                         ("target",) for Rust). Merged with the common set
@@ -433,7 +448,8 @@ class LanguageServerClient:
 
     def __init__(self, name, language_id, extensions, default_command="",
                  fallback_argv=None, trigger_chars="", root_markers=None,
-                 init_options=None, ignore_dirs=None, line_comment=""):
+                 init_options=None, ignore_dirs=None, line_comment="",
+                 on_initialized=None):
         self.name = name
         self.language_id = language_id
         self.extensions = tuple(extensions)
@@ -443,6 +459,7 @@ class LanguageServerClient:
         self.line_comment = line_comment or ""
         self.root_markers = tuple(root_markers) if root_markers else _DEFAULT_ROOT_MARKERS
         self.init_options = init_options or {}
+        self.on_initialized = on_initialized
         # Directories the file-watch scan skips: the common set plus any the
         # language script supplied.
         self.ignore_dirs = _COMMON_IGNORE_DIRS | frozenset(ignore_dirs or ())
@@ -606,6 +623,14 @@ class LanguageServerClient:
         self.conn.notify("initialized", {})
         self.initialized = True
         N10X.Editor.SetStatusBarText(f"{self.name}: ready")
+        # Server-specific post-init step (e.g. the Roslyn C# server needs an
+        # explicit "solution/open"). Run before opening documents so the server
+        # already knows the workspace when the didOpen notifications arrive.
+        if self.on_initialized:
+            try:
+                self.on_initialized(self)
+            except Exception as e:
+                self.log(f"on_initialized hook failed: {e}")
         try:
             for fn in N10X.Editor.GetOpenFiles() or []:
                 if self.handles(fn):
@@ -1744,6 +1769,36 @@ class LanguageServerClient:
     def _on_mouse_hover(self, pos):
         self.hover(pos)
 
+    def _check_parser_conflict(self):
+        """Warn if 10x's built-in parser is set to handle one of our extensions.
+
+        10x parses a configured set of file extensions itself (the
+        "ParserExtensions" setting) to drive its own completion / symbol
+        navigation. Some are there by default - notably ".cs" - and when the
+        built-in parser and the language server both claim a file they compete
+        (duplicate or wrong completions, symbol jumps going to the parser's
+        index instead of the server's). We can't edit the setting for the user,
+        so we just flag the overlap and tell them to remove it. Main-thread only
+        (reads a setting); call from register()."""
+        raw = N10X.Editor.GetSetting("ParserExtensions") or ""
+        if not raw:
+            return
+        # Always a comma-separated list, e.g. ".cpp, .cs,.h,.inl, .hlsl" - entries
+        # may carry surrounding spaces (including a space before the dot). Split
+        # on commas, strip each entry, and compare as dot-less lowercase tokens.
+        have = {tok.strip().lstrip(".").lower()
+                for tok in raw.split(",") if tok.strip()}
+        clash = sorted(e.lstrip(".").lower() for e in self.extensions
+                       if e.lstrip(".").lower() in have)
+        if clash:
+            exts = ", ".join("." + c for c in clash)
+            self.log("WARNING: 10x's built-in parser also handles " + exts +
+                     " (the ParserExtensions setting). Remove " + exts +
+                     " from ParserExtensions so " + self.name + " drives these "
+                     "files - otherwise the built-in parser competes with the "
+                     "language server (duplicate/incorrect completion and symbol "
+                     "navigation).")
+
     def register(self):
         """Wire this client into the 10x editor events. Call once, on the main
         thread (e.g. via N10X.Editor.CallOnMainThread).
@@ -1757,6 +1812,7 @@ class LanguageServerClient:
                      f"(then restart 10x)")
             return
         self._refresh_verbose()
+        self._check_parser_conflict()
         N10X.Editor.AddOnFileOpenedFunction(self._on_file_opened)
         N10X.Editor.AddPostFileSaveFunction(self._on_post_save)
         N10X.Editor.AddOnCharKeyFunction(self._on_char_key)
