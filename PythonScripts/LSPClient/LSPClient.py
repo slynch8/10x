@@ -1188,7 +1188,6 @@ class LanguageServerClient:
 
         We pass the start of the word under the cursor as the position so 10x
         replaces that word with the full suggestion.""" 
-        print("show auto complete")
         pos = self._completion_replace_pos()
         last_err = None
         try:
