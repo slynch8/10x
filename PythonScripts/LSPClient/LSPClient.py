@@ -70,7 +70,9 @@
 # ---------------------------------------------------------------------------
 
 import os
+import re
 import glob
+import html
 import json
 import time
 import queue
@@ -205,6 +207,40 @@ def strip_code_fences(text):
     # Trim only blank lines the stripping may have left at the very ends; keep
     # interior blank lines (they separate sections) and any code indentation.
     return "\n".join(out).strip("\n")
+
+
+def strip_markup_html(text):
+    """Decode HTML entities a server embeds in Markdown hover text - the
+    C#/Roslyn server pads with &nbsp; and escapes generics as &lt;T&gt;. 10x's
+    hover box shows text verbatim and never decodes HTML, so the raw entities
+    would show literally. Non-breaking spaces (&nbsp; -> \\xa0) are folded to
+    normal spaces so they don't render oddly."""
+    if not text or "&" not in text:
+        return text
+    return html.unescape(text).replace("\xa0", " ")
+
+
+# Backslash before an ASCII punctuation char = a Markdown escape of that char.
+_MD_ESCAPE = re.compile(r"\\([!-/:-@\[-`{-~])")
+
+
+def strip_markdown_escapes(text):
+    """Undo Markdown backslash conventions for verbatim display. Markdown lets a
+    server escape any ASCII punctuation with a backslash (the C#/Roslyn server
+    emits things like my\\_field or List\\<T\\>) and end a line with a trailing
+    "\\" to force a hard line break. 10x shows hover text verbatim, so those
+    backslashes show up literally. Drop a lone trailing "\\" at each line end (the
+    newline is already there), then drop the escaping backslash before
+    punctuation. A backslash not followed by punctuation - e.g. a Windows path
+    like C:\\Users - is left alone."""
+    if not text or "\\" not in text:
+        return text
+    # Hard-line-break backslash at the end of a line / the whole string.
+    text = re.sub(r"\\(?=\n)", "", text)
+    if text.endswith("\\"):
+        text = text[:-1]
+    # "\<punct>" -> "<punct>".
+    return _MD_ESCAPE.sub(r"\1", text)
 
 
 def first_location(result):
@@ -1208,7 +1244,7 @@ class LanguageServerClient:
             N10X.Editor.SetStatusBarText(f"{self.name}: " + " ".join(text.splitlines()))
 
     def _on_hover(self, result, error, pos=None):
-        text = strip_code_fences(extract_markup(result.get("contents"))) if result else ""
+        text = strip_markdown_escapes(strip_markup_html(strip_code_fences(extract_markup(result.get("contents"))))) if result else ""
         if not text.strip():
             N10X.Editor.SetStatusBarText(f"{self.name}: no hover info")
             return
