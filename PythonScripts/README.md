@@ -21,6 +21,7 @@ PythonLSP.py                        |Python language support (completion, hover,
 OdinLSP.py                          |Odin language support (completion, hover, go-to-definition, references, diagnostics) - configures LSPClient.py to use OLS (lives in the LSPClient folder, alongside LSPClient.py)
 RustLSP.py                          |Rust language support (completion, hover, go-to-definition, references, diagnostics) - configures LSPClient.py to use rust-analyzer (lives in the LSPClient folder, alongside LSPClient.py)
 JaiLSP.py                           |Jai language support (completion, hover, go-to-definition, references, diagnostics) - configures LSPClient.py to use jails (lives in the LSPClient folder, alongside LSPClient.py)
+CSharpLSP.py                        |C# language support (completion, hover, go-to-definition, references, diagnostics) - configures LSPClient.py to use the official Microsoft.CodeAnalysis.LanguageServer / Roslyn (lives in the LSPClient folder, alongside LSPClient.py)
 PythonAutopep.py                    |Formats python scripts using autopep after saving 
 QuickPane.py                        |This script tries to simulate vim's "vsplit" and "only" commands
 RemedyBG.py                         |RemedyBG debugger integration

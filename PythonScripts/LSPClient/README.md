@@ -4,7 +4,7 @@ A generic, reusable [Language Server Protocol](https://microsoft.github.io/langu
 client for the [10x editor](https://www.10xeditor.com). `LSPClient.py` handles
 the transport, document sync, diagnostics and editor features; the small
 per-language scripts in this folder (`PythonLSP.py`, `RustLSP.py`, `OdinLSP.py`,
-`JaiLSP.py`) just point it at a specific language server.
+`JaiLSP.py`, `CSharpLSP.py`) just point it at a specific language server.
 
 Adding a new language is a few lines - instantiate `LanguageServerClient` with a
 command and file extensions and call `.register()`. See any of the existing
@@ -20,12 +20,23 @@ per-language scripts for a complete example.
    ```
    PythonLSP.Enabled: true
    ```
-   (use `RustLSP.Enabled`, `OdinLSP.Enabled`, `JaiLSP.Enabled` for the others).
+   (use `RustLSP.Enabled`, `OdinLSP.Enabled`, `JaiLSP.Enabled`,
+   `CSharpLSP.Enabled` for the others).
 4. Restart 10x.
 
 `LSPClient.py` defines classes only - importing it registers no editor hooks and
 has no side effects. Only the per-language scripts wire anything up, and only
 when their `Enabled` setting is `true`.
+
+> **Note - the `ParserExtensions` setting.** 10x's built-in parser handles a
+> configured list of extensions itself (the `ParserExtensions` setting) for its
+> own completion/symbol navigation. If one of them is also handled by a language
+> server, the two compete (duplicate or wrong completions, symbol jumps hitting
+> the parser's index instead of the server's). Remove any extension you want the
+> LSP to own from `ParserExtensions`. This bites C# in particular: 10x lists
+> `.cs` there by default, so **remove `.cs` when using `CSharpLSP`**. On startup
+> a client logs a `WARNING` naming any of its extensions it finds still in
+> `ParserExtensions`.
 
 ## Features
 
@@ -60,7 +71,8 @@ when their `Enabled` setting is `true`.
 
 All settings are read from `Settings.10x_settings` and prefixed with the client
 name, e.g. `PythonLSP.Enabled`, `RustLSP.Command`. Replace `<name>` below with
-the client you're configuring (`PythonLSP`, `RustLSP`, `OdinLSP`, `JaiLSP`).
+the client you're configuring (`PythonLSP`, `RustLSP`, `OdinLSP`, `JaiLSP`,
+`CSharpLSP`).
 
 | Setting                     | Values                          | Default            | Description |
 |-----------------------------|---------------------------------|--------------------|-------------|
@@ -161,3 +173,37 @@ explicitly instead (Settings -> Key Bindings), use `<Name>_Completion()`,
   ```
   Without it, jails treats the opened file's folder as the workspace, which gives
   weaker cross-file results.
+
+### C# (`CSharpLSP.py`)
+
+- **Extensions:** `.cs`, `.csx`, `.cake` &nbsp;·&nbsp; **Comment token:** `//`
+- **Server:** the official Roslyn-based C# server (the one behind the VS Code C#
+  Dev Kit), published by Microsoft as the **`roslyn-language-server`** .NET
+  global tool on nuget.org. Default command `roslyn-language-server --stdio`.
+- **Install:**
+  1. Install the [.NET SDK](https://dotnet.microsoft.com/download) - match the
+     tool's target (currently **.NET 10**), so grab the .NET 10 SDK. (The SDK is
+     needed by `dotnet tool install` and bundles the matching runtime.)
+  2. Install the tool (prerelease-only for now):
+     ```
+     dotnet tool install --global roslyn-language-server --prerelease
+     ```
+     This puts `roslyn-language-server(.exe)` in `%USERPROFILE%\.dotnet\tools`,
+     which the SDK adds to your PATH. (Neovim's Mason `roslyn` / `roslyn.nvim`
+     are another way to obtain the same server.)
+  3. That's it - the default command is already `roslyn-language-server --stdio`,
+     so with the tool on your PATH you don't need to set anything else; just
+     enable the client (`CSharpLSP.Enabled: true`). Set `CSharpLSP.Command` only
+     to override the default, e.g. if the tool isn't on PATH:
+     ```
+     CSharpLSP.Command: C:/Users/you/.dotnet/tools/roslyn-language-server.exe --stdio
+     ```
+- **Project:** open a folder containing a `.sln` / `.slnx` (preferred) or a
+  `.csproj`. Unlike most servers, Roslyn does not auto-load a project on
+  startup, so `CSharpLSP.py` sends the server the Roslyn-specific
+  `solution/open` / `project/open` notification once it initializes - a solution
+  gives the best cross-project results.
+- **Remove `.cs` from `ParserExtensions`.** 10x lists `.cs` there by default,
+  which makes its built-in parser fight the language server; drop `.cs` from that
+  setting (see the note under [Installation](#installation)). CSharpLSP logs a
+  `WARNING` at startup if it's still present.
