@@ -941,8 +941,6 @@ class LanguageServerClient:
         if self.setting("Diagnostics") == "false":
             return
         try:
-            if not N10X.Editor.IsBuildPanelOpen():
-                N10X.Editor.ShowBuildOutput()
             N10X.Editor.ClearBuildOutput()
         except AttributeError:
             return  # older 10x without the build-output API; nothing to do
