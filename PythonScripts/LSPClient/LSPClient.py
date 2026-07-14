@@ -499,6 +499,7 @@ class LanguageServerClient:
         # Directories the file-watch scan skips: the common set plus any the
         # language script supplied.
         self.ignore_dirs = _COMMON_IGNORE_DIRS | frozenset(ignore_dirs or ())
+        self.disabled = False
 
         self.conn = None
         self.initialized = False
@@ -574,7 +575,12 @@ class LanguageServerClient:
         """Whether this client is turned on. Opt-in: a server stays off (and has
         no impact at all - see register) until the user explicitly sets
         "<name>.Enabled: true" in Settings.10x_settings."""
-        return self.setting("Enabled", "false").strip().lower() == "true"
+        return not self.disabled and self.setting("Enabled", "false").strip().lower() == "true"
+
+    def disable(self):
+        """Disables LSP client e.g. if cannot run due to missing LSP"""
+        self.log(f"disabling, to restart execute {self.name}_Restart.")
+        self.disabled = True
 
     def ensure_started(self, root_hint):
         if self.conn and self.conn.alive:
@@ -595,6 +601,7 @@ class LanguageServerClient:
             self.log(f"could not launch server: '{argv[0]}' not found. "
                      f"Install it or set {self.name}.Command.")
             self.conn = None
+            self.disable()
             return False
         except Exception as e:
             self.log(f"failed to start server: {e}")
@@ -688,6 +695,7 @@ class LanguageServerClient:
         self.pending.clear()
         self.docs.clear()
         self.diagnostics.clear()
+        self.disabled = False
         # Watchers are per-connection (re-registered by the server on the next
         # initialize), so drop them with the server.
         self._watch_enabled = False

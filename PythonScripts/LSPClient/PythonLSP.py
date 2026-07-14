@@ -96,7 +96,6 @@ _client = LanguageServerClient(
     language_id="python",
     extensions=(".py", ".pyi", ".pyw"),
     default_command="pylsp",
-    fallback_argv=[sys.executable, "-m", "pylsp"],
     trigger_chars=".",
     line_comment="#",
     # Skip virtualenvs and tool caches in the file-watch scan.
