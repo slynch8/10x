@@ -94,6 +94,8 @@
 import os
 import sys
 import glob
+import hashlib
+import tempfile
 
 import N10X
 
@@ -145,6 +147,25 @@ def _open_roslyn_workspace(client):
                    "; open a folder that contains one")
 
 
+def _roslyn_working_dir(root):
+    """Where to launch the Roslyn server so it stops littering the project root.
+
+    The generic client normally runs the server with cwd = project root. Roslyn
+    writes relative scratch directories (notably a literal "{}" folder) into its
+    cwd, so with the default that debris lands in the user's source tree. We
+    redirect it to a per-project folder under the OS temp dir instead. The
+    server still finds the project fine - it is handed absolute paths via the
+    initialize rootUri and the solution/open / project/open notifications
+    (see _open_roslyn_workspace), not via cwd. Returns None when we have no
+    root, which makes the client fall back to its default (the root)."""
+    if not root:
+        return None
+    # Tag the temp dir with a hash of the root so different projects don't share
+    # a working dir (and their "{}" scratch can't collide).
+    tag = hashlib.sha1(os.path.abspath(root).encode("utf-8")).hexdigest()[:12]
+    return os.path.join(tempfile.gettempdir(), "10x-CSharpLSP", tag)
+
+
 _client = LanguageServerClient(
     name="CSharpLSP",
     language_id="csharp",
@@ -167,6 +188,13 @@ _client = LanguageServerClient(
     ignore_dirs=("bin", "obj", "packages", ".nuget"),
     # Roslyn needs to be told what to open once initialize completes.
     on_initialized=_open_roslyn_workspace,
+    # Roslyn writes relative scratch dirs (a "{}" folder) into its cwd; launch
+    # it under %TEMP% instead of the project root so it doesn't litter the tree.
+    server_cwd=_roslyn_working_dir,
+    # Roslyn never PUSHes diagnostics (no textDocument/publishDiagnostics); it
+    # only answers PULL requests (textDocument/diagnostic). Opt in so errors and
+    # warnings actually show up, the way push-based servers (ols) do by default.
+    pull_diagnostics=True,
 )
 
 

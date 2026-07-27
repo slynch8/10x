@@ -480,12 +480,28 @@ class LanguageServerClient:
                         (_COMMON_IGNORE_DIRS); keep language-specific entries
                         here in the per-language script rather than in this
                         module so new languages don't need to edit it.
+        server_cwd      Optional working directory for the server process.
+                        Default (None) launches it with cwd = project root.
+                        Pass a path, or a callable(root_path) -> path, to point
+                        it elsewhere - useful for servers that scribble relative
+                        scratch/log dirs (Roslyn writes a "{}" folder) into
+                        their cwd and would otherwise clutter the project root.
+        pull_diagnostics
+                        Opt in to LSP 3.17 "pull" diagnostics for this client.
+                        Most servers (ols, rust-analyzer, pylsp) PUSH diagnostics
+                        via textDocument/publishDiagnostics, which we always
+                        handle. A few - notably the Roslyn C# server - never push
+                        and instead expect the client to REQUEST diagnostics with
+                        textDocument/diagnostic. Set this True for those, and the
+                        client advertises the capability, pulls after open/edit,
+                        and re-pulls on workspace/diagnostic/refresh. Default
+                        False, so push-only servers are completely unaffected.
     """
 
     def __init__(self, name, language_id, extensions, default_command="",
                  fallback_argv=None, trigger_chars="", root_markers=None,
                  init_options=None, ignore_dirs=None, line_comment="",
-                 on_initialized=None):
+                 on_initialized=None, server_cwd=None, pull_diagnostics=False):
         self.name = name
         self.language_id = language_id
         self.extensions = tuple(extensions)
@@ -496,8 +512,24 @@ class LanguageServerClient:
         self.root_markers = tuple(root_markers) if root_markers else _DEFAULT_ROOT_MARKERS
         self.init_options = init_options or {}
         self.on_initialized = on_initialized
-        # Directories the file-watch scan skips: the common set plus any the
-        # language script supplied.
+        # Working directory for the server process. By default the server is
+        # launched with cwd = project root, which is what most servers expect.
+        # Some servers (notably Roslyn) write scratch/log directories into their
+        # cwd, littering the project root; such a client can pass server_cwd to
+        # redirect those relative writes elsewhere (e.g. under %TEMP%). May be a
+        # path string, or a callable(root_path) -> path evaluated at launch (so
+        # it can derive a per-project temp dir). None keeps the current
+        # behaviour (cwd = root). See ensure_started.
+        self.server_cwd = server_cwd
+        # Pull-diagnostics support (opt-in; see the constructor docstring). When
+        # on we request diagnostics rather than waiting for the server to push
+        # them - required for servers like Roslyn that never publishDiagnostics.
+        self.pull_diagnostics = bool(pull_diagnostics)
+        self._pull_active = False        # became live after initialize
+        self._diag_result_ids = {}       # uri -> last resultId (unchanged reports)
+        self._diag_pending = set()       # uris queued for a debounced pull
+        self._diag_pull_due = 0.0        # time.time() at which to flush the queue
+        self._diag_pull_delay = 0.35     # debounce so we don't pull every keystroke
         self.ignore_dirs = _COMMON_IGNORE_DIRS | frozenset(ignore_dirs or ())
         self.disabled = False
 
@@ -582,6 +614,28 @@ class LanguageServerClient:
         self.log(f"disabling, to restart execute {self.name}_Restart.")
         self.disabled = True
 
+    def _resolve_server_cwd(self):
+        """Working directory to launch the server in. Defaults to the project
+        root; server_cwd (a path or a callable(root_path) -> path) overrides it
+        so servers that write relative scratch/log dirs don't litter the root.
+        Falls back to the root if the override is empty or can't be created."""
+        target = self.server_cwd
+        if callable(target):
+            try:
+                target = target(self.root_path)
+            except Exception as e:
+                self.log(f"server_cwd callable failed ({e}); using project root")
+                target = None
+        if not target:
+            return self.root_path
+        try:
+            os.makedirs(target, exist_ok=True)
+        except OSError as e:
+            self.log(f"could not create working dir '{target}' ({e}); "
+                     f"using project root")
+            return self.root_path
+        return target
+
     def ensure_started(self, root_hint):
         if self.conn and self.conn.alive:
             return True
@@ -594,8 +648,9 @@ class LanguageServerClient:
         if not argv:
             self.log("no server command configured; set " + self.name + ".Command")
             return False
+        cwd = self._resolve_server_cwd()
         try:
-            self.conn = LSPConnection(argv, self.root_path,
+            self.conn = LSPConnection(argv, cwd,
                                       log=self.log, verbose=self._verbose)
         except FileNotFoundError:
             self.log(f"could not launch server: '{argv[0]}' not found. "
@@ -648,6 +703,22 @@ class LanguageServerClient:
             },
             "initializationOptions": self.init_options,
         }
+        if self.pull_diagnostics:
+            # Advertise LSP 3.17 pull diagnostics. dynamicRegistration is False:
+            # Roslyn ignores dynamic registration and just answers the pull
+            # requests, so we drive them ourselves from initialize onward
+            # (see _on_initialized / _pull_diagnostics_for).
+            params["capabilities"]["textDocument"]["diagnostic"] = {
+                "dynamicRegistration": False,
+                "relatedDocumentSupport": True,
+            }
+            # refreshSupport tells the server it may ask us to re-pull via
+            # workspace/diagnostic/refresh. Roslyn fires that once background
+            # analysis finishes - which is when the first real errors appear -
+            # so without this the errors often never show up.
+            params["capabilities"]["workspace"]["diagnostics"] = {
+                "refreshSupport": True,
+            }
         rid = self.conn.request("initialize", params)
         self.pending[rid] = self._on_initialized
 
@@ -665,6 +736,12 @@ class LanguageServerClient:
                      f"(0=none,1=full,2=incremental)")
         self.conn.notify("initialized", {})
         self.initialized = True
+        # Turn on pull diagnostics now the server is up. We don't gate on the
+        # server advertising a diagnosticProvider: Roslyn is known not to
+        # advertise one (dotnet/roslyn#76624) yet still answers the requests.
+        # A pull that comes back MethodNotFound flips this back off (see
+        # _on_pull_diagnostics) so we don't keep asking a server that can't.
+        self._pull_active = self.pull_diagnostics
         N10X.Editor.SetStatusBarText(f"{self.name}: ready")
         # Server-specific post-init step (e.g. the Roslyn C# server needs an
         # explicit "solution/open"). Run before opening documents so the server
@@ -696,6 +773,12 @@ class LanguageServerClient:
         self.docs.clear()
         self.diagnostics.clear()
         self.disabled = False
+        # Drop pull-diagnostics state with the connection; it re-arms on the
+        # next initialize.
+        self._pull_active = False
+        self._diag_result_ids = {}
+        self._diag_pending = set()
+        self._diag_pull_due = 0.0
         # Watchers are per-connection (re-registered by the server on the next
         # initialize), so drop them with the server.
         self._watch_enabled = False
@@ -722,6 +805,7 @@ class LanguageServerClient:
         self.conn.notify("textDocument/didOpen", {
             "textDocument": {"uri": uri, "languageId": self.language_id,
                              "version": 1, "text": text}})
+        self._schedule_diag_pull(uri)
 
     def did_close(self, uri):
         doc = self.docs.pop(uri, None)
@@ -763,6 +847,9 @@ class LanguageServerClient:
         self.conn.notify("textDocument/didChange", {
             "textDocument": {"uri": uri, "version": doc["version"]},
             "contentChanges": changes})
+        # Push-diagnostics servers re-publish on their own after this didChange;
+        # pull servers won't, so re-request for the edited doc (debounced).
+        self._schedule_diag_pull(uri)
 
     def did_save(self, filename):
         if not self.handles(filename) or not self._ready():
@@ -856,6 +943,16 @@ class LanguageServerClient:
         elif method == "client/unregisterCapability":
             self._apply_unregistrations((params or {}).get("unregisterations", []))
             self.conn.respond(rid, None)
+        elif method in ("workspace/diagnostic/refresh",
+                        "workspace/semanticTokens/refresh",
+                        "workspace/inlayHint/refresh",
+                        "workspace/codeLens/refresh"):
+            # Server signalled its results may be stale. Ack, and for diagnostics
+            # re-pull every open doc - this is how Roslyn tells us that project
+            # load / background analysis finished and errors are now available.
+            self.conn.respond(rid, None)
+            if method == "workspace/diagnostic/refresh":
+                self._pull_all_open()
         else:
             # workDoneProgress/create, etc. - just ack.
             self.conn.respond(rid, None)
@@ -954,6 +1051,78 @@ class LanguageServerClient:
         threshold. Missing severity is treated as Error (always shown)."""
         thr = self._min_severity()
         return [d for d in diags if d.get("severity", 1) <= thr]
+
+    # -- pull diagnostics (opt-in; see pull_diagnostics) -------------------
+
+    def _schedule_diag_pull(self, uri, delay=None):
+        """Queue a debounced textDocument/diagnostic request for uri. No-op
+        unless this client opted into pull diagnostics and the server is live."""
+        if not (self._pull_active and uri):
+            return
+        self._diag_pending.add(uri)
+        self._diag_pull_due = time.time() + (self._diag_pull_delay
+                                             if delay is None else delay)
+
+    def _flush_diag_pulls(self, now):
+        """Send any queued diagnostic pulls once the debounce window elapses."""
+        if not (self._pull_active and self._diag_pending and self._diag_pull_due):
+            return
+        if now < self._diag_pull_due:
+            return
+        self._diag_pull_due = 0.0
+        pending = self._diag_pending
+        self._diag_pending = set()
+        for uri in pending:
+            # Skip files that were closed while queued.
+            if uri in self.docs:
+                self._pull_diagnostics_for(uri)
+
+    def _pull_diagnostics_for(self, uri):
+        if not (self._pull_active and self._ready()):
+            return
+        params = {"textDocument": {"uri": uri}}
+        prev = self._diag_result_ids.get(uri)
+        if prev:
+            params["previousResultId"] = prev
+        rid = self.conn.request("textDocument/diagnostic", params)
+        self.pending[rid] = lambda result, error, u=uri: \
+            self._on_pull_diagnostics(u, result, error)
+
+    def _pull_all_open(self):
+        """Re-request diagnostics for every open document. Used when the server
+        asks us to refresh (workspace/diagnostic/refresh) - e.g. Roslyn fires
+        this once background analysis finishes, which is typically when the
+        first real errors become available."""
+        for uri in list(self.docs):
+            self._schedule_diag_pull(uri, delay=0.0)
+
+    def _on_pull_diagnostics(self, uri, result, error):
+        if error:
+            # -32601 = MethodNotFound: this server doesn't do pull diagnostics
+            # after all, so stop asking (and rely on push, if it pushes).
+            if isinstance(error, dict) and error.get("code") == -32601:
+                self._pull_active = False
+                self.log("server does not support pull diagnostics; disabling")
+            elif self._verbose():
+                self.log(f"diagnostic pull failed: {error}")
+            return
+        report = result or {}
+        self._apply_diag_report(uri, report)
+        # A full report may also carry diagnostics for related files (e.g. other
+        # files affected by this edit). Apply those too.
+        for ruri, rrep in (report.get("relatedDocuments") or {}).items():
+            self._apply_diag_report(ruri, rrep or {})
+
+    def _apply_diag_report(self, uri, report):
+        """Fold one document diagnostic report into our diagnostic state.
+        'full' replaces the file's diagnostics; 'unchanged' keeps them."""
+        rid = report.get("resultId")
+        if rid:
+            self._diag_result_ids[uri] = rid
+        if report.get("kind") == "unchanged":
+            return
+        self._on_diagnostics({"uri": uri,
+                              "diagnostics": report.get("items", []) or []})
 
     def _on_diagnostics(self, params):
         uri = params.get("uri")
@@ -1633,6 +1802,9 @@ class LanguageServerClient:
                 self._retry_due = 0.0
                 if self._ready():
                     action()
+            # Fire any debounced diagnostic pulls (pull-diagnostics clients only).
+            if self._ready():
+                self._flush_diag_pulls(now)
             # Completion fires as soon as it's due (not throttled).
             if (self._ready() and self._completion_due
                     and now >= self._completion_due):
