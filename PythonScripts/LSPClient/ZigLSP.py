@@ -91,7 +91,7 @@ _client = LanguageServerClient(
     # operator, so a single trigger char.
     trigger_chars=".",
     line_comment="//",
-    root_markers=("build.zig.zon", """build.zig", "main.zig"),
+    root_markers=("build.zig.zon", "build.zig", "main.zig"),
 )
 
 
