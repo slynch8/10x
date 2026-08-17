@@ -235,5 +235,5 @@ REGEX(([a-zA-Z_]+\w*)\s+(?:[a-zA-Z_]+\w*)\s*(?:=|\:|in))
 REGEX(([a-zA-Z_]+\w*)<.*?>)
 
 Language.Variable:
-REGEX(\b[a-zA-Z_]+\w*\b)
+REGEX((?<![a-zA-ZÀ-ÿ0-9_])[a-zA-ZÀ-ÿ_][a-zA-ZÀ-ÿ0-9_]*(?![a-zA-ZÀ-ÿ0-9_]))
 
