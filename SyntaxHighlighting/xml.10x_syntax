@@ -12,7 +12,7 @@
 #----------------------------------------------
 # settings
 
-Extensions:					.xml,.natvis,.10x,.vcxproj,.vcproj,.sln
+Extensions:					.xml,.natvis,.10x,.vcxproj,.csproj,.sln,.filters,.exe.config,.xsd
 
 BlockCommentStart:			<!--
 
@@ -22,7 +22,7 @@ BlockCommentEnd:			-->
 # colour rules
 
 Html.ElementName:
-REGEX(<(/?\s*[a-zA-Z0-9\-]+)[\s>])
+REGEX(<(/?\s*[a-zA-Z0-9\-\.]+)[\s>])
 
 Html.String:
 REGEX([a-zA-Z0-9]+\s*=\s*(".*?"))
