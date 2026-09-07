@@ -60,6 +60,7 @@
 #   Control K, Control U: ZigLSP_UncommentLine()   (10x default)
 #   (no binding needed)  ZigLSP_ListFunctions()   (functions in this file)
 #   (no binding needed)  ZigLSP_ListSymbols()     (project-wide symbol search)
+#   (no binding needed)  ZigLSP_RefreshSymbols()  (re-read the project's symbols)
 #   (no binding needed)  ZigLSP_ShowDiagnostics()
 #   (no binding needed)  ZigLSP_Restart()
 # ---------------------------------------------------------------------------
@@ -125,6 +126,10 @@ def ZigLSP_ListSymbols():
 
 def ZigLSP_ListFunctions():
     _client.list_functions()
+
+
+def ZigLSP_RefreshSymbols():
+    _client.refresh_symbols()
 
 
 def ZigLSP_ShowDiagnostics():

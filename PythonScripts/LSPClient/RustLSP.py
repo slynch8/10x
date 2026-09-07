@@ -66,6 +66,7 @@
 #   Control K, Control U: RustLSP_UncommentLine()   (10x default)
 #   (no binding needed)  RustLSP_ListFunctions()   (functions in this file)
 #   (no binding needed)  RustLSP_ListSymbols()     (project-wide symbol search)
+#   (no binding needed)  RustLSP_RefreshSymbols()  (re-read the project's symbols)
 #   (no binding needed)  RustLSP_ShowDiagnostics()
 #   (no binding needed)  RustLSP_Restart()
 #
@@ -141,6 +142,10 @@ def RustLSP_ListSymbols():
 
 def RustLSP_ListFunctions():
     _client.list_functions()
+
+
+def RustLSP_RefreshSymbols():
+    _client.refresh_symbols()
 
 
 def RustLSP_ShowDiagnostics():

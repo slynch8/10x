@@ -37,8 +37,9 @@
 #     <name>.InterceptCommands  "true"/"false" - hook 10x's built-in commands
 #                           (GoToSymbolDefinition, GoToSymbolDefinitionUnderMouse,
 #                           FindSymbolReferences, Autocomplete,
-#                           ShowFunctionArgsInfo, ShowSymbolInfo, and - when the
-#                           language defines a comment token - ToggleComment /
+#                           ShowFunctionArgsInfo, ShowSymbolInfo, FindFunction,
+#                           FindSymbol, and - when the language defines a
+#                           comment token - ToggleComment /
 #                           CommentLine / UncommentLine) so the default key
 #                           bindings drive the language server for files we
 #                           handle. Default true; set "false" to require the
@@ -70,12 +71,39 @@
 #                           Matches rank best-first: prefix beats word-boundary
 #                           (camelCase / "_") beats mid-word, and runs of
 #                           adjacent characters beat scattered ones.
+#     <name>.SymbolCache    "true"/"false" - keep a project-wide symbol cache
+#                           for the find-symbol panel (default true). The panel
+#                           filters the list it is given, so it has to be handed
+#                           every symbol in the project each time it opens -
+#                           which is why the list is cached - filled shortly
+#                           after the server starts, so the first FindSymbol
+#                           opens on a full list. Set "false" if you
+#                           would rather not pay the memory (a copy of every
+#                           symbol in the project) or the background refreshes:
+#                           the find-symbol feature then turns off with it
+#                           (FindSymbol, ListSymbols and RefreshSymbols all just
+#                           say so in the status bar) and only the explicit
+#                           "<name> symbols <text>" search remains.
+#     <name>.SymbolCacheSeconds  How long that cache stays fresh, in seconds
+#                           (default 60): once older it is still served
+#                           instantly, then refreshed in the background (a save
+#                           refreshes it too). 0 keeps find-symbol working but
+#                           holds nothing between opens - every open then waits
+#                           on the server, and RefreshSymbols has nothing to
+#                           rebuild. Ignored when SymbolCache is "false".
 #     <name>.LogVerbose     "true"/"false" - log server traffic to the output
 #                           panel (default false)
 #
 # Threading: a background thread only reads/parses the server's stdout. Every
 # N10X.Editor.* call happens on the main thread inside the update loop, so the
-# editor is never blocked waiting on the server.
+# editor is never blocked waiting on the server. Anything reached from pump() is
+# therefore on the editor's critical path and must stay cheap - responses over
+# MAX_RESPONSE_BYTES are dropped unparsed for exactly this reason, and a reply
+# that needs real work done to it (workspace/symbol, which can run to six
+# figures of symbols) registers a transform that runs on the reader thread, so
+# the main thread only ever receives a finished result. Adding a feature that
+# processes whole-project data means doing the same: the editor must never
+# wait.
 #
 # Coordinates: LSP positions are 0-based (line, character), matching 10x's
 # (column, line) cursor coordinates. Characters are treated as column indices,
@@ -84,6 +112,8 @@
 
 import os
 import re
+import gc
+import functools
 import glob
 import html
 import json
@@ -96,6 +126,15 @@ import subprocess
 import N10X
 
 _NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+# Biggest response we will parse. Parsing costs several times the wire size in
+# Python objects and seconds of main-thread CPU, so a server that answers an
+# empty workspace/symbol query with a whole huge project would stall the editor
+# - anything past this is drained and dropped instead (see _drain_oversize).
+# Well clear of normal traffic: a large completion or diagnostics reply is ~1 MB.
+MAX_RESPONSE_BYTES = 32 * 1024 * 1024
+# Our own JSON-RPC error code for that drop, so a handler can tell it apart from
+# anything the server said.
+ERR_RESPONSE_TOO_LARGE = -32001
 _SEVERITY = {1: "Error", 2: "Warning", 3: "Info", 4: "Hint"}
 # LSP severity -> MSVC compiler keyword. 10x parses build output in the Visual
 # Studio "file(line,col): <keyword> CODE: message" style; error/warning/note are
@@ -145,6 +184,13 @@ def path_to_uri(path):
     return "file://" + "".join(safe)
 
 
+# Memoized: this is a per-character Python loop and the project-symbol path
+# calls it once per symbol over a file set that repeats heavily, where it was
+# 91% of the work. Bounded so a long session can't grow it without limit, but
+# sized above the file count of any dump that can reach us (MAX_RESPONSE_BYTES
+# caps a symbol reply at ~100k symbols): an LRU smaller than the working set
+# cycles without ever hitting.
+@functools.lru_cache(maxsize=65536)
 def uri_to_path(uri):
     if uri.startswith("file://"):
         uri = uri[len("file://"):]
@@ -164,6 +210,17 @@ def uri_to_path(uri):
     if len(path) >= 3 and path[0] == "/" and path[2] == ":":
         path = path[1:]  # /C:/... -> C:/...
     return os.path.normpath(path)
+
+
+def path_within(directory, path):
+    """Whether `path` sits inside `directory`. Case-insensitive on Windows, and
+    False rather than an exception when the two are on different drives."""
+    try:
+        d = os.path.normcase(os.path.abspath(directory))
+        p = os.path.normcase(os.path.abspath(path))
+        return d == p or os.path.commonpath([d, p]) == d
+    except (ValueError, TypeError, OSError):
+        return False
 
 
 def find_project_root(file_path, markers):
@@ -388,7 +445,9 @@ class LSPConnection:
 
     Reading happens on a background thread (parsed messages are pushed onto
     self.incoming). Writing happens from the main thread. All handling of the
-    parsed messages is done by the owner on the main thread.
+    parsed messages is done by the owner on the main thread - so a request whose
+    reply needs real work done to it registers a transform (see request()),
+    which runs on the reader thread and hands the main thread a finished result.
     """
 
     def __init__(self, argv, cwd, log=None, verbose=None, env=None):
@@ -398,6 +457,10 @@ class LSPConnection:
         self.outgoing = queue.Queue()
         self._next_id = 1
         self.alive = False
+        # request id -> callable(result) run on the reader thread. Touched from
+        # both threads, hence the lock.
+        self._transforms = {}
+        self._transform_lock = threading.Lock()
 
         # env overrides are merged onto the editor's own environment rather than
         # replacing it - the server still needs PATH, HOME, etc. to run.
@@ -456,13 +519,43 @@ class LSPConnection:
                 self._log(f"write failed: {e}")
                 break
 
-    def request(self, method, params):
-        """Send a request, returning its id so the caller can match a reply."""
+    def request(self, method, params, transform=None):
+        """Send a request, returning its id so the caller can match a reply.
+
+        transform, if given, is applied to the result on the READER thread
+        before the reply is queued, so heavy post-processing never lands on the
+        editor's main thread. It must be pure and touch no N10X.Editor API.
+        Registered before the write so a fast reply can't beat it."""
         rid = self._next_id
         self._next_id += 1
+        if transform is not None:
+            with self._transform_lock:
+                self._transforms[rid] = transform
         self._write({"jsonrpc": "2.0", "id": rid, "method": method,
                      "params": params})
         return rid
+
+    def _take_transform(self, rid):
+        with self._transform_lock:
+            return self._transforms.pop(rid, None)
+
+    def _apply_transform(self, msg):
+        """Reader thread: turn a reply's raw result into whatever the caller
+        actually wants, before the main thread ever sees it. A transform that
+        raises becomes an error reply rather than passing raw data through -
+        the handler is written against the transformed shape."""
+        rid = msg.get("id")
+        if rid is None or "result" not in msg or "method" in msg:
+            return msg
+        fn = self._take_transform(rid)
+        if fn is None:
+            return msg
+        try:
+            msg["result"] = fn(msg["result"])
+        except Exception as e:
+            msg.pop("result", None)
+            msg["error"] = {"code": -32002, "message": f"post-processing failed: {e}"}
+        return msg
 
     def notify(self, method, params):
         self._write({"jsonrpc": "2.0", "method": method, "params": params})
@@ -495,21 +588,55 @@ class LSPConnection:
                 length = int(headers.get(b"content-length", b"0"))
                 if length <= 0:
                     continue
-                body = b""
-                while len(body) < length:
-                    chunk = stream.read(length - len(body))
+                if length > MAX_RESPONSE_BYTES:
+                    self._drain_oversize(stream, length)
+                    continue
+                # Chunks are joined rather than accumulated with +=, which
+                # recopies the whole buffer on every read.
+                parts, got = [], 0
+                while got < length:
+                    chunk = stream.read(length - got)
                     if not chunk:
                         raise EOFError()
-                    body += chunk
+                    parts.append(chunk)
+                    got += len(chunk)
                 try:
-                    self.incoming.put(json.loads(body.decode("utf-8")))
+                    msg = json.loads(b"".join(parts).decode("utf-8"))
                 except json.JSONDecodeError:
-                    pass
+                    continue
+                self.incoming.put(self._apply_transform(msg))
         except (EOFError, OSError, ValueError):
             pass
         finally:
             self.alive = False
             self.incoming.put({"__lsp_internal__": "exited"})
+
+    def _drain_oversize(self, stream, length):
+        """Throw away a response too big to parse, without ever holding it.
+
+        Parsing one costs several times its wire size in Python objects and
+        seconds of CPU, which is how a huge project turns a symbol dump into a
+        stalled editor. The bytes still have to come off the pipe or the stream
+        desyncs, so read past them in fixed blocks and keep only enough of the
+        head to work out which request died - the waiting handler has to be
+        failed rather than left pending forever."""
+        head, got = b"", 0
+        while got < length:
+            chunk = stream.read(min(1 << 20, length - got))
+            if not chunk:
+                raise EOFError()
+            if len(head) < 1024:
+                head += chunk[:1024 - len(head)]
+            got += len(chunk)
+        # A message carrying "method" is the server calling us, not answering
+        # us, so its id belongs to the server's numbering, not our pending map.
+        rid = None
+        if b'"method"' not in head:
+            m = re.search(br'"id"\s*:\s*(\d+)', head)
+            if m:
+                rid = int(m.group(1))
+                self._take_transform(rid)
+        self.incoming.put({"__lsp_oversize__": {"id": rid, "length": length}})
 
     def _stderr_loop(self):
         # Runs on a background thread, so it must not call any N10X.Editor API
@@ -681,6 +808,21 @@ class LanguageServerClient:
         self._watch_mtimes = {}          # path -> mtime, baseline for diffing
         self._last_watch_scan = 0.0
         self._watch_interval = 2.0       # seconds between workspace mtime scans
+        # Project-wide symbol cache behind the find-symbol panel. The panel
+        # filters the list it is handed, so it wants every symbol each time it
+        # opens - one workspace/symbol round trip per open would be far too slow
+        # on a big project. See list_symbols.
+        self._symbol_cache = []          # (name, path, line, char, length)
+        self._symbol_cache_time = 0.0    # time.time() the cache was last filled
+        self._symbol_cache_inflight = False  # a background refresh is in flight
+        # Whether an empty workspace/symbol query dumps the workspace on this
+        # server: None until we've tried, False for servers that answer nothing
+        # (Roslyn) so we go straight to searching for the word under the cursor.
+        self._symbol_dump = None
+        self._symbol_dump_tries = 0      # empty dump replies seen so far
+        self._symbol_warm_due = 0.0      # time.time() to (re)try filling it
+        self._registered = False         # register() wired the editor hooks up
+        self._hooks = None               # (add, remove, handler) for those hooks
 
     # -- logging / settings ------------------------------------------------
 
@@ -787,13 +929,44 @@ class LanguageServerClient:
                      ", ".join(f"{k}={v}" for k, v in sorted(env.items())))
         return env
 
+    @staticmethod
+    def _editor_workspace_root():
+        """The directory of the workspace 10x has open, or "" if none.
+
+        GetWorkspaceFilename gives the workspace/solution file the user actually
+        opened (10x's own ".10x", or a ".sln"), so its directory is the project
+        being worked on."""
+        try:
+            ws = (N10X.Editor.GetWorkspaceFilename() or "").strip()
+        except Exception:
+            return ""
+        if not ws:
+            return ""
+        d = os.path.dirname(os.path.abspath(ws))
+        return d if os.path.isdir(d) else ""
+
+    def _resolve_root(self, root_hint):
+        """Where to root the language server.
+
+        10x's own workspace wins whenever the file we're starting for lives
+        inside it. Walking up from that file instead stops at the innermost
+        marker, which roots a nested crate or .csproj at itself and hides the
+        rest of the project from workspace/symbol - and since the root is fixed
+        at startup, whichever file you happened to open first would decide what
+        find-symbol can ever see. A file outside the workspace (a dependency's
+        source, say) still falls back to the walk."""
+        ws = self._editor_workspace_root()
+        if ws and path_within(ws, root_hint):
+            return ws
+        return find_project_root(root_hint, self.root_markers)
+
     def ensure_started(self, root_hint):
         if self.conn and self.conn.alive:
             return True
         if not self.is_enabled():
             return False
 
-        self.root_path = find_project_root(root_hint, self.root_markers)
+        self.root_path = self._resolve_root(root_hint)
         self.root_uri = path_to_uri(self.root_path)
         argv = self._server_argv()
         if not argv:
@@ -916,6 +1089,9 @@ class LanguageServerClient:
         # _on_pull_diagnostics) so we don't keep asking a server that can't.
         self._pull_active = self.pull_diagnostics
         N10X.Editor.SetStatusBarText(f"{self.name}: ready")
+        # Get the project's symbols on their way now, so the first FindSymbol
+        # opens on a full list instead of triggering the fetch itself.
+        self._warm_symbol_cache()
         # Server-specific post-init step (e.g. the Roslyn C# server needs an
         # explicit "solution/open"). Run before opening documents so the server
         # already knows the workspace when the didOpen notifications arrive.
@@ -960,6 +1136,13 @@ class LanguageServerClient:
         # initialize), so drop them with the server.
         self._watch_enabled = False
         self._watch_mtimes = {}
+        # The symbol cache describes the workspace as that server saw it.
+        self._symbol_cache = []
+        self._symbol_cache_time = 0.0
+        self._symbol_cache_inflight = False
+        self._symbol_dump = None
+        self._symbol_dump_tries = 0
+        self._symbol_warm_due = 0.0
 
     # -- document sync -----------------------------------------------------
 
@@ -1066,6 +1249,13 @@ class LanguageServerClient:
         if uri in self.docs:
             self.conn.notify("textDocument/didSave",
                              {"textDocument": {"uri": uri}})
+        # A save is when the project's symbols actually change, so top the
+        # find-symbol cache up in the background. Only when we already have one:
+        # an empty cache means either nobody has opened the panel yet or this
+        # server doesn't answer empty queries, and neither wants a request here.
+        if (self._symbol_cache_enabled() and self._symbol_cache
+                and self._symbol_cache_stale()):
+            self._refresh_symbol_cache()
 
     # -- request helpers ---------------------------------------------------
 
@@ -1085,11 +1275,13 @@ class LanguageServerClient:
         return {"textDocument": {"uri": path_to_uri(filename)},
                 "position": {"line": y, "character": x}}
 
-    def _send_request(self, method, params, handler):
+    def _send_request(self, method, params, handler, transform=None):
+        """transform runs on the reader thread before `handler` is called on the
+        main thread with its output - see LSPConnection.request."""
         if not self._ready():
             self.log("server not ready")
             return None
-        rid = self.conn.request(method, params)
+        rid = self.conn.request(method, params, transform=transform)
         self.pending[rid] = handler
         return rid
 
@@ -1125,6 +1317,20 @@ class LanguageServerClient:
         if "__lsp_stderr__" in msg:
             if self._verbose():
                 self.log("stderr: " + msg["__lsp_stderr__"])
+            return
+
+        if "__lsp_oversize__" in msg:
+            info = msg["__lsp_oversize__"]
+            mb = info["length"] / (1024.0 * 1024.0)
+            self.log(f"dropped a {mb:.0f} MB response unparsed - over the "
+                     f"{MAX_RESPONSE_BYTES // (1024 * 1024)} MB cap "
+                     f"(MAX_RESPONSE_BYTES); parsing it would have stalled the "
+                     f"editor")
+            handler = (self.pending.pop(info["id"], None)
+                       if info.get("id") is not None else None)
+            if handler:
+                handler(None, {"code": ERR_RESPONSE_TOO_LARGE,
+                               "message": f"response too large ({mb:.0f} MB)"})
             return
 
         if "id" in msg and ("result" in msg or "error" in msg):
@@ -1968,6 +2174,59 @@ class LanguageServerClient:
         except Exception as e:
             self.log(f"ShowSymbolReferences failed: {e}")
 
+    def _present_functions(self, items):
+        """Hand (name, path, line, char, length) tuples for the CURRENT file to
+        10x's find-function panel, which filters them itself. Falls back to the
+        symbol-references list on 10x builds without the panel."""
+        if not items:
+            N10X.Editor.SetStatusBarText(f"{self.name}: no functions found")
+            return
+        show = getattr(N10X.Editor, "ShowFindFunctionPanel", None)
+        if show:
+            try:
+                # Uncomment for debugging
+                #self.log(f"find-function panel: {len(items)} function(s): "
+                #         f"{self._preview(items)}")
+                show([(name, line, char) for name, _p, line, char, _l in items])
+                return
+            except Exception as e:
+                self.log(f"ShowFindFunctionPanel failed: {e}")
+        self._present_locations([it[1:] for it in items], "function")
+
+    def _present_symbols(self, items, noun="symbol"):
+        """Hand (name, path, line, char, length) tuples to 10x's find-symbol
+        panel, which filters them itself. Falls back as above."""
+        if not items:
+            N10X.Editor.SetStatusBarText(f"{self.name}: no {noun}s found")
+            return
+        show = getattr(N10X.Editor, "ShowFindSymbolPanel", None)
+        if show:
+            try:
+                # Uncomment for debugging
+                #self.log(f"find-symbol panel: {len(items)} {noun}(s): "
+                #         f"{self._preview(items, with_file=True)}")
+                show([(name, path, line, char)
+                      for name, path, line, char, _l in items])
+                return
+            except Exception as e:
+                self.log(f"ShowFindSymbolPanel failed: {e}")
+        self._present_locations([it[1:] for it in items], noun)
+
+    @staticmethod
+    def _preview(items, limit=8, with_file=False):
+        """The first few rows as "name:line" for the panel log line."""
+        rows = ", ".join(
+            f"{name}:{os.path.basename(path) + ':' if with_file else ''}{line + 1}"
+            for name, path, line, _c, _l in items[:limit])
+        return rows + (", ..." if len(items) > limit else "")
+
+    @staticmethod
+    def _qualified_name(name, container):
+        """The panels show one string per row and match against all of it, so
+        the enclosing class/namespace goes in the name: "Update (Player)"."""
+        name = name or "?"
+        return f"{name} ({container})" if container else name
+
     # LSP SymbolKind values that are "functions" for list_symbols: Method (6),
     # Constructor (9), Function (12). Other kinds (classes, fields, ...) are the
     # symbols a function lives in, not functions themselves, so we skip them.
@@ -1984,7 +2243,7 @@ class LanguageServerClient:
         default_path = uri_to_path(path_to_uri(filename))
         seen, items = set(), []
 
-        def add(kind, path, rng):
+        def add(name, kind, path, rng, container=""):
             if kind not in self._FUNCTION_SYMBOL_KINDS or not rng:
                 return
             start = rng.get("start", {})
@@ -1997,63 +2256,58 @@ class LanguageServerClient:
             end = rng.get("end", {})
             length = (end.get("character", index) - index
                       if end.get("line", line) == line else 0)
-            items.append((path, line, index, max(length, 0)))
+            items.append((self._qualified_name(name, container), path, line,
+                          index, max(length, 0)))
 
-        def walk(nodes):
+        def walk(nodes, container=""):
             for node in nodes:
+                name = node.get("name") or ""
                 if "location" in node:            # SymbolInformation
                     loc = node.get("location", {})
-                    add(node.get("kind"), uri_to_path(loc.get("uri", "")),
-                        loc.get("range"))
+                    add(name, node.get("kind"), uri_to_path(loc.get("uri", "")),
+                        loc.get("range"), node.get("containerName") or "")
                 else:                             # DocumentSymbol
                     # selectionRange points at the name; nicer to land on than
                     # the whole body range. Fall back to range if it's missing.
-                    add(node.get("kind"), default_path,
-                        node.get("selectionRange") or node.get("range"))
-                    walk(node.get("children") or [])
+                    add(name, node.get("kind"), default_path,
+                        node.get("selectionRange") or node.get("range"),
+                        container)
+                    # Methods are qualified by the class/namespace they're in.
+                    walk(node.get("children") or [], name)
 
         walk(result)
-        items.sort(key=lambda it: (it[0], it[1], it[2]))
-        self._present_locations(items, "function")
+        # File order: the find-function panel lists them as it is given them,
+        # and reading a file top to bottom is how you look for a function in it.
+        items.sort(key=lambda it: (it[1], it[2], it[3]))
+        # The panel has no filename column - every row jumps within the current
+        # file - so a server that answered with symbols from elsewhere (rare,
+        # SymbolInformation only) goes to the old list instead.
+        if all(it[1] == default_path for it in items):
+            self._present_functions(items)
+        else:
+            self._present_symbols(items, "function")
 
-    def _on_workspace_symbols(self, result, error, query=""):
-        if error:
-            # -32601 is MethodNotFound: the server doesn't implement
-            # workspace/symbol (pylsp, for one, despite answering
-            # textDocument/documentSymbol quite happily).
-            if (error or {}).get("code") == -32601:
-                self._no_workspace_symbols()
-            else:
-                self.log(f"workspace/symbol failed: {error}")
-                N10X.Editor.SetStatusBarText(
-                    f"{self.name}: symbol search failed - see output panel")
-            return
-        if not result:
-            # workspace/symbol is a search, not a dump. Servers differ on what an
-            # empty query means: rust-analyzer answers with the workspace's types,
-            # Roslyn returns nothing at all. Say which query came back empty so
-            # it's obvious a search term is needed.
-            if query:
-                N10X.Editor.SetStatusBarText(
-                    f"{self.name}: no symbols matching '{query}'")
-            else:
-                N10X.Editor.SetStatusBarText(
-                    f"{self.name}: this server needs a search term - put the "
-                    f"cursor on a word, or type '{self.name} symbols <text>'")
-            return
-        # workspace/symbol returns a flat SymbolInformation[] (or, in LSP 3.17,
-        # WorkspaceSymbol[]); both carry a "location". A WorkspaceSymbol may give
-        # only {"uri": ...} with no range (it expects a workspaceSymbol/resolve
-        # round-trip) - we just land at the top of that file in that case. Every
-        # symbol kind is listed here (this is the project-wide index), unlike
-        # list_functions which is functions only.
+    def _symbol_items(self, result):
+        """A workspace/symbol result as sorted (name, path, line, char, length)
+        tuples.
+
+        Runs on the READER thread as a request transform, because on a large
+        project this is hundreds of milliseconds of work and the editor must
+        never wait for it. Keep it pure: no self state, no N10X.Editor calls.
+
+        It returns a flat SymbolInformation[] (or, in LSP 3.17, a
+        WorkspaceSymbol[]); both carry a "location". A WorkspaceSymbol may give
+        only {"uri": ...} with no range (it expects a workspaceSymbol/resolve
+        round-trip) - we just land at the top of that file in that case. Every
+        symbol kind is kept here (this is the project-wide index), unlike
+        list_functions which is functions only."""
         seen, items = set(), []
-        for sym in result:
-            loc = sym.get("location", {})
+        for sym in result or []:
+            loc = sym.get("location", {}) or {}
             path = uri_to_path(loc.get("uri", ""))
             if not path:
                 continue
-            rng = loc.get("range", {})
+            rng = loc.get("range", {}) or {}
             start = rng.get("start", {})
             line = start.get("line", 0)
             index = start.get("character", 0)
@@ -2064,9 +2318,219 @@ class LanguageServerClient:
             end = rng.get("end", {})
             length = (end.get("character", index) - index
                       if end.get("line", line) == line else 0)
-            items.append((path, line, index, max(length, 0)))
-        items.sort(key=lambda it: (it[0], it[1], it[2]))
-        self._present_locations(items, "symbol")
+            items.append((self._qualified_name(sym.get("name"),
+                                               sym.get("containerName") or ""),
+                          path, line, index, max(length, 0)))
+        items.sort(key=lambda it: (it[0].lower(), it[1], it[2]))
+        return items
+
+    def _on_workspace_symbols(self, result, error, query="", dump=False):
+        """dump marks the reply to the empty whole-workspace query - the one
+        that fills the find-symbol panel - as opposed to a search for a term."""
+        if error:
+            # -32601 is MethodNotFound: the server doesn't implement
+            # workspace/symbol (pylsp, for one, despite answering
+            # textDocument/documentSymbol quite happily).
+            self._note_dump_too_large(error)
+            if (error or {}).get("code") == -32601:
+                self._no_workspace_symbols()
+            else:
+                self.log(f"workspace/symbol failed: {error}")
+                N10X.Editor.SetStatusBarText(
+                    f"{self.name}: symbol search failed - see output panel")
+            return
+        # Already tuples: _symbol_items ran on the reader thread.
+        items = result or []
+        if dump:
+            # Worth knowing whether or not we're keeping the list: with the cache
+            # off it is what saves a wasted round trip on every single open.
+            if items:
+                self._note_dump_filled(items)
+            else:
+                # Don't conclude anything yet - the server may still be indexing.
+                self._note_empty_dump()
+        if not items:
+            # workspace/symbol is a search, not a dump. Servers differ on what an
+            # empty query means: rust-analyzer answers with the workspace's types,
+            # Roslyn returns nothing at all. When the whole-workspace query comes
+            # back empty, search for what the cursor is on instead - that is all
+            # such a server can answer.
+            if dump:
+                term = (self._selected_text() or self._word_at_cursor()).strip()
+                if term:
+                    self._send_request(
+                        "workspace/symbol", {"query": term},
+                        lambda r, e: self._on_workspace_symbols(r, e, term),
+                        transform=self._symbol_items)
+                    return
+            if query:
+                N10X.Editor.SetStatusBarText(
+                    f"{self.name}: no symbols matching '{query}'")
+            else:
+                N10X.Editor.SetStatusBarText(
+                    f"{self.name}: this server needs a search term - put the "
+                    f"cursor on a word, or type '{self.name} symbols <text>'")
+            return
+        self._present_symbols(items)
+
+    def _on_symbol_cache(self, result, error):
+        """Reply to a background refresh: fill the cache, show nothing. A failed
+        or empty refresh leaves the previous list in place - better than nothing
+        the next time the panel opens."""
+        self._symbol_cache_inflight = False
+        if error:
+            self._note_dump_too_large(error)
+            return
+        if not self._symbol_cache_enabled():
+            return
+        items = result or []
+        if not items:
+            self._note_empty_dump()
+            return
+        self._note_dump_filled(items)
+
+    def _note_dump_too_large(self, error):
+        """Give up on whole-workspace dumps when one came back too big to parse.
+
+        _symbol_dump is the "this server won't hand over the workspace" flag, and
+        a project too big to parse is the same situation from here: the panel
+        falls back to searching for a term, which is bounded."""
+        if (error or {}).get("code") != ERR_RESPONSE_TOO_LARGE:
+            return
+        self._symbol_dump = False
+        self._symbol_cache = []
+        self._symbol_cache_time = 0.0
+        self.log("this project's symbol dump is too big to hold, so find-symbol "
+                 "will search for a term instead of listing everything. Use "
+                 f"'{self.name} symbols <text>', or set {self.name}.SymbolCache: "
+                 f"false to turn the feature off.")
+        N10X.Editor.SetStatusBarText(
+            f"{self.name}: project too large to list every symbol - use "
+            f"'{self.name} symbols <text>'")
+
+    def _symbol_cache_enabled(self):
+        """"<name>.SymbolCache" (default true): whether we keep a project-wide
+        symbol list for the find-symbol panel at all.
+
+        Turning it off is the way to opt out of the whole feature - the list is
+        a copy of every symbol in the project, refreshed in the background, and
+        on a big project that is real memory and real server work. The panel
+        cannot work without it (it filters the list it is handed), so
+        find-symbol goes with it - we still claim the FindSymbol command and
+        say why, rather than let 10x fall back to its own panel, which has
+        nothing of value for a file the server handles. The explicit
+        "<name> symbols <text>" search still works, being a one-shot server
+        query that keeps nothing.
+
+        Drops whatever is cached when it sees the setting turned off, so the
+        memory goes back without waiting for a restart."""
+        on = self.setting("SymbolCache", "true").strip().lower() != "false"
+        if not on and self._symbol_cache:
+            self._symbol_cache = []
+            self._symbol_cache_time = 0.0
+        return on
+
+    def _symbol_cache_seconds(self):
+        """"<name>.SymbolCacheSeconds": how long the find-symbol panel's cached
+        project symbols count as fresh. 0 keeps find-symbol working but holds
+        nothing between opens (every open asks the server and waits for the
+        reply). Only meaningful while _symbol_cache_enabled."""
+        try:
+            return max(0, int(self.setting("SymbolCacheSeconds", "60")))
+        except (TypeError, ValueError):
+            return 60
+
+    # An empty answer to the whole-workspace query is ambiguous: the server may
+    # have no dump to give (Roslyn), or may simply not have finished indexing -
+    # which is the usual case in the first seconds after startup. Believing the
+    # first one strands find-symbol in cursor-word fallback for the rest of the
+    # session, so retry on this backoff before concluding anything.
+    _SYMBOL_DUMP_RETRIES = (2.0, 5.0, 12.0, 30.0)
+
+    # After a dump lands, how long to wait before checking whether the server
+    # has since indexed more. Servers answer as soon as they have something,
+    # which early in a session is often only part of the project.
+    _SYMBOL_GROWTH_RECHECK = 10.0
+
+    def _note_dump_filled(self, items):
+        """Record a successful whole-workspace dump.
+
+        While the symbol count is still climbing, line up another pass: the
+        server keeps indexing after it first answers, and without this an early
+        partial list sits there until something else happens to refresh it."""
+        grew = len(items) > len(self._symbol_cache)
+        self._symbol_dump = True
+        self._symbol_dump_tries = 0
+        if not self._symbol_cache_seconds():
+            return                       # not keeping it; nothing to top up
+        self._symbol_cache = items
+        self._symbol_cache_time = time.time()
+        if grew and self._symbol_cache_enabled():
+            self._symbol_warm_due = time.time() + self._SYMBOL_GROWTH_RECHECK
+        if self._verbose():
+            self.log(f"cached {len(items)} project symbol(s)"
+                     f"{' - still growing, will re-check' if grew else ''}")
+
+    def _note_empty_dump(self):
+        """Record an empty whole-workspace reply; schedule another go, or give
+        up once the backoff is exhausted."""
+        self._symbol_dump_tries += 1
+        if self._symbol_dump_tries > len(self._SYMBOL_DUMP_RETRIES):
+            self._symbol_dump = False    # settled: this server won't dump
+            return
+        # Only worth a timed retry if we'd keep the result; with no cache the
+        # next panel open re-asks anyway, which is what advances the count.
+        if not self._symbol_cache_enabled() or not self._symbol_cache_seconds():
+            return
+        delay = self._SYMBOL_DUMP_RETRIES[self._symbol_dump_tries - 1]
+        self._symbol_warm_due = time.time() + delay
+        if self._verbose():
+            self.log(f"empty workspace dump (try {self._symbol_dump_tries}); "
+                     f"retrying in {delay:.0f}s")
+
+    def _warm_symbol_cache(self, delay=1.5):
+        """Fill the find-symbol cache in the background, without being asked.
+
+        The panel is only useful if it already knows the project, so the first
+        FindSymbol should not be the thing that goes and fetches it - nor should
+        the user have to run RefreshSymbols by hand."""
+        if not self._symbol_cache_enabled() or not self._symbol_cache_seconds():
+            return
+        self._symbol_warm_due = time.time() + delay
+
+    def _symbol_cache_stale(self):
+        """Whether the cached symbols are old enough to be worth re-fetching.
+        Also the save throttle: a save only refreshes once the list is stale, so
+        a save-heavy edit loop can't re-dump the workspace on every keystroke."""
+        ttl = self._symbol_cache_seconds()
+        return bool(ttl) and time.time() - self._symbol_cache_time >= ttl
+
+    def _refresh_symbol_cache(self):
+        """Re-ask the server for the whole workspace, off to one side: whatever
+        panel is on screen keeps the list it was handed, and the reply only
+        updates the cache for the next open."""
+        if self._symbol_cache_inflight or not self._ready():
+            return
+        if not self._symbol_cache_enabled() or not self._symbol_cache_seconds():
+            # A zero TTL keeps nothing between opens, so there is no list here
+            # for a background refresh to fill.
+            return
+        if self._symbol_dump is False:
+            return
+        if self.server_caps and not self.server_caps.get("workspaceSymbolProvider"):
+            return
+        self._symbol_cache_inflight = True
+        if self._send_request("workspace/symbol", {"query": ""},
+                              self._on_symbol_cache,
+                              transform=self._symbol_items) is None:
+            self._symbol_cache_inflight = False
+
+    def _symbol_cache_off(self):
+        """Say why the find-symbol panel has nothing, when the user turned the
+        cache off. Points at the one symbol search that still works without it."""
+        N10X.Editor.SetStatusBarText(
+            f"{self.name}: find-symbol is off ({self.name}.SymbolCache: false) - "
+            f"type '{self.name} symbols <text>' to search the server")
 
     def _no_workspace_symbols(self):
         """Tell the user this server can't do a project-wide symbol search."""
@@ -2131,7 +2595,26 @@ class LanguageServerClient:
         self.log(f"  workspaceSymbol : "
                  f"{bool(self.server_caps.get('workspaceSymbolProvider'))} "
                  f"(ListSymbols)")
-        self.log(f"  root            : {self.root_path}")
+        if not self._symbol_cache_enabled():
+            self.log(f"  symbol cache    : off "
+                     f"(setting: {self.name}.SymbolCache: false; find-symbol "
+                     f"disabled, '{self.name} symbols <text>' still works)")
+        else:
+            ttl = self._symbol_cache_seconds()
+            age = (int(time.time() - self._symbol_cache_time)
+                   if self._symbol_cache else -1)
+            self.log(f"  symbol cache    : "
+                     f"{len(self._symbol_cache)} symbol(s)"
+                     f"{f', {age}s old' if age >= 0 else ''} "
+                     f"(ttl {ttl}s{', off' if not ttl else ''}"
+                     f"{', server has no workspace dump' if self._symbol_dump is False else ''}"
+                     f"{f', {self._symbol_dump_tries} empty repl(y/ies), retrying' if self._symbol_dump is None and self._symbol_dump_tries else ''}"
+                     f"{', warm-up pending' if self._symbol_warm_due else ''})")
+        ws = self._editor_workspace_root()
+        from_ws = bool(ws) and (os.path.normcase(ws)
+                                == os.path.normcase(self.root_path or ""))
+        self.log(f"  root            : {self.root_path} "
+                 f"({'10x workspace' if from_ws else 'walked up from a file'})")
         self.log(f"  current file    : {fn}")
         self.log(f"  handled         : {self.handles(fn)}")
         self.log(f"  open documents  : {len(self.docs)}")
@@ -2185,8 +2668,9 @@ class LanguageServerClient:
         self._send_request("textDocument/references", params, self._on_references)
 
     def list_functions(self):
-        """List the functions/methods in the CURRENT file in 10x's navigable
-        symbol-references list (via textDocument/documentSymbol)."""
+        """List the functions/methods in the CURRENT file in 10x's find-function
+        panel (via textDocument/documentSymbol). The panel does its own
+        filtering, so the whole file's list is handed over each time."""
         filename = N10X.Editor.GetCurrentFilename()
         if not self.handles(filename):
             return
@@ -2201,15 +2685,26 @@ class LanguageServerClient:
             lambda r, e: self._on_document_symbols(r, e, filename))
 
     def list_symbols(self, query=None):
-        """Search symbols across the WHOLE project and show the matches in 10x's
-        navigable symbol-references list (via workspace/symbol).
+        """Show the project's symbols in 10x's find-symbol panel (via
+        workspace/symbol).
 
-        Note this is a SEARCH, not an enumeration: LSP has no "give me every
-        symbol" request, and most servers return nothing for an empty query
-        (Roslyn does; rust-analyzer answers with the workspace's types). So with
-        no argument we search for the selected text, falling back to the word
-        under the cursor. Pass a string to search for something else - from the
-        command panel that's "<Name> symbols <text>"."""
+        The panel filters the list it is handed, so it wants every symbol each
+        time it opens - one server round trip per open would make it too slow to
+        use on a real project. So an unqualified call is served from a cache:
+        the first one asks the server for the whole workspace, later ones open
+        instantly off the cache and refresh it in the background (see
+        _refresh_symbol_cache). Saving a file refreshes it too, and
+        "<name>.SymbolCacheSeconds: 0" makes every open wait on the server
+        instead of holding a list. "<name>.SymbolCache: false" opts out of the
+        feature altogether - see _symbol_cache_enabled.
+
+        LSP has no "give me every symbol" request, only a search, and servers
+        differ on what an empty query means: rust-analyzer answers with the
+        workspace's types, Roslyn returns nothing at all. When the empty query
+        comes back empty we search for the selected text, falling back to the
+        word under the cursor - all such a server can do. Passing a query
+        explicitly ("<Name> symbols <text>" in the command panel) always
+        searches the server and bypasses the cache."""
         if not self._ready():
             self.log("server not ready")
             return
@@ -2219,11 +2714,63 @@ class LanguageServerClient:
         if self.server_caps and not self.server_caps.get("workspaceSymbolProvider"):
             self._no_workspace_symbols()
             return
-        if query is None:
-            query = self._selected_text() or self._word_at_cursor()
-        query = (query or "").strip()
-        self._send_request("workspace/symbol", {"query": query},
-                           lambda r, e: self._on_workspace_symbols(r, e, query))
+        if query is not None:
+            query = query.strip()
+            self._send_request("workspace/symbol", {"query": query},
+                               lambda r, e: self._on_workspace_symbols(r, e, query),
+                               transform=self._symbol_items)
+            return
+        # No query means "fill the panel with the project", which is the cache's
+        # job; with the cache off there is nothing to fill it from.
+        if not self._symbol_cache_enabled():
+            self._symbol_cache_off()
+            return
+        ttl = self._symbol_cache_seconds()
+        if ttl and self._symbol_cache:
+            self._present_symbols(self._symbol_cache)
+            if self._symbol_cache_stale():
+                self._refresh_symbol_cache()
+            return
+        if self._symbol_dump is False:
+            # This server has already told us it won't dump the workspace, so go
+            # straight to searching for what the cursor is on.
+            term = (self._selected_text() or self._word_at_cursor()).strip()
+            if not term:
+                N10X.Editor.SetStatusBarText(
+                    f"{self.name}: this server needs a search term - put the "
+                    f"cursor on a word, or type '{self.name} symbols <text>'")
+                return
+            self._send_request("workspace/symbol", {"query": term},
+                               lambda r, e: self._on_workspace_symbols(r, e, term),
+                               transform=self._symbol_items)
+            return
+        # Nothing cached yet: ask for the workspace and show it when it lands.
+        self._send_request(
+            "workspace/symbol", {"query": ""},
+            lambda r, e: self._on_workspace_symbols(r, e, "", dump=True),
+            transform=self._symbol_items)
+
+    def refresh_symbols(self):
+        """Drop the cached project symbols and fetch them again now. For when
+        the find-symbol panel is behind after a branch switch or a build."""
+        if not self._symbol_cache_enabled():
+            self._symbol_cache_off()
+            return
+        if not self._symbol_cache_seconds():
+            N10X.Editor.SetStatusBarText(
+                f"{self.name}: nothing to rebuild - {self.name}."
+                f"SymbolCacheSeconds is 0, so find-symbol already asks the "
+                f"server on every open")
+            return
+        self._symbol_cache = []
+        self._symbol_cache_time = 0.0
+        self._symbol_dump = None
+        self._symbol_dump_tries = 0
+        if not self._ready():
+            self.log("server not ready")
+            return
+        self._refresh_symbol_cache()
+        N10X.Editor.SetStatusBarText(f"{self.name}: refreshing project symbols")
 
     def _selected_text(self):
         """The selected text when it's a single-line snippet we can search for,
@@ -2481,6 +3028,11 @@ class LanguageServerClient:
                 self._retry_due = 0.0
                 if self._ready():
                     action()
+            # Fill / retry the find-symbol cache in the background.
+            if self._symbol_warm_due and now >= self._symbol_warm_due:
+                self._symbol_warm_due = 0.0
+                if self._ready():
+                    self._refresh_symbol_cache()
             # Fire any debounced diagnostic pulls (pull-diagnostics clients only).
             if self._ready():
                 self._flush_diag_pulls(now)
@@ -2579,6 +3131,8 @@ class LanguageServerClient:
             "listsymbols": self.list_symbols,
             "functions": self.list_functions,
             "listfunctions": self.list_functions,
+            "refreshsymbols": self.refresh_symbols,
+            "reloadsymbols": self.refresh_symbols,
             "diagnostics": self.show_all_diagnostics,
             "showdiagnostics": self.show_all_diagnostics,
             "restart": self.restart,
@@ -2621,7 +3175,8 @@ class LanguageServerClient:
             if fn is None or (arg and fn != self.list_symbols):
                 self.log(f"unknown command '{text}'. Try: {self.name} status | "
                          f"complete | hover | signature | definition | references | "
-                         f"functions | symbols [text] | diagnostics | restart")
+                         f"functions | symbols [text] | refresh symbols | "
+                         f"diagnostics | restart")
                 return True
             if arg:
                 fn(arg)
@@ -2649,6 +3204,10 @@ class LanguageServerClient:
             "showfunctionargsinfo": self.signature_help,
             "showsymbolinfo": self.hover,
             "findfunction": self.list_functions,
+            # Claimed even with SymbolCache off, when list_symbols does nothing
+            # but say so in the status bar: 10x's own find-symbol panel has
+            # nothing of value to show for a file the server handles, so a
+            # blank panel would only be confusing.
             "findsymbol": self.list_symbols,
         }
         # Comment commands only when commenting is enabled (a token is
@@ -2687,6 +3246,22 @@ class LanguageServerClient:
             self.log(f"intercept command error: {e}")
             return False
     
+    def _on_workspace_opened(self, *args):
+        """10x opened a different workspace. A server still rooted at the old one
+        would answer about the wrong project, so retire it; the next handled file
+        starts a fresh one at the new root."""
+        try:
+            if not (self.conn and self.conn.alive):
+                return
+            new_root = self._editor_workspace_root()
+            if not new_root or path_within(new_root, self.root_path or ""):
+                return
+            self.log(f"workspace changed to {new_root} - restarting the server "
+                     f"(was rooted at {self.root_path})")
+            self.restart()
+        except Exception as e:
+            self.log(f"workspace-opened handler failed: {e}")
+
     def _on_mouse_hover(self, pos):
         self.hover(pos)
 
@@ -2733,29 +3308,91 @@ class LanguageServerClient:
                      f"(then restart 10x)")
             return
         self._refresh_verbose()
+        self._retire_previous()
         self._check_parser_conflict()
-        N10X.Editor.AddOnFileOpenedFunction(self._on_file_opened)
-        N10X.Editor.AddPostFileSaveFunction(self._on_post_save)
-        N10X.Editor.AddOnCharKeyFunction(self._on_char_key)
-        N10X.Editor.AddCursorMovedFunction(self._on_cursor_moved)
-        N10X.Editor.AddUpdateFunction(self._on_update)
-        N10X.Editor.AddExitingFunction(self._on_exit)
-        try:
-            N10X.Editor.AddCommandPanelHandlerFunction(self._on_command_panel)
-        except Exception as e:
-            self.log(f"command panel registration failed: {e}")
-        try:
-            N10X.Editor.AddInterceptCommandFunction(self._on_intercept_command)
-        except Exception as e:
-            self.log(f"command interception unavailable: {e}")
+        # Each handler is bound once and kept: the editor's Remove* functions
+        # have to be handed the same object that Add* was given (see unregister).
+        self._hooks = [
+            ("AddOnFileOpenedFunction", "RemoveOnFileOpenedFunction",
+             self._on_file_opened),
+            ("AddPostFileSaveFunction", "RemovePostFileSaveFunction",
+             self._on_post_save),
+            ("AddOnCharKeyFunction", "RemoveOnCharKeyFunction",
+             self._on_char_key),
+            ("AddCursorMovedFunction", "RemoveCursorMovedFunction",
+             self._on_cursor_moved),
+            ("AddUpdateFunction", "RemoveUpdateFunction", self._on_update),
+            ("AddExitingFunction", "RemoveExitingFunction", self._on_exit),
+            ("AddCommandPanelHandlerFunction",
+             "RemoveCommandPanelHandlerFunction", self._on_command_panel),
+            ("AddInterceptCommandFunction", "RemoveInterceptCommandFunction",
+             self._on_intercept_command),
+            ("AddSymbolMouseHoverFunction", "RemoveSymbolMouseHoverFunction",
+             self._on_mouse_hover),
+            ("AddOnWorkspaceOpenedFunction", "RemoveOnWorkspaceOpenedFunction",
+             self._on_workspace_opened),
+        ]
+        for add_name, _remove_name, handler in self._hooks:
+            add = getattr(N10X.Editor, add_name, None)
+            if add is None:
+                self.log(f"{add_name} unavailable on this 10x build")
+                continue
+            try:
+                add(handler)
+            except Exception as e:
+                self.log(f"{add_name} failed: {e}")
+        self._registered = True
         try:
             cur = N10X.Editor.GetCurrentFilename()
             if self.handles(cur) and self.ensure_started(cur):
                 self.did_open(cur)
         except Exception:
             pass
-        try:
-            N10X.Editor.AddSymbolMouseHoverFunction(self._on_mouse_hover)
-        except Exception as e:
-            pass
         self.log(f"registered (server: {' '.join(self._server_argv())})")
+
+    def unregister(self):
+        """Undo register(): drop the editor hooks and shut the server down."""
+        for _add_name, remove_name, handler in (self._hooks or []):
+            remove = getattr(N10X.Editor, remove_name, None)
+            if remove is None:
+                continue
+            try:
+                remove(handler)
+            except Exception as e:
+                self.log(f"{remove_name} failed: {e}")
+        self._hooks = None
+        self._registered = False
+        try:
+            self._teardown()
+        except Exception:
+            pass
+        # Belt and braces, and after the teardown that clears it: a hook we
+        # failed to remove would otherwise restart the server on the next update
+        # tick. is_enabled() is False once disabled, which ensure_started checks.
+        self.disabled = True
+
+    def _retire_previous(self):
+        """Shut down an earlier instance of this client, if one is still hooked
+        up.
+
+        10x re-executes the per-language scripts whenever a script file changes,
+        so a deploy builds a second client while the first is still registered:
+        every command then runs twice. The reload clears
+        sys.modules, so a module-level registry would not survive it."""
+        try:
+            stale = [o for o in gc.get_objects()
+                     if type(o).__name__ == type(self).__name__
+                     and o is not self
+                     and getattr(o, "name", None) == self.name
+                     # No attribute at all means an instance from an older
+                     # version of this file, which was registered by definition.
+                     and getattr(o, "_registered", True)]
+        except Exception as e:
+            self.log(f"could not look for a previous instance: {e}")
+            return
+        for old in stale:
+            try:
+                old.unregister()
+                self.log("retired the previous instance (script reload)")
+            except Exception as e:
+                self.log(f"could not retire the previous instance: {e}")

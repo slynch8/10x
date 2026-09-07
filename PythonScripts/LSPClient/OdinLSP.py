@@ -68,6 +68,7 @@
 #   Control K, Control U: OdinLSP_UncommentLine()   (10x default)
 #   (no binding needed)  OdinLSP_ListFunctions()   (functions in this file)
 #   (no binding needed)  OdinLSP_ListSymbols()     (project-wide symbol search)
+#   (no binding needed)  OdinLSP_RefreshSymbols()  (re-read the project's symbols)
 #   (no binding needed)  OdinLSP_ShowDiagnostics()
 #   (no binding needed)  OdinLSP_Restart()
 # ---------------------------------------------------------------------------
@@ -136,6 +137,10 @@ def OdinLSP_ListSymbols():
 
 def OdinLSP_ListFunctions():
     _client.list_functions()
+
+
+def OdinLSP_RefreshSymbols():
+    _client.refresh_symbols()
 
 
 def OdinLSP_ShowDiagnostics():

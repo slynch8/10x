@@ -67,6 +67,7 @@
 #   Control K, Control U: JaiLSP_UncommentLine()   (10x default)
 #   (no binding needed)  JaiLSP_ListFunctions()   (functions in this file)
 #   (no binding needed)  JaiLSP_ListSymbols()     (project-wide symbol search)
+#   (no binding needed)  JaiLSP_RefreshSymbols()  (re-read the project's symbols)
 #   (no binding needed)  JaiLSP_ShowDiagnostics()
 #   (no binding needed)  JaiLSP_Restart()
 # ---------------------------------------------------------------------------
@@ -135,6 +136,10 @@ def JaiLSP_ListSymbols():
 
 def JaiLSP_ListFunctions():
     _client.list_functions()
+
+
+def JaiLSP_RefreshSymbols():
+    _client.refresh_symbols()
 
 
 def JaiLSP_ShowDiagnostics():

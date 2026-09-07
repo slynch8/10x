@@ -58,15 +58,42 @@ when their `Enabled` setting is `true`.
   of retries for servers that answer `null` until the workspace finishes loading).
 - **Find references** - shown in 10x's symbol-references list.
 - **List functions** - the functions/methods in the current file
-  (`textDocument/documentSymbol`), shown in 10x's navigable symbol-references
-  list so you can jump straight to one.
-- **List symbols** - search the whole project's symbols (`workspace/symbol`),
-  shown in the same navigable list. This is a *search*, not a dump: LSP has no
-  "give me every symbol" request, and most servers return nothing for an empty
-  query. With no argument it searches for the selected text, falling back to the
-  word under the cursor; from the command panel you can pass one explicitly with
-  `<Name> symbols <text>`. Server support varies - see
-  [per-language setup](#per-language-setup).
+  (`textDocument/documentSymbol`), shown in 10x's find-function panel
+  (`ShowFindFunctionPanel`) with the enclosing class in the name, in file order,
+  so you can filter and jump straight to one.
+- **List symbols** - the project's symbols (`workspace/symbol`) in 10x's
+  find-symbol panel (`ShowFindSymbolPanel`). The panel filters the list it is
+  handed, so it gets every symbol each time it opens; asking the server on every
+  open would be far too slow, so the list is **cached** (see
+  `SymbolCacheSeconds`): the cache is filled in the background shortly after the
+  server starts, so the first FindSymbol opens on a full project list rather than
+  triggering the fetch itself - you should never need to open a file or run
+  `RefreshSymbols` to get results. Later opens are served instantly and refresh
+  the cache in the background. Saving a file refreshes it too, and
+  `<Name> refresh symbols` / `<Name>_RefreshSymbols()` rebuilds it on demand.
+
+  Servers index in the background and answer as soon as they have *something*,
+  so early replies are partial or empty. Both cases are handled: an empty reply
+  is retried on a backoff (2s, 5s, 12s, 30s) before the client concludes the
+  server has no project dump to give, and after a dump lands the client
+  re-checks every 10s for as long as the symbol count keeps climbing, stopping
+  once it settles. So the list fills itself in over the first few seconds of a
+  session rather than staying stuck at whatever the server knew first.
+
+  LSP has no "give me every symbol" request, only a search, and some servers
+  (Roslyn) return nothing for an empty query. For those the panel falls back to
+  searching for the selected text or the word under the cursor, and
+  `<Name> symbols <text>` searches the server directly, bypassing the cache.
+  Server support varies - see [per-language setup](#per-language-setup).
+
+  That cache is a copy of every symbol in the project, so on a large one it
+  costs real memory and a background refresh every so often. `SymbolCache:
+  false` opts out: the cache is dropped, and `FindSymbol` /
+  `<Name>_ListSymbols()` / `<Name>_RefreshSymbols()` just say so in the status
+  bar. `FindSymbol` stays intercepted rather than falling back to 10x's own
+  panel, which has nothing of value to show for a file the server handles. Only
+  `<Name> symbols <text>` - a one-shot server query that keeps nothing - still
+  works.
 - **Diagnostics** - live errors/warnings from the server, surfaced two ways: the
   diagnostic under the cursor in the status bar, and all diagnostics rendered
   into the build-output panel as navigable MSVC-style lines. Filterable by
@@ -80,11 +107,39 @@ when their `Enabled` setting is `true`.
   built-in commands drive the language server for files the client handles, so
   the editor's standard key bindings just work. Intercepted commands:
   `GoToSymbolDefinition`, `GoToSymbolDefinitionUnderMouse`, `FindSymbolReferences`,
-  `Autocomplete`, `ShowFunctionArgsInfo`, `ShowSymbolInfo`, and (when a comment
-  token is configured) `ToggleComment` / `CommentLine` / `UncommentLine`.
+  `Autocomplete`, `ShowFunctionArgsInfo`, `ShowSymbolInfo`, `FindFunction`,
+  `FindSymbol`, and (when a comment token is configured) `ToggleComment` /
+  `CommentLine` / `UncommentLine`.
+
+  > **Known 10x bug (reported 2026-09-07).** Claiming `FindFunction` does not
+  > stop 10x opening its own function panel, and filling a panel that is already
+  > open leaves it empty - so `FindFunction` comes up blank until the editor fix
+  > lands. `FindSymbol` is suppressed correctly and works. Until then, bind
+  > `<Name>_ListFunctions()` to a key (it opens the panel itself, correctly
+  > filled) or type `<Name> functions` in the command panel.
+- **Project root** - the language server is rooted at the workspace 10x has
+  open (`GetWorkspaceFilename`), which is the project you actually opened. Only
+  when there is no workspace, or the file is outside it, does the client fall
+  back to walking up from the file looking for a marker (`Cargo.toml`, `*.sln`,
+  `ols.json`, ...). That walk stops at the *innermost* marker, so a nested crate
+  or `.csproj` would root the server at itself and hide the rest of the project
+  from find-symbol - and since the root is fixed when the server starts,
+  whichever file you opened first would decide what it could ever see. Opening a
+  different workspace restarts the server at the new root. `<Name> status` shows
+  which root is in use and where it came from.
 - **Watched files** - for servers that ask for it (e.g. OLS), a throttled
   workspace mtime scan notifies the server about files changed on disk while not
   open, keeping its index fresh.
+
+
+
+- **Script reloads** - 10x re-executes the per-language scripts whenever a script
+  file changes, so deploying an edit builds a second client while the first is
+  still hooked up and every command then runs twice. Registering now retires any
+  earlier instance of the same client (drops its editor hooks, stops its server)
+  first. Worth knowing because a doubled call is invisible for most features but
+  empties the find panels: a second `ShowFindFunctionPanel` /
+  `ShowFindSymbolPanel` call clears the list the first one supplied.
 
 ## Settings
 
@@ -108,6 +163,8 @@ the client you're configuring (`PythonLSP`, `RustLSP`, `OdinLSP`, `JaiLSP`,
 | `<name>.MaxFileSize`        | integer (KB)                    | `0` (unlimited)    | Skip files larger than this: they are never sent to the server, so neither side holds their text and language features are off for them. Aimed at huge generated files. |
 | `<name>.IgnoreDirs`         | comma/semicolon list            | *(none)*           | Extra directory **names** (matched at any depth) to skip in the workspace file-watch scan, on top of the built-in list. E.g. `Generated, ThirdParty`. |
 | `<name>.ServerEnv`          | `KEY=VALUE; KEY2=VALUE2`        | *(none)*           | Environment variables for the server process, merged over the editor's environment. Mainly for tuning servers that run on a VM - see [memory use](#memory-use). |
+| `<name>.SymbolCache`        | `true` / `false`                | `true`             | Keep a project-wide symbol cache for the find-symbol panel. The panel filters the list it is handed, so it needs every symbol in the project each time it opens - hence the cache. Set `false` to skip that memory and the background refreshes; **find-symbol turns off with it** - `FindSymbol` is still intercepted (so 10x doesn't open its own empty-looking panel) but, like `ListSymbols` / `RefreshSymbols`, only says so in the status bar. `<Name> symbols <text>` still works. |
+| `<name>.SymbolCacheSeconds` | integer (seconds)               | `60`               | How long that cache stays fresh. Once older than this the panel is still served instantly, then the cache refreshes in the background (a save refreshes it too). `0` keeps find-symbol working but holds nothing between opens - every open then waits on the server, and `RefreshSymbols` has nothing to rebuild. Ignored when `SymbolCache` is `false`. |
 | `<name>.LogVerbose`         | `true` / `false`                | `false`            | Log server traffic to the output panel. |
 
 ## Key bindings
@@ -118,8 +175,8 @@ explicitly instead (Settings -> Key Bindings), use `<Name>_Completion()`,
 `<Name>_GotoDefinition()`, `<Name>_Hover()`, `<Name>_FindReferences()`,
 `<Name>_ListFunctions()`, `<Name>_ListSymbols()`, `<Name>_SignatureHelp()`,
 `<Name>_ToggleComment()`, `<Name>_CommentLine()`,
-`<Name>_UncommentLine()`, `<Name>_ShowDiagnostics()`, `<Name>_Restart()` and
-`<Name>_Status()`. The comment commands map to 10x's defaults:
+`<Name>_UncommentLine()`, `<Name>_ShowDiagnostics()`, `<Name>_RefreshSymbols()`,
+`<Name>_Restart()` and `<Name>_Status()`. The comment commands map to 10x's defaults:
 `Control Shift /` (toggle), `Control K, Control C` (comment),
 `Control K, Control U` (uncomment).
 
@@ -128,12 +185,35 @@ explicitly instead (Settings -> Key Bindings), use `<Name>_Completion()`,
 Every feature can also be run by typing `<Name> <command>` into 10x's command
 panel, no keybinding needed - e.g. `RustLSP status`, `CSharpLSP diagnostics`,
 `PythonLSP restart`. Commands: `status`, `complete`, `hover`, `signature`,
-`definition`, `references`, `functions`, `symbols [text]`, `diagnostics`,
-`restart`, `comment`, `commentline`, `uncommentline`.
+`definition`, `references`, `functions`, `symbols [text]`, `refresh symbols`,
+`diagnostics`, `restart`, `comment`, `commentline`, `uncommentline`.
 
 `symbols` is the only one that takes an argument - the term to search the project
-for, e.g. `RustLSP symbols Widget`. Without it the search uses the selected text
-or the word under the cursor.
+for, e.g. `RustLSP symbols Widget`. That searches the server directly, and is
+the one symbol command that still works with `SymbolCache: false`; without an
+argument the panel opens on the cached project symbols (`refresh symbols`
+rebuilds that cache).
+
+### Very large projects
+
+The find-symbol cache asks the server for *every* symbol in the project, so its
+cost scales with the project. Three things bound it:
+
+- **Responses over 32 MB are dropped unparsed** (`MAX_RESPONSE_BYTES`). Parsing
+  costs several times the wire size in Python objects and seconds of CPU, so a
+  project too big to hold is refused rather than swallowed. The client then falls
+  back to term search - `<Name> symbols <text>` - and says so in the status bar.
+- **The symbol list is built on the reader thread**, never the main one. A reply
+  that needs real work registers a *transform* (`LSPConnection.request`) which
+  runs off the critical path, so the editor's main thread only ever receives a
+  finished result. On a 120k-symbol reply that is 1.4 s of background work and
+  0.1 ms on the main thread.
+- **Saves only refresh a stale cache**, not every save, so a save-heavy edit loop
+  can't re-dump the workspace repeatedly.
+- **`SymbolCache: false`** opts out entirely if you would rather not pay for it.
+
+Most servers also cap `workspace/symbol` results themselves, which limits this
+further - but the cap varies by server and version, so it isn't relied on.
 
 ## Memory use
 

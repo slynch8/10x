@@ -116,6 +116,7 @@
 #   Shift F12:           CSharpLSP_FindReferences()
 #   (no binding needed)  CSharpLSP_ListFunctions()    (functions in this file)
 #   (no binding needed)  CSharpLSP_ListSymbols()      (project-wide symbol search)
+#   (no binding needed)  CSharpLSP_RefreshSymbols()   (re-read the project's symbols)
 #   Control Shift Space: CSharpLSP_SignatureHelp()
 #   Control Shift /:      CSharpLSP_ToggleComment()   (10x default)
 #   Control K, Control C: CSharpLSP_CommentLine()     (10x default)
@@ -336,6 +337,10 @@ def CSharpLSP_ListSymbols():
 
 def CSharpLSP_ListFunctions():
     _client.list_functions()
+
+
+def CSharpLSP_RefreshSymbols():
+    _client.refresh_symbols()
 
 
 def CSharpLSP_ShowDiagnostics():
