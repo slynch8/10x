@@ -103,6 +103,13 @@
 #                           holds nothing between opens - every open then waits
 #                           on the server, and RefreshSymbols has nothing to
 #                           rebuild. Ignored when SymbolCache is "false".
+#     <name>.SlowMainThreadMs  Log a warning when one of our editor callbacks
+#                           holds the main thread longer than this many
+#                           milliseconds (default 8, i.e. half a 60fps frame).
+#                           0 turns the guard off. "<name> status" lists the
+#                           worst offenders seen so far. 10x only times
+#                           callbacks passed to CallOnMainThread, so without
+#                           this the update tick and input hooks go unmeasured.
 #     <name>.LogVerbose     "true"/"false" - log server traffic to the output
 #                           panel (default false)
 #
@@ -791,6 +798,10 @@ class LanguageServerClient:
         self.diagnostics = {}    # uri -> [Diagnostic]
         self._last_sync = 0.0
         self._sync_interval = 0.35
+        self._buffer_dirty = False       # a key edit since the last full read
+        # Longest we will trust the cheap change signals before re-reading the
+        # buffer anyway, for edits that arrive by a route we cannot observe.
+        self._sync_safety = 2.0
         self._completion_due = 0.0   # time.time() at which to auto-fire completion
         self._auto_delay = 0.12      # debounce window for as-you-type completion
         self._last_completion_id = None  # newest in-flight completion request id
@@ -851,6 +862,9 @@ class LanguageServerClient:
         self._bg_results = queue.Queue()
         self._bg_busy = set()            # tags with a job in flight
         self._symbol_warm_due = 0.0      # time.time() to (re)try filling it
+        self._slow_ms_flag = 8.0         # cached SlowMainThreadMs
+        self._slow_stats = {}            # handler -> [calls over, worst ms, last log]
+        self._tick_phases = {}           # phase -> ms, for the last update tick
         self._registered = False         # register() wired the editor hooks up
         self._hooks = None               # (add, remove, handler) for those hooks
 
@@ -865,13 +879,56 @@ class LanguageServerClient:
         return val if val else default
 
     def _refresh_verbose(self):
-        """Refresh the cached LogVerbose flag. Call only on the main thread."""
+        """Refresh cached settings that hot paths read. Main thread only."""
         self._verbose_flag = self.setting("LogVerbose") == "true"
+        try:
+            self._slow_ms_flag = max(0.0, float(self.setting("SlowMainThreadMs", "8")))
+        except (TypeError, ValueError):
+            self._slow_ms_flag = 8.0
 
     def _verbose(self):
         # Returns the cached flag so it is safe to call from any thread (e.g. the
         # connection's writer/reader). The flag is refreshed on the main thread.
         return self._verbose_flag
+
+    def _timed(self, name, fn):
+        """Wrap an editor callback so it reports when it overruns its budget.
+
+        Everything the editor calls us on runs on its main thread, so anything
+        slow here is a stutter the user sees. 10x only instruments callbacks
+        passed to CallOnMainThread, which leaves the update tick and the input
+        hooks - the ones that fire constantly - unmeasured. Two perf_counter
+        calls per invocation is a price worth paying to know."""
+        def wrapper(*args, **kwargs):
+            if not self._slow_ms_flag:
+                return fn(*args, **kwargs)
+            start = time.perf_counter()
+            try:
+                return fn(*args, **kwargs)
+            finally:
+                ms = (time.perf_counter() - start) * 1000.0
+                if ms >= self._slow_ms_flag:
+                    self._note_slow(name, ms)
+        return wrapper
+
+    def _note_slow(self, name, ms):
+        """Record and (sparingly) report a main-thread overrun. Rate-limited:
+        logging every slow frame would itself be the slow thing."""
+        stat = self._slow_stats.get(name)
+        if stat is None:
+            stat = self._slow_stats[name] = [0, 0.0, 0.0]
+        stat[0] += 1
+        stat[1] = max(stat[1], ms)
+        now = time.time()
+        if now - stat[2] >= 2.0:
+            stat[2] = now
+            detail = ""
+            if name == "Update" and self._tick_phases:
+                worst = sorted(self._tick_phases.items(), key=lambda kv: -kv[1])
+                detail = " - " + ", ".join(f"{k} {v:.0f}ms" for k, v in worst[:4])
+            self.log(f"SLOW main thread: {name} took {ms:.0f} ms "
+                     f"(budget {self._slow_ms_flag:.0f} ms, {stat[0]} overrun(s), "
+                     f"worst {stat[1]:.0f} ms){detail}")
 
     def handles(self, filename):
         return bool(filename) and filename.endswith(self.extensions)
@@ -1228,7 +1285,14 @@ class LanguageServerClient:
             # Remember it so we don't re-read and re-warn on every sync tick.
             self._skipped_docs.add(uri)
             return
-        self.docs[uri] = {"version": 1, "text": text, "filename": filename}
+        self.docs[uri] = {"version": 1, "text": text, "filename": filename,
+                          "synced_at": time.time()}
+        try:
+            self.docs[uri]["lines"] = N10X.Editor.GetLineCount()
+            self.docs[uri]["clean"] = not N10X.Editor.IsModified()
+        except Exception:
+            self.docs[uri]["lines"] = None
+            self.docs[uri]["clean"] = False
         self.conn.notify("textDocument/didOpen", {
             "textDocument": {"uri": uri, "languageId": self.language_id,
                              "version": 1, "text": text}})
@@ -1241,8 +1305,42 @@ class LanguageServerClient:
             self.conn.notify("textDocument/didClose",
                              {"textDocument": {"uri": uri}})
 
+    def _buffer_may_have_changed(self, doc):
+        """Whether it is worth reading the whole buffer again.
+
+        GetFileText costs time proportional to the file - tens of milliseconds
+        on a large one - and sync_current runs several times a second, so doing
+        it unconditionally spends most of a frame on re-reading text that has
+        not changed. These signals are all O(1)-ish by comparison."""
+        if self._buffer_dirty:
+            return True
+        try:
+            # An unmodified buffer matches what is on disk, and we read it at
+            # didOpen (or at the last save), so there is nothing to resend.
+            # Any edit flips this before we look again.
+            if not N10X.Editor.IsModified() and doc.get("clean"):
+                return False
+            lines = N10X.Editor.GetLineCount()
+            if lines != doc.get("lines"):
+                return True
+            # Most edits land on the line the caret is on, and one line is
+            # cheap to fetch even when the file is not.
+            x, y = N10X.Editor.GetCursorPos()
+            probe = N10X.Editor.GetLine(y)
+            was = doc.get("probe")
+            doc["probe"] = (y, probe)
+            if was is not None and was[0] == y and was[1] != probe:
+                return True
+        except Exception:
+            return True          # no cheap signal available - be correct, not fast
+        return (time.time() - doc.get("synced_at", 0.0)) >= self._sync_safety
+
     def sync_current(self, force=False):
-        """Push the current buffer to the server as a full didChange if changed."""
+        """Push the current buffer to the server as a full didChange if changed.
+
+        `force` means the caller is about to ask a content-sensitive question,
+        not that the buffer must be re-read: when nothing suggests an edit the
+        server's copy is already right and reading it again is wasted work."""
         if not self._ready():
             return
         filename = N10X.Editor.GetCurrentFilename()
@@ -1252,10 +1350,20 @@ class LanguageServerClient:
         if uri not in self.docs:
             self.did_open(filename)
             return
+        doc = self.docs[uri]
+        if not self._buffer_may_have_changed(doc):
+            return
         text = N10X.Editor.GetFileText(filename)
         if text is None:
             return
-        doc = self.docs[uri]
+        self._buffer_dirty = False
+        doc["synced_at"] = time.time()
+        try:
+            doc["lines"] = N10X.Editor.GetLineCount()
+            doc["clean"] = not N10X.Editor.IsModified()
+        except Exception:
+            doc["lines"] = None
+            doc["clean"] = False
         if text == doc["text"]:
             return  # nothing changed; `force` only governs whether callers
             # request features, not whether we resend identical content.
@@ -1331,10 +1439,17 @@ class LanguageServerClient:
 
     # -- main-thread message pump -----------------------------------------
 
+    # Longest pump() will spend draining replies before leaving the rest for the
+    # next tick. A message can cost real time to handle (a big diagnostics set,
+    # or a log line per message when LogVerbose is on), so a count alone does
+    # not bound this - only a clock does.
+    _PUMP_BUDGET_MS = 6.0
+
     def pump(self):
         if not self.conn:
             return
-        for _ in range(200):  # bounded so we never stall the editor
+        deadline = time.perf_counter() + self._PUMP_BUDGET_MS / 1000.0
+        for _ in range(200):
             try:
                 msg = self.conn.incoming.get_nowait()
             except queue.Empty:
@@ -1343,6 +1458,11 @@ class LanguageServerClient:
                 self._handle(msg)
             except Exception as e:
                 self.log(f"error handling message: {e}")
+            # Checked every message: perf_counter is far cheaper than handling
+            # one, and checking in batches lets a few slow messages overshoot.
+            # The queue keeps what we do not take; the next tick continues here.
+            if time.perf_counter() >= deadline:
+                break
 
     def _handle(self, msg):
         if msg.get("__lsp_internal__") == "exited":
@@ -2909,6 +3029,15 @@ class LanguageServerClient:
         self.log(f"  workspaceSymbol : "
                  f"{bool(self.server_caps.get('workspaceSymbolProvider'))} "
                  f"(ListSymbols)")
+        if self._slow_stats:
+            worst = sorted(self._slow_stats.items(), key=lambda kv: -kv[1][1])
+            self.log(f"  main-thread     : {len(self._slow_stats)} handler(s) over "
+                     f"{self._slow_ms_flag:.0f} ms")
+            for name, (count, peak, _last) in worst[:5]:
+                self.log(f"      {name:<24} {count:>5} overrun(s), worst {peak:.0f} ms")
+        else:
+            self.log(f"  main-thread     : nothing over {self._slow_ms_flag:.0f} ms"
+                     f"{' (guard off)' if not self._slow_ms_flag else ''}")
         self.log(f"  symbol source   : {self._symbol_source()}"
                  f"{f' (scanning {self._scan_done}/{self._scan_total})' if self._scan_active else ''}")
         if not self._symbol_cache_enabled():
@@ -3267,6 +3396,9 @@ class LanguageServerClient:
         # A typed character can open or close a call, so re-check the args box on
         # the next tick, by which point the character is in the buffer.
         self._sig_dirty = True
+        # ... and our copy of the buffer is now stale, so the next sync must
+        # actually re-read it rather than trust the cheap change signals.
+        self._buffer_dirty = True
         if not ch:
             return
         # Only act when the focused file is one we handle; otherwise typing in
@@ -3354,8 +3486,23 @@ class LanguageServerClient:
             pass
 
     def _on_update(self, *args):
+        # Phase timings, so an overrun says which part was slow rather than
+        # just that the tick was. perf_counter is ~50ns; only phases that
+        # actually cost something are recorded.
+        phases = self._tick_phases
+        phases.clear()
+        mark = [time.perf_counter()]
+
+        def lap(label):
+            t = time.perf_counter()
+            ms = (t - mark[0]) * 1000.0
+            mark[0] = t
+            if ms >= 1.0:
+                phases[label] = phases.get(label, 0.0) + ms
+
         try:
             self.pump()
+            lap("pump")
             now = time.time()
             # Deferred re-request (e.g. a goto-definition that came back empty
             # while the server was still indexing) fires as soon as it's due.
@@ -3365,31 +3512,40 @@ class LanguageServerClient:
                 self._retry_due = 0.0
                 if self._ready():
                     action()
+                lap("retry")
             # Collect anything a worker thread finished, then feed the scan.
             self._drain_background()
+            lap("background")
             self._pump_document_scan()
+            lap("scan")
             # Fill / retry the find-symbol cache in the background.
             if self._symbol_warm_due and now >= self._symbol_warm_due:
                 self._symbol_warm_due = 0.0
                 if self._ready():
                     self._refresh_symbol_cache()
+                lap("symbol-refresh")
             # Fire any debounced diagnostic pulls (pull-diagnostics clients only).
             if self._ready():
                 self._flush_diag_pulls(now)
+                lap("diagnostics")
             # Re-check the args box once per input event, before the completion
             # branch below - that one returns early.
             if self._sig_dirty:
                 self._sig_dirty = False
                 self._refresh_signature_help(now)
+                lap("signature-refresh")
             if self._ready() and self._sig_due and now >= self._sig_due:
                 self._sig_due = 0.0
                 self._request_signature_help()
+                lap("signature-request")
             # Completion fires as soon as it's due (not throttled).
             if (self._ready() and self._completion_due
                     and now >= self._completion_due):
                 self._completion_due = 0.0
                 self.sync_current(force=True)
+                lap("completion-sync")
                 self._request_completion()
+                lap("completion-request")
                 self._last_sync = now
                 return
             # Throttled housekeeping. Runs even before the server is ready so a
@@ -3398,13 +3554,17 @@ class LanguageServerClient:
             if now - self._last_sync >= self._sync_interval:
                 self._last_sync = now
                 self._refresh_verbose()
+                lap("refresh-settings")
                 self._reconcile_open_files(now)
+                lap("reconcile-open-files")
                 if self._ready():
                     self.sync_current()
+                    lap("sync-current")
                     # Self-throttled (no-op unless this server registered a
                     # watcher and the scan interval has elapsed). Of our current
                     # servers only ols registers one; rust-analyzer/pylsp don't.
                     self._scan_watched_files(now)
+                    lap("watch-scan")
         except Exception as e:
             self.log(f"update error: {e}")
 
@@ -3672,6 +3832,9 @@ class LanguageServerClient:
             ("AddOnWorkspaceOpenedFunction", "RemoveOnWorkspaceOpenedFunction",
              self._on_workspace_opened),
         ]
+        # Wrapped in place so the same object is handed to Remove* later.
+        self._hooks = [(a, r, self._timed(a[3:-8] if a.startswith("Add") else a, h))
+                       for a, r, h in self._hooks]
         for add_name, _remove_name, handler in self._hooks:
             add = getattr(N10X.Editor, add_name, None)
             if add is None:
