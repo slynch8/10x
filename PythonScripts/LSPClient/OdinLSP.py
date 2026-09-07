@@ -106,6 +106,11 @@ _client = LanguageServerClient(
     root_markers=("ols.json", "ols.json5"),
     # Skip OLS's on-disk cache in the file-watch scan.
     ignore_dirs=(".ols-cache",),
+    # OLS's workspace/symbol index leaves out the workspace root package and
+    # caps results at 100, so a single-package project gets nothing from it.
+    # documentSymbol has neither limit, so build the find-symbol list from a
+    # per-file scan instead. Override with "OdinLSP.SymbolSource: auto".
+    symbol_source="documents",
 )
 
 

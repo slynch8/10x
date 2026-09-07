@@ -105,6 +105,10 @@ _client = LanguageServerClient(
     # prefer that, then fall back to common Jai build files. (".git" is left out
     # so a git submodule's own .git doesn't get picked as the root.)
     root_markers=("jails.json", "first.jai", "build.jai", "main.jai"),
+    # SymbolSource is left at "auto": jails answers workspace/symbol for a term
+    # but returns null for the empty query, so find-symbol falls back to the
+    # documentSymbol scan. That scan sees whatever is in the program jails is
+    # analysing - files outside it (a separate build's sources) report nothing.
 )
 
 

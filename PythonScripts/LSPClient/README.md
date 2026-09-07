@@ -72,6 +72,19 @@ when their `Enabled` setting is `true`.
   the cache in the background. Saving a file refreshes it too, and
   `<Name> refresh symbols` / `<Name>_RefreshSymbols()` rebuilds it on demand.
 
+  **Where the list comes from** is `SymbolSource`. `workspace/symbol` is one
+  request, but it only ever returns what the server's project index holds, and
+  that varies a lot: OLS omits the workspace root package entirely and caps
+  results at 100, so a single-package Odin project gets nothing from it. The
+  `documents` source instead asks each file in the project for its own symbols
+  (`textDocument/documentSymbol`), which has neither gap. It costs a request per
+  file, so the scan is paced across update ticks - a few files at a time, at
+  most four requests outstanding, and a cap on how much file text is read per
+  tick - and files the scan opened are closed again behind it. Files you have
+  open are left alone. Odin defaults to `documents`; everything else defaults to
+  `auto`, which uses `workspace/symbol` and falls back to the scan only if that
+  turns out to be empty.
+
   Servers index in the background and answer as soon as they have *something*,
   so early replies are partial or empty. Both cases are handled: an empty reply
   is retried on a backoff (2s, 5s, 12s, 30s) before the client concludes the
@@ -110,13 +123,6 @@ when their `Enabled` setting is `true`.
   `Autocomplete`, `ShowFunctionArgsInfo`, `ShowSymbolInfo`, `FindFunction`,
   `FindSymbol`, and (when a comment token is configured) `ToggleComment` /
   `CommentLine` / `UncommentLine`.
-
-  > **Known 10x bug (reported 2026-09-07).** Claiming `FindFunction` does not
-  > stop 10x opening its own function panel, and filling a panel that is already
-  > open leaves it empty - so `FindFunction` comes up blank until the editor fix
-  > lands. `FindSymbol` is suppressed correctly and works. Until then, bind
-  > `<Name>_ListFunctions()` to a key (it opens the panel itself, correctly
-  > filled) or type `<Name> functions` in the command panel.
 - **Project root** - the language server is rooted at the workspace 10x has
   open (`GetWorkspaceFilename`), which is the project you actually opened. Only
   when there is no workspace, or the file is outside it, does the client fall
@@ -130,16 +136,6 @@ when their `Enabled` setting is `true`.
 - **Watched files** - for servers that ask for it (e.g. OLS), a throttled
   workspace mtime scan notifies the server about files changed on disk while not
   open, keeping its index fresh.
-
-
-
-- **Script reloads** - 10x re-executes the per-language scripts whenever a script
-  file changes, so deploying an edit builds a second client while the first is
-  still hooked up and every command then runs twice. Registering now retires any
-  earlier instance of the same client (drops its editor hooks, stops its server)
-  first. Worth knowing because a doubled call is invisible for most features but
-  empties the find panels: a second `ShowFindFunctionPanel` /
-  `ShowFindSymbolPanel` call clears the list the first one supplied.
 
 ## Settings
 
@@ -163,6 +159,7 @@ the client you're configuring (`PythonLSP`, `RustLSP`, `OdinLSP`, `JaiLSP`,
 | `<name>.MaxFileSize`        | integer (KB)                    | `0` (unlimited)    | Skip files larger than this: they are never sent to the server, so neither side holds their text and language features are off for them. Aimed at huge generated files. |
 | `<name>.IgnoreDirs`         | comma/semicolon list            | *(none)*           | Extra directory **names** (matched at any depth) to skip in the workspace file-watch scan, on top of the built-in list. E.g. `Generated, ThirdParty`. |
 | `<name>.ServerEnv`          | `KEY=VALUE; KEY2=VALUE2`        | *(none)*           | Environment variables for the server process, merged over the editor's environment. Mainly for tuning servers that run on a VM - see [memory use](#memory-use). |
+| `<name>.SymbolSource`       | `auto` / `workspace` / `documents` | *(per language)* | Where the find-symbol list comes from. `workspace` = one `workspace/symbol` request, limited to whatever the server's project index holds. `documents` = scan the project's files with `documentSymbol`, which sees every symbol in every file but costs a request per file. `auto` = try `workspace/symbol`, fall back to the scan when its index proves empty. Defaults to `auto` except **Odin**, which ships `documents`. |
 | `<name>.SymbolCache`        | `true` / `false`                | `true`             | Keep a project-wide symbol cache for the find-symbol panel. The panel filters the list it is handed, so it needs every symbol in the project each time it opens - hence the cache. Set `false` to skip that memory and the background refreshes; **find-symbol turns off with it** - `FindSymbol` is still intercepted (so 10x doesn't open its own empty-looking panel) but, like `ListSymbols` / `RefreshSymbols`, only says so in the status bar. `<Name> symbols <text>` still works. |
 | `<name>.SymbolCacheSeconds` | integer (seconds)               | `60`               | How long that cache stays fresh. Once older than this the panel is still served instantly, then the cache refreshes in the background (a save refreshes it too). `0` keeps find-symbol working but holds nothing between opens - every open then waits on the server, and `RefreshSymbols` has nothing to rebuild. Ignored when `SymbolCache` is `false`. |
 | `<name>.LogVerbose`         | `true` / `false`                | `false`            | Log server traffic to the output panel. |

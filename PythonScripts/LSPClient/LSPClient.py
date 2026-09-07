@@ -71,6 +71,18 @@
 #                           Matches rank best-first: prefix beats word-boundary
 #                           (camelCase / "_") beats mid-word, and runs of
 #                           adjacent characters beat scattered ones.
+#     <name>.SymbolSource   Where the find-symbol list comes from:
+#                           "workspace" - one workspace/symbol request, which
+#                           only covers what the server's project index holds;
+#                           "documents" - scan the project's files with
+#                           documentSymbol, which sees every symbol in every
+#                           file but costs a request per file (paced across
+#                           update ticks, files closed again behind it);
+#                           "auto" - workspace/symbol, falling back to the scan
+#                           once the server's index proves empty. The default
+#                           is per language (Odin ships "documents": OLS omits
+#                           the root package from its index and caps results at
+#                           100).
 #     <name>.SymbolCache    "true"/"false" - keep a project-wide symbol cache
 #                           for the find-symbol panel (default true). The panel
 #                           filters the list it is given, so it has to be handed
@@ -726,11 +738,15 @@ class LanguageServerClient:
 
     def __init__(self, name, language_id, extensions, default_command="",
                  fallback_argv=None, trigger_chars="", root_markers=None,
+                 symbol_source="auto",
                  init_options=None, ignore_dirs=None, line_comment="",
                  on_initialized=None, server_cwd=None, pull_diagnostics=False,
                  server_env=None):
         self.name = name
         self.language_id = language_id
+        # Default for "<name>.SymbolSource" - a client whose server is known to
+        # have a thin workspace/symbol can ship with "documents".
+        self.symbol_source = symbol_source
         self.extensions = tuple(extensions)
         self.default_command = default_command
         self.fallback_argv = fallback_argv
@@ -806,6 +822,7 @@ class LanguageServerClient:
         # with us; ols does, which is what enables our polling scan below.
         self._watch_enabled = False      # server asked us to watch files
         self._watch_mtimes = {}          # path -> mtime, baseline for diffing
+        self._watch_baseline = False     # has that baseline been taken yet
         self._last_watch_scan = 0.0
         self._watch_interval = 2.0       # seconds between workspace mtime scans
         # Project-wide symbol cache behind the find-symbol panel. The panel
@@ -820,6 +837,19 @@ class LanguageServerClient:
         # (Roslyn) so we go straight to searching for the word under the cursor.
         self._symbol_dump = None
         self._symbol_dump_tries = 0      # empty dump replies seen so far
+        # Project-wide documentSymbol scan (see _start_document_scan).
+        self._scan_active = False
+        self._scan_queue = []            # files still to visit
+        self._scan_rows = []             # rows gathered so far
+        self._scan_opened = set()        # uris we opened and must close again
+        self._scan_inflight = 0
+        self._scan_total = 0
+        self._scan_done = 0              # files whose reply has come back
+        self._scan_started = 0.0
+        self._scan_ready = None          # queue of (path, text) from the reader
+        # Off-main-thread work, delivered back through _drain_background().
+        self._bg_results = queue.Queue()
+        self._bg_busy = set()            # tags with a job in flight
         self._symbol_warm_due = 0.0      # time.time() to (re)try filling it
         self._registered = False         # register() wired the editor hooks up
         self._hooks = None               # (add, remove, handler) for those hooks
@@ -1136,6 +1166,7 @@ class LanguageServerClient:
         # initialize), so drop them with the server.
         self._watch_enabled = False
         self._watch_mtimes = {}
+        self._watch_baseline = False
         # The symbol cache describes the workspace as that server saw it.
         self._symbol_cache = []
         self._symbol_cache_time = 0.0
@@ -1143,6 +1174,12 @@ class LanguageServerClient:
         self._symbol_dump = None
         self._symbol_dump_tries = 0
         self._symbol_warm_due = 0.0
+        # The connection is gone, so nothing to close - just drop the state.
+        self._scan_active = False
+        self._scan_queue = []
+        self._scan_rows = []
+        self._scan_opened = set()
+        self._scan_inflight = 0
 
     # -- document sync -----------------------------------------------------
 
@@ -1382,8 +1419,13 @@ class LanguageServerClient:
                 # scan only reports genuine changes, not the whole tree.
                 if not self._watch_enabled:
                     self._watch_enabled = True
-                    self._watch_mtimes = self._snapshot_watched_files()
+                    self._watch_baseline = False
                     self._last_watch_scan = time.time()
+                    # Seeded off-thread: on a few thousand files the walk is a
+                    # quarter of a second, and this fires during startup.
+                    self._run_off_thread("watch-scan",
+                                         self._snapshot_watched_files,
+                                         self._on_watch_baseline)
                 if self._verbose():
                     self.log("file watching enabled (server registered "
                              "workspace/didChangeWatchedFiles)")
@@ -1393,6 +1435,7 @@ class LanguageServerClient:
             if reg.get("method") == "workspace/didChangeWatchedFiles":
                 self._watch_enabled = False
                 self._watch_mtimes = {}
+                self._watch_baseline = False
 
     def _all_ignore_dirs(self):
         """Directory names the workspace scan skips: the built-in set plus
@@ -1433,13 +1476,27 @@ class LanguageServerClient:
         """Diff the workspace against the last snapshot and tell the server
         about any created/changed/deleted files it cares about. This is what
         keeps ols's index correct for files edited while not open (e.g. a
-        project-wide rename touching an unopened definition file)."""
-        if not (self._watch_enabled and self._ready()):
+        project-wide rename touching an unopened definition file).
+
+        The walk itself runs on a worker thread - on a few thousand files it is
+        hundreds of milliseconds, and this runs every couple of seconds."""
+        if not (self._watch_enabled and self._ready() and self._watch_baseline):
             return
         if now - self._last_watch_scan < self._watch_interval:
             return
         self._last_watch_scan = now
-        new = self._snapshot_watched_files()
+        self._run_off_thread("watch-scan", self._snapshot_watched_files,
+                             self._on_watch_snapshot)
+
+    def _on_watch_baseline(self, new):
+        """First snapshot: the starting point, so nothing is reported changed."""
+        self._watch_mtimes = new
+        self._watch_baseline = True
+        self._last_watch_scan = time.time()
+
+    def _on_watch_snapshot(self, new):
+        if not (self._watch_enabled and self._ready()):
+            return
         old = self._watch_mtimes
         changes = []
         for path, mtime in new.items():
@@ -2205,12 +2262,18 @@ class LanguageServerClient:
                 # Uncomment for debugging
                 #self.log(f"find-symbol panel: {len(items)} {noun}(s): "
                 #         f"{self._preview(items, with_file=True)}")
-                show([(name, path, line, char)
+                # The panel wants 4-tuples. Rows built for the project cache are
+                # already that shape, so the whole list goes straight through -
+                # rebuilding it here would put a pass over every symbol in the
+                # project on the main thread every time the panel opens.
+                show(items if len(items[0]) == 4 else
+                     [(name, path, line, char)
                       for name, path, line, char, _l in items])
                 return
             except Exception as e:
                 self.log(f"ShowFindSymbolPanel failed: {e}")
-        self._present_locations([it[1:] for it in items], noun)
+        self._present_locations(
+            [(r[1], r[2], r[3], r[4] if len(r) > 4 else 0) for r in items], noun)
 
     @staticmethod
     def _preview(items, limit=8, with_file=False):
@@ -2288,8 +2351,8 @@ class LanguageServerClient:
             self._present_symbols(items, "function")
 
     def _symbol_items(self, result):
-        """A workspace/symbol result as sorted (name, path, line, char, length)
-        tuples.
+        """A workspace/symbol result as sorted (name, path, line, char) tuples -
+        the shape the find-symbol panel takes.
 
         Runs on the READER thread as a request transform, because on a large
         project this is hundreds of milliseconds of work and the editor must
@@ -2315,12 +2378,9 @@ class LanguageServerClient:
             if key in seen:
                 continue
             seen.add(key)
-            end = rng.get("end", {})
-            length = (end.get("character", index) - index
-                      if end.get("line", line) == line else 0)
             items.append((self._qualified_name(sym.get("name"),
                                                sym.get("containerName") or ""),
-                          path, line, index, max(length, 0)))
+                          path, line, index))
         items.sort(key=lambda it: (it[0].lower(), it[1], it[2]))
         return items
 
@@ -2452,6 +2512,250 @@ class LanguageServerClient:
     # which early in a session is often only part of the project.
     _SYMBOL_GROWTH_RECHECK = 10.0
 
+    # -- background work --------------------------------------------------
+    #
+    # The editor's main thread must do nothing but talk to the editor. Anything
+    # that walks the filesystem, reads files or chews through a big list runs
+    # here instead and comes back on a later tick.
+
+    def _run_off_thread(self, tag, fn, done):
+        """Run fn() on a worker thread; call done(result) on a later update
+        tick. One job per tag at a time; fn must touch no N10X.Editor API."""
+        if tag in self._bg_busy:
+            return False
+        self._bg_busy.add(tag)
+
+        def work():
+            try:
+                res, err = fn(), None
+            except Exception as e:                # noqa: BLE001 - reported below
+                res, err = None, e
+            self._bg_results.put((tag, res, err, done))
+
+        threading.Thread(target=work, daemon=True).start()
+        return True
+
+    def _drain_background(self):
+        """Hand finished background work back on the main thread."""
+        while True:
+            try:
+                tag, res, err, done = self._bg_results.get_nowait()
+            except queue.Empty:
+                return
+            self._bg_busy.discard(tag)
+            if err is not None:
+                self.log(f"background {tag} failed: {err}")
+                continue
+            try:
+                done(res)
+            except Exception as e:
+                self.log(f"background {tag} handler failed: {e}")
+
+    # -- project-wide documentSymbol scan ---------------------------------
+    #
+    # workspace/symbol is one request, but it is only as good as the server's
+    # project index - OLS, for one, leaves the root package out of its index
+    # entirely and caps results at 100, so a single-package Odin project gets
+    # nothing at all. documentSymbol has no such gap: it reports every symbol
+    # in whatever file it is asked about. The cost is a request per file, and
+    # the file has to be open on the server first, so the scan is paced across
+    # update ticks and closes each file behind it.
+    _SCAN_POPS_PER_TICK = 8            # files considered per tick, sent or skipped
+    _SCAN_MAX_INFLIGHT = 4             # documentSymbol requests outstanding
+    _SCAN_BYTES_PER_TICK = 256 * 1024  # ceiling on file reading per tick
+
+    def _symbol_source(self):
+        """"<name>.SymbolSource": where the find-symbol list comes from.
+
+        "workspace" asks the server (one request, subject to whatever its
+        project index covers); "documents" scans the project's files with
+        documentSymbol, which sees everything but costs a request per file;
+        "auto" uses workspace/symbol and falls back to the scan once the
+        server's index proves empty. Default per client (see symbol_source)."""
+        val = (self.setting("SymbolSource", self.symbol_source)
+               or "auto").strip().lower()
+        return val if val in ("auto", "workspace", "documents") else "auto"
+
+    @staticmethod
+    def _document_symbol_rows(result, default_path):
+        """One file's documentSymbol reply as (name, path, line, char) rows,
+        children included - the shape 10x's find-symbol panel takes, so the
+        cached list can be handed over without touching it again. Runs on the
+        READER thread as a request transform: keep it pure."""
+        rows = []
+
+        def walk(nodes, container=""):
+            for node in nodes or []:
+                name = node.get("name") or ""
+                if "location" in node:            # SymbolInformation
+                    loc = node.get("location", {}) or {}
+                    path = uri_to_path(loc.get("uri", "")) or default_path
+                    rng = loc.get("range") or {}
+                    cont = node.get("containerName") or container
+                else:                             # DocumentSymbol
+                    path = default_path
+                    rng = node.get("selectionRange") or node.get("range") or {}
+                    cont = container
+                start = rng.get("start", {})
+                line = start.get("line", 0)
+                ch = start.get("character", 0)
+                rows.append((LanguageServerClient._qualified_name(name, cont),
+                             path, line, ch))
+                # Members are qualified by the type/namespace holding them.
+                walk(node.get("children") or [], name)
+
+        walk(result)
+        return rows
+
+    def _start_document_scan(self, reason=""):
+        """Begin walking the project, asking each file for its symbols.
+
+        Enumerating the workspace and reading the files both happen on worker
+        threads; the main thread only sends the requests and collects rows."""
+        if self._scan_active or not self._ready():
+            return
+        if self.server_caps and not self.server_caps.get("documentSymbolProvider"):
+            self.log("server has no documentSymbol support, so the project "
+                     "cannot be scanned for symbols")
+            return
+        # Read on the main thread while we still can: the reader thread must
+        # not touch N10X.Editor, and both of these are settings lookups.
+        limit = self._max_file_bytes()
+        already_open = set(self.docs) | set(self._skipped_docs)
+        self._scan_active = True
+        self._scan_started = time.time()
+        self._scan_reason = reason
+        # None means "enumerating": the pump must not mistake an empty queue
+        # for a finished scan before the file list has arrived.
+        self._scan_queue = None
+        self._scan_done = 0
+        self._scan_total = 0
+        self._run_off_thread(
+            "scan-enumerate",
+            lambda: self._collect_scan_files(limit, already_open),
+            self._on_scan_files)
+
+    def _collect_scan_files(self, limit, already_open):
+        """Worker thread: enumerate the project and read every file we will
+        need, so the main thread only has to hand them to the server."""
+        files = sorted(self._snapshot_watched_files())
+        ready = []
+        for path in files:
+            uri = path_to_uri(path)
+            if uri in already_open:
+                ready.append((path, uri, None))   # server already has it
+                continue
+            try:
+                with open(path, encoding="utf-8", errors="replace") as fh:
+                    text = fh.read()
+            except OSError:
+                continue
+            if limit and len(text.encode("utf-8", "ignore")) > limit:
+                continue
+            ready.append((path, uri, text))
+        return ready
+
+    def _on_scan_files(self, ready):
+        if not self._scan_active:
+            return                      # aborted while we were enumerating
+        if not ready:
+            self._scan_active = False
+            return
+        self._scan_queue = ready
+        self._scan_queue.reverse()      # popped from the end, so keep file order
+        self._scan_rows = []
+        self._scan_inflight = 0
+        self._scan_done = 0
+        self._scan_total = len(ready)
+        reason = getattr(self, "_scan_reason", "")
+        self.log(f"scanning {len(ready)} file(s) for project symbols"
+                 f"{' (' + reason + ')' if reason else ''}")
+
+    def _abort_document_scan(self):
+        self._scan_reason = ""
+        for uri in list(self._scan_opened):
+            self._close_scanned(uri)
+        self._scan_active = False
+        self._scan_queue = []
+        self._scan_rows = []
+        self._scan_inflight = 0
+
+    def _close_scanned(self, uri):
+        """Close a file the scan opened. Never touches self.docs - a file the
+        user actually has open was not opened by us and must stay open."""
+        if uri not in self._scan_opened:
+            return
+        self._scan_opened.discard(uri)
+        if self._ready():
+            self.conn.notify("textDocument/didClose",
+                             {"textDocument": {"uri": uri}})
+
+    def _scan_one(self, entry, order):
+        """Hand one already-read file to the server. Editor/IO work is done:
+        this is a notify and a request, nothing more."""
+        path, uri, text = entry
+        if text is not None:
+            self.conn.notify("textDocument/didOpen", {
+                "textDocument": {"uri": uri, "languageId": self.language_id,
+                                 "version": 1, "text": text}})
+            self._scan_opened.add(uri)
+        rid = self._send_request(
+            "textDocument/documentSymbol", {"textDocument": {"uri": uri}},
+            lambda r, e, u=uri, o=order: self._on_scan_symbols(r, e, u, o),
+            transform=lambda r, pth=path: self._document_symbol_rows(r, pth))
+        if rid is None:
+            self._close_scanned(uri)
+            return False
+        self._scan_inflight += 1
+        return True
+
+    def _pump_document_scan(self):
+        """Advance the scan a little. The files are already read, so all this
+        does is send - kept rationed anyway so a tick stays predictable."""
+        if not self._scan_active or self._scan_queue is None:
+            return
+        if not self._ready():
+            self._abort_document_scan()
+            return
+        for _ in range(self._SCAN_POPS_PER_TICK):
+            if (not self._scan_queue
+                    or self._scan_inflight >= self._SCAN_MAX_INFLIGHT):
+                break
+            order = self._scan_total - len(self._scan_queue)
+            self._scan_one(self._scan_queue.pop(), order)
+        if not self._scan_queue and not self._scan_inflight:
+            self._finish_document_scan()
+
+    def _on_scan_symbols(self, result, error, uri, order=0):
+        self._scan_inflight = max(0, self._scan_inflight - 1)
+        self._close_scanned(uri)
+        self._scan_done += 1
+        if not error and result:
+            # Appended as each file lands, so finishing costs nothing. Files go
+            # out in order with only a few requests in flight, so the list ends
+            # up in roughly file order; the panel filters on what you type, so
+            # exact ordering does not matter enough to sort for.
+            self._scan_rows.extend(result)
+        if self._scan_active and not self._scan_queue and not self._scan_inflight:
+            self._finish_document_scan()
+
+    def _finish_document_scan(self):
+        rows, total = self._scan_rows, self._scan_total
+        took = time.time() - self._scan_started
+        self._scan_active = False
+        self._scan_queue = []
+        self._scan_rows = []
+        self._scan_inflight = 0
+        if not rows:
+            self.log(f"scanned {total} file(s), found no symbols")
+            return
+        self._symbol_cache = rows
+        self._symbol_cache_time = time.time()
+        self._symbol_dump = True
+        self._symbol_dump_tries = 0
+        self.log(f"indexed {len(rows)} symbol(s) from {total} file(s) "
+                 f"in {took:.1f}s")
+
     def _note_dump_filled(self, items):
         """Record a successful whole-workspace dump.
 
@@ -2477,6 +2781,8 @@ class LanguageServerClient:
         self._symbol_dump_tries += 1
         if self._symbol_dump_tries > len(self._SYMBOL_DUMP_RETRIES):
             self._symbol_dump = False    # settled: this server won't dump
+            if self._symbol_source() == "auto":
+                self._warm_symbol_cache(delay=0.5)   # routes to the scan now
             return
         # Only worth a timed retry if we'd keep the result; with no cache the
         # next panel open re-asks anyway, which is what advances the count.
@@ -2515,7 +2821,15 @@ class LanguageServerClient:
             # A zero TTL keeps nothing between opens, so there is no list here
             # for a background refresh to fill.
             return
+        source = self._symbol_source()
+        if source == "documents":
+            self._start_document_scan()
+            return
         if self._symbol_dump is False:
+            # workspace/symbol has nothing to give. Under "auto" that is what
+            # the scan is for; under "workspace" the user asked for this.
+            if source == "auto":
+                self._start_document_scan("workspace/symbol returned nothing")
             return
         if self.server_caps and not self.server_caps.get("workspaceSymbolProvider"):
             return
@@ -2595,6 +2909,8 @@ class LanguageServerClient:
         self.log(f"  workspaceSymbol : "
                  f"{bool(self.server_caps.get('workspaceSymbolProvider'))} "
                  f"(ListSymbols)")
+        self.log(f"  symbol source   : {self._symbol_source()}"
+                 f"{f' (scanning {self._scan_done}/{self._scan_total})' if self._scan_active else ''}")
         if not self._symbol_cache_enabled():
             self.log(f"  symbol cache    : off "
                      f"(setting: {self.name}.SymbolCache: false; find-symbol "
@@ -2731,6 +3047,23 @@ class LanguageServerClient:
             if self._symbol_cache_stale():
                 self._refresh_symbol_cache()
             return
+        if self._scan_active:
+            N10X.Editor.SetStatusBarText(
+                f"{self.name}: building the project symbol list "
+                f"({self._scan_done}/{self._scan_total} files)...")
+            return
+        source = self._symbol_source()
+        # "documents" always scans. "auto" only scans once workspace/symbol has
+        # actually proved empty - scanning while its answer is still unknown
+        # would make "auto" mean "documents". If the scan can't start (no
+        # documentSymbol, no files) we fall through to the term search below.
+        if source == "documents" or (source == "auto"
+                                     and self._symbol_dump is False):
+            self._start_document_scan()
+            if self._scan_active:
+                N10X.Editor.SetStatusBarText(
+                    f"{self.name}: building the project symbol list...")
+                return
         if self._symbol_dump is False:
             # This server has already told us it won't dump the workspace, so go
             # straight to searching for what the cursor is on.
@@ -2766,10 +3099,14 @@ class LanguageServerClient:
         self._symbol_cache_time = 0.0
         self._symbol_dump = None
         self._symbol_dump_tries = 0
+        self._abort_document_scan()
         if not self._ready():
             self.log("server not ready")
             return
-        self._refresh_symbol_cache()
+        if self._symbol_source() == "documents":
+            self._start_document_scan("rebuild requested")
+        else:
+            self._refresh_symbol_cache()
         N10X.Editor.SetStatusBarText(f"{self.name}: refreshing project symbols")
 
     def _selected_text(self):
@@ -3028,6 +3365,9 @@ class LanguageServerClient:
                 self._retry_due = 0.0
                 if self._ready():
                     action()
+            # Collect anything a worker thread finished, then feed the scan.
+            self._drain_background()
+            self._pump_document_scan()
             # Fill / retry the find-symbol cache in the background.
             if self._symbol_warm_due and now >= self._symbol_warm_due:
                 self._symbol_warm_due = 0.0
