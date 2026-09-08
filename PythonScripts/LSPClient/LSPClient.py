@@ -71,6 +71,17 @@
 #                           Matches rank best-first: prefix beats word-boundary
 #                           (camelCase / "_") beats mid-word, and runs of
 #                           adjacent characters beat scattered ones.
+#     <name>.SymbolFilterSync  "true"/"false" - when the find-symbol filter
+#                           changes, wait for the server's answer (default
+#                           true) rather than refreshing the panel when it
+#                           arrives. Refreshing resets the typed filter, but
+#                           waiting blocks the editor for up to
+#                           SymbolFilterWaitMs.
+#     <name>.SymbolFilterWaitMs  Cap on that wait, in ms (default 150).
+#     <name>.SymbolFilterMinChars  Only ask the server once the filter is this
+#                           long (default 3); shorter ones are answered from
+#                           the cache, which keeps the blocking wait for
+#                           queries selective enough to be worth it.
 #     <name>.SymbolSource   Where the find-symbol list comes from:
 #                           "workspace" - one workspace/symbol request, which
 #                           only covers what the server's project index holds;
@@ -249,6 +260,17 @@ def path_within(directory, path):
         d = os.path.normcase(os.path.abspath(directory))
         p = os.path.normcase(os.path.abspath(path))
         return d == p or os.path.commonpath([d, p]) == d
+    except (ValueError, TypeError, OSError):
+        return False
+
+
+def same_file(a, b):
+    """Whether two paths name the same file. Case-insensitive on Windows."""
+    if not a or not b:
+        return False
+    try:
+        return (os.path.normcase(os.path.abspath(a))
+                == os.path.normcase(os.path.abspath(b)))
     except (ValueError, TypeError, OSError):
         return False
 
@@ -892,6 +914,14 @@ class LanguageServerClient:
         self._slow_ms_flag = 0.0         # cached SlowMainThreadMs; 0 = off
         self._slow_stats = {}            # handler -> [calls over, worst ms, last log]
         self._tick_phases = {}           # phase -> ms, for the last update tick
+        self._funclist_token = 0         # newest ListFunctions request
+        # Live find-symbol filtering (AddGetSymbolsFunction).
+        self._getsym_token = 0           # newest workspace/symbol query
+        self._getsym_sent = None         # query we last asked the server for
+        self._getsym_rows = (None, [])   # (query, rows) most recent answer
+        self._getsym_seen = 0.0          # last time the panel asked us
+        self._getsym_showing = False     # re-entry guard around Show*Panel
+        self._panel_file = ""            # file the panel was opened from
         self._argv_cache = None          # (Command setting, resolved argv)
         # Set once we know which thread the editor calls us on - NOT here:
         # 10x runs the script on one thread and dispatches CallOnMainThread and
@@ -2449,10 +2479,11 @@ class LanguageServerClient:
                 self.log(f"ShowFindFunctionPanel failed: {e}")
         self._present_locations([it[1:] for it in items], "function")
 
-    def _present_symbols(self, items, noun="symbol"):
-        """Hand (name, path, line, char, length) tuples to 10x's find-symbol
-        panel, which filters them itself. Falls back as above."""
-        if not items:
+    def _present_symbols(self, items, noun="symbol", allow_empty=False):
+        """Hand (name, path, line, char) rows to 10x's find-symbol panel. With
+        allow_empty the panel opens even with nothing to show, for when typing
+        into it is what fills it."""
+        if not items and not allow_empty:
             N10X.Editor.SetStatusBarText(f"{self.name}: no {noun}s found")
             return
         show = getattr(N10X.Editor, "ShowFindSymbolPanel", None)
@@ -2465,7 +2496,7 @@ class LanguageServerClient:
                 # already that shape, so the whole list goes straight through -
                 # rebuilding it here would put a pass over every symbol in the
                 # project on the main thread every time the panel opens.
-                show(items if len(items[0]) == 4 else
+                show(items if not items or len(items[0]) == 4 else
                      [(name, path, line, char)
                       for name, path, line, char, _l in items])
                 return
@@ -2494,7 +2525,18 @@ class LanguageServerClient:
     # symbols a function lives in, not functions themselves, so we skip them.
     _FUNCTION_SYMBOL_KINDS = frozenset((6, 9, 12))
 
-    def _on_document_symbols(self, result, error, filename):
+    def _on_document_symbols(self, result, error, filename, token=None):
+        # The panel must never open on the wrong file's functions: drop a reply
+        # that a newer request has superseded, or that describes a file we have
+        # navigated away from while it was in flight.
+        if token is not None and token != self._funclist_token:
+            return
+        try:
+            current = N10X.Editor.GetCurrentFilename()
+        except Exception:
+            current = filename
+        if current and not same_file(current, filename):
+            return
         if error or not result:
             N10X.Editor.SetStatusBarText(f"{self.name}: no symbols found")
             return
@@ -3050,9 +3092,10 @@ class LanguageServerClient:
             self._start_document_scan()
             return
         if self._symbol_dump is False:
-            # workspace/symbol has nothing to give. Under "auto" that is what
-            # the scan is for; under "workspace" the user asked for this.
-            if source == "auto":
+            # No whole-project list from this server. Scanning every file is
+            # only worth it when we cannot search interactively instead - with
+            # the filter callback, typing queries the server directly.
+            if source == "auto" and not self._has_symbol_filter():
                 self._start_document_scan("workspace/symbol returned nothing")
             return
         if self.server_caps and not self.server_caps.get("workspaceSymbolProvider"):
@@ -3231,31 +3274,24 @@ class LanguageServerClient:
             return
         self.sync_current(force=True)
         params = {"textDocument": {"uri": path_to_uri(filename)}}
+        self._funclist_token += 1
+        token = self._funclist_token
         self._send_request(
             "textDocument/documentSymbol", params,
-            lambda r, e: self._on_document_symbols(r, e, filename))
+            lambda r, e: self._on_document_symbols(r, e, filename, token))
 
     def list_symbols(self, query=None):
-        """Show the project's symbols in 10x's find-symbol panel (via
-        workspace/symbol).
-
-        The panel filters the list it is handed, so it wants every symbol each
-        time it opens - one server round trip per open would make it too slow to
-        use on a real project. So an unqualified call is served from a cache:
-        the first one asks the server for the whole workspace, later ones open
-        instantly off the cache and refresh it in the background (see
-        _refresh_symbol_cache). Saving a file refreshes it too, and
-        "<name>.SymbolCacheSeconds: 0" makes every open wait on the server
-        instead of holding a list. "<name>.SymbolCache: false" opts out of the
-        feature altogether - see _symbol_cache_enabled.
-
-        LSP has no "give me every symbol" request, only a search, and servers
-        differ on what an empty query means: rust-analyzer answers with the
-        workspace's types, Roslyn returns nothing at all. When the empty query
-        comes back empty we search for the selected text, falling back to the
-        word under the cursor - all such a server can do. Passing a query
-        explicitly ("<Name> symbols <text>" in the command panel) always
-        searches the server and bypasses the cache."""
+        """Open 10x's find-symbol panel on the project's symbols. An unqualified
+        call is served from the cache; a query ("<Name> symbols <text>") always
+        searches the server. Typing in the panel goes to _on_get_symbols."""
+        try:
+            self._panel_file = N10X.Editor.GetCurrentFilename() or ""
+        except Exception:
+            self._panel_file = ""
+        # A fresh panel session re-queries: the file may have changed since the
+        # last one, so previous answers for a filter are not to be trusted.
+        self._getsym_sent = None
+        self._getsym_rows = (None, [])
         if not self._ready():
             self.log("server not ready")
             return
@@ -3277,6 +3313,15 @@ class LanguageServerClient:
             self._symbol_cache_off()
             return
         ttl = self._symbol_cache_seconds()
+        if self._has_symbol_filter():
+            # Typing drives the panel from here, so open it now on whatever we
+            # hold. Waiting on a whole-project query first is what made the
+            # first use take seconds on a server that is still indexing.
+            rows = self._symbol_cache or self._pending_row(self._waiting_message())
+            self._present_symbols(rows, allow_empty=True)
+            if not self._symbol_cache or self._symbol_cache_stale():
+                self._refresh_symbol_cache()
+            return
         if ttl and self._symbol_cache:
             self._present_symbols(self._symbol_cache)
             if self._symbol_cache_stale():
@@ -3288,12 +3333,12 @@ class LanguageServerClient:
                 f"({self._scan_done}/{self._scan_total} files)...")
             return
         source = self._symbol_source()
-        # "documents" always scans. "auto" only scans once workspace/symbol has
-        # actually proved empty - scanning while its answer is still unknown
-        # would make "auto" mean "documents". If the scan can't start (no
-        # documentSymbol, no files) we fall through to the term search below.
+        # "documents" always scans. "auto" scans only once workspace/symbol has
+        # proved empty AND we have no live filtering to search with - otherwise
+        # typing in the panel queries the server, which is what it is for.
         if source == "documents" or (source == "auto"
-                                     and self._symbol_dump is False):
+                                     and self._symbol_dump is False
+                                     and not self._has_symbol_filter()):
             self._start_document_scan()
             if self._scan_active:
                 N10X.Editor.SetStatusBarText(
@@ -3873,6 +3918,186 @@ class LanguageServerClient:
         except Exception as e:
             self.log(f"workspace-opened handler failed: {e}")
 
+    # -- live find-symbol filtering ----------------------------------------
+
+    _GETSYM_LIMIT = 300              # rows handed back for one filter
+    _GETSYM_FRESH = 5.0              # how long "the panel is open" stays true
+
+    def _on_get_symbols(self, filter_text=None, symbols=None, *args):
+        """10x asks us for symbols each time the find-symbol filter changes.
+
+        Synchronous, so we answer from what we already hold and start a
+        workspace/symbol query for the typed text; its reply refreshes the
+        panel a moment later. That is what makes servers with a capped or empty
+        whole-project dump (rust-analyzer, Roslyn) usable - a search is what
+        workspace/symbol is actually for."""
+        if symbols is None:
+            symbols = []
+        try:
+            if not self._owns_symbol_panel():
+                return symbols
+            self._getsym_seen = time.time()
+            query = (filter_text or "").strip()
+            rows, how = self._rows_for_query(query), "cache"
+            # Short filters come off the cache. With no cache to fall back on
+            # (servers that never hand over a project list) we must still ask.
+            worth_asking = (len(query) >= self._symbol_filter_min_chars()
+                            or not self._symbol_cache)
+            if query and worth_asking and self._ready():
+                if self._symbol_filter_sync():
+                    # Answer in place: refreshing the panel afterwards would
+                    # clear the filter text the user has typed.
+                    got = self._query_symbols_sync(
+                        query, self._symbol_filter_wait_ms())
+                    if got is not None:
+                        rows, how = got, "server"
+                        self._getsym_rows = (query, got)
+                        self._getsym_sent = query
+                else:
+                    self._query_symbols(query)
+            if not rows:
+                # Nothing yet - say so rather than looking like "no matches".
+                rows = self._pending_row(self._waiting_message())
+                how = "waiting"
+            symbols.extend(rows[:self._GETSYM_LIMIT])
+            if self._verbose():
+                self.log(f"get-symbols {query!r} -> {len(rows)} row(s) ({how})")
+        except Exception as e:
+            self.log(f"get-symbols failed: {e}")
+        return symbols
+
+    def _has_symbol_filter(self):
+        """Whether 10x can hand us the find-symbol filter as it is typed. When
+        it can, a search answers the panel and there is nothing for a
+        whole-project scan to add."""
+        return getattr(N10X.Editor, "AddGetSymbolsFunction", None) is not None
+
+    def _symbol_filter_sync(self):
+        """"<name>.SymbolFilterSync" (default true): wait for the server's
+        answer inside the filter callback instead of refreshing the panel
+        afterwards. Refreshing resets the text you have typed."""
+        return self.setting("SymbolFilterSync", "true").strip().lower() != "false"
+
+    def _symbol_filter_min_chars(self):
+        """Shortest filter worth asking the server about. One or two characters
+        match half the project, so the cache answers those for free; the block
+        is spent where the query is actually selective."""
+        try:
+            return max(0, int(self.setting("SymbolFilterMinChars", "3")))
+        except (TypeError, ValueError):
+            return 3
+
+    def _symbol_filter_wait_ms(self):
+        """How long that wait may take. This blocks the editor, so keep it
+        short - a slow server should cost a stale list, not a frozen window."""
+        try:
+            return max(0, min(1000, int(self.setting("SymbolFilterWaitMs", "150"))))
+        except (TypeError, ValueError):
+            return 150
+
+    def _query_symbols_sync(self, query, timeout_ms):
+        """Send workspace/symbol and pump until it answers. BLOCKS the main
+        thread up to timeout_ms, which is why it is bounded and optional."""
+        holder = {}
+        rid = self._send_request(
+            "workspace/symbol", {"query": query},
+            lambda r, e: holder.update(rows=(r or []), err=e),
+            transform=self._symbol_items)
+        if rid is None:
+            return None
+        deadline = time.perf_counter() + timeout_ms / 1000.0
+        while "rows" not in holder and time.perf_counter() < deadline:
+            self.pump()
+            if "rows" in holder:
+                break
+            time.sleep(0.002)
+        if "rows" not in holder:
+            # It may still land later; the handler just records it.
+            self.pending[rid] = lambda r, e, q=query: self._on_symbol_query(
+                r, e, q, self._getsym_token)
+            if self._verbose():
+                self.log(f"symbol filter {query!r} timed out after {timeout_ms} ms")
+            return None
+        return holder.get("rows") or []
+
+    def _pending_row(self, message):
+        """One non-symbol row explaining why the panel is empty. Anchored to a
+        real file so selecting it cannot mislead, and never cached."""
+        path = self._panel_file
+        if not path or not os.path.isfile(path):
+            try:
+                path = N10X.Editor.GetCurrentFilename() or ""
+            except Exception:
+                path = ""
+        if not path or not os.path.isfile(path):
+            return []
+        return [(message, path, 0, 0)]
+
+    def _waiting_message(self):
+        """What to say while there is nothing to show yet."""
+        if self._scan_active and self._scan_total:
+            return (f"[{self.name}] scanning project - {self._scan_done} of "
+                    f"{self._scan_total} files...")
+        return f"[{self.name}] searching project symbols, please wait..."
+
+    def _owns_symbol_panel(self):
+        """Whether this client should answer for the panel now. Several clients
+        are usually registered, and only the one handling the file the panel was
+        opened from should contribute."""
+        try:
+            cur = N10X.Editor.GetCurrentFilename() or ""
+        except Exception:
+            cur = ""
+        # The panel may hold focus, in which case there is no current file and
+        # the one it was opened from is the best answer we have.
+        return self.handles(cur or self._panel_file)
+
+    def _rows_for_query(self, query):
+        """Best rows we can produce for `query` without waiting on the server:
+        the last answer if it was for this query, else the cache filtered."""
+        got_q, got_rows = self._getsym_rows
+        if query and got_q == query:
+            return got_rows
+        if not query:
+            return self._symbol_cache
+        needle = query.lower()
+        return [r for r in self._symbol_cache if needle in r[0].lower()]
+
+    def _query_symbols(self, query):
+        """Ask the server for symbols matching `query`, superseding any older
+        query. Skipped when we already asked for exactly this text."""
+        if query == self._getsym_sent:
+            return
+        self._getsym_sent = query
+        self._getsym_token += 1
+        token = self._getsym_token
+        self._send_request(
+            "workspace/symbol", {"query": query},
+            lambda r, e: self._on_symbol_query(r, e, query, token),
+            transform=self._symbol_items)
+
+    def _on_symbol_query(self, result, error, query, token):
+        if error or token != self._getsym_token:
+            return
+        rows = result or []
+        self._getsym_rows = (query, rows)
+        if self._symbol_filter_sync():
+            return          # the next keystroke will serve these; do not reopen
+        # Refresh only while the panel is plainly still up - calling Show when
+        # it is closed would open it again behind the user.
+        if time.time() - self._getsym_seen > self._GETSYM_FRESH:
+            return
+        show = getattr(N10X.Editor, "ShowFindSymbolPanel", None)
+        if not show or self._getsym_showing:
+            return
+        try:
+            self._getsym_showing = True     # Show may call us straight back
+            show(rows[:self._GETSYM_LIMIT])
+        except Exception as e:
+            self.log(f"ShowFindSymbolPanel refresh failed: {e}")
+        finally:
+            self._getsym_showing = False
+
     def _on_mouse_hover(self, pos):
         self.hover(pos)
 
@@ -3945,6 +4170,8 @@ class LanguageServerClient:
              self._on_mouse_hover),
             ("AddOnWorkspaceOpenedFunction", "RemoveOnWorkspaceOpenedFunction",
              self._on_workspace_opened),
+            ("AddGetSymbolsFunction", "RemoveGetSymbolsFunction",
+             self._on_get_symbols),
         ]
         # Wrapped in place so the same object is handed to Remove* later.
         self._hooks = [(a, r, self._timed(a[3:-8] if a.startswith("Add") else a, h))
