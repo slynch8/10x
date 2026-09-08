@@ -103,13 +103,11 @@
 #                           holds nothing between opens - every open then waits
 #                           on the server, and RefreshSymbols has nothing to
 #                           rebuild. Ignored when SymbolCache is "false".
-#     <name>.SlowMainThreadMs  Log a warning when one of our editor callbacks
-#                           holds the main thread longer than this many
-#                           milliseconds (default 8, i.e. half a 60fps frame).
-#                           0 turns the guard off. "<name> status" lists the
-#                           worst offenders seen so far. 10x only times
-#                           callbacks passed to CallOnMainThread, so without
-#                           this the update tick and input hooks go unmeasured.
+#     <name>.SlowMainThreadMs  Diagnostic, off by default (0). Set to a
+#                           millisecond budget (8 is half a 60fps frame) to log
+#                           which of our editor callbacks overran it, and which
+#                           phase of the update tick was to blame. "<name>
+#                           status" lists the worst offenders seen so far.
 #     <name>.LogVerbose     "true"/"false" - log server traffic to the output
 #                           panel (default false)
 #
@@ -145,15 +143,29 @@ import subprocess
 import N10X
 
 _NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
-# Biggest response we will parse. Parsing costs several times the wire size in
-# Python objects and seconds of main-thread CPU, so a server that answers an
-# empty workspace/symbol query with a whole huge project would stall the editor
-# - anything past this is drained and dropped instead (see _drain_oversize).
-# Well clear of normal traffic: a large completion or diagnostics reply is ~1 MB.
+# Windows thread priorities. Our threads inherit the editor's otherwise, so
+# they compete with its UI thread for CPU - moving work off the main thread
+# does not help if it just starves it instead.
+_PRIORITY_BELOW_NORMAL = -1
+_PRIORITY_LOWEST = -2
+
+
+def lower_thread_priority(level=_PRIORITY_BELOW_NORMAL):
+    """Drop the CALLING thread's priority. No-op off Windows or on failure."""
+    try:
+        import ctypes
+        k32 = ctypes.windll.kernel32
+        # HANDLE is pointer-sized; without this ctypes truncates it to int and
+        # the call silently fails on 64-bit.
+        k32.GetCurrentThread.restype = ctypes.c_void_p
+        k32.SetThreadPriority.argtypes = [ctypes.c_void_p, ctypes.c_int]
+        return bool(k32.SetThreadPriority(k32.GetCurrentThread(), level))
+    except Exception:
+        return False
+# Biggest response we will parse; past this it is dropped unparsed (see
+# _drain_oversize). Well clear of normal traffic - a big reply is ~1 MB.
 MAX_RESPONSE_BYTES = 32 * 1024 * 1024
-# Our own JSON-RPC error code for that drop, so a handler can tell it apart from
-# anything the server said.
-ERR_RESPONSE_TOO_LARGE = -32001
+ERR_RESPONSE_TOO_LARGE = -32001    # our own code for that drop
 _SEVERITY = {1: "Error", 2: "Warning", 3: "Info", 4: "Hint"}
 # LSP severity -> MSVC compiler keyword. 10x parses build output in the Visual
 # Studio "file(line,col): <keyword> CODE: message" style; error/warning/note are
@@ -203,14 +215,13 @@ def path_to_uri(path):
     return "file://" + "".join(safe)
 
 
-# Memoized: this is a per-character Python loop and the project-symbol path
-# calls it once per symbol over a file set that repeats heavily, where it was
-# 91% of the work. Bounded so a long session can't grow it without limit, but
-# sized above the file count of any dump that can reach us (MAX_RESPONSE_BYTES
-# caps a symbol reply at ~100k symbols): an LRU smaller than the working set
-# cycles without ever hitting.
+# Memoized: a per-character loop called once per symbol, over a file set that
+# repeats heavily. Sized above any project's file count - an LRU smaller than
+# the working set cycles without ever hitting.
 @functools.lru_cache(maxsize=65536)
 def uri_to_path(uri):
+    if not uri:
+        return ""          # os.path.normpath("") is ".", a directory - never a file
     if uri.startswith("file://"):
         uri = uri[len("file://"):]
     out = []
@@ -240,6 +251,14 @@ def path_within(directory, path):
         return d == p or os.path.commonpath([d, p]) == d
     except (ValueError, TypeError, OSError):
         return False
+
+
+def file_uri_path(uri):
+    """The local path for a file:// URI, or "" for anything else. A path that
+    names no real file can crash 10x's symbol panel, so filter here."""
+    if not uri or not uri.startswith("file://"):
+        return ""
+    return uri_to_path(uri)
 
 
 def find_project_root(file_path, markers):
@@ -434,6 +453,11 @@ def offset_to_pos(text, offset):
     return {"line": line, "character": offset - (last_nl + 1)}
 
 
+# Block size for the prefix/suffix scan below. Comparing slices runs at C
+# speed; only the one block that differs is then walked character by character.
+_DIFF_BLOCK = 4096
+
+
 def incremental_change(old, new):
     """Single LSP incremental contentChange describing old -> new (a range
     replace covering everything between the common prefix and common suffix),
@@ -442,12 +466,18 @@ def incremental_change(old, new):
     if old == new:
         return None
     old_len, new_len = len(old), len(new)
+    limit = min(old_len, new_len)
+    b = _DIFF_BLOCK
     p = 0
-    max_p = min(old_len, new_len)
-    while p < max_p and old[p] == new[p]:
+    while p + b <= limit and old[p:p + b] == new[p:p + b]:
+        p += b
+    while p < limit and old[p] == new[p]:
         p += 1
     s = 0
-    max_s = min(old_len, new_len) - p
+    max_s = limit - p
+    while (s + b <= max_s
+           and old[old_len - s - b:old_len - s] == new[new_len - s - b:new_len - s]):
+        s += b
     while s < max_s and old[old_len - 1 - s] == new[new_len - 1 - s]:
         s += 1
     return {"range": {"start": offset_to_pos(old, p),
@@ -522,9 +552,9 @@ class LSPConnection:
             self._log("--> " + body[:300])
 
     def _write_loop(self):
-        # Runs on a background thread: the blocking write/flush happens here, off
-        # the main thread. No N10X.Editor calls (main-thread only) - logging uses
-        # plain print via self._log, which is thread-safe enough.
+        # Blocking write/flush happens here, off the main thread. No
+        # N10X.Editor calls - logging goes through plain print.
+        lower_thread_priority()
         stream = self.proc.stdin
         while True:
             chunk = self.outgoing.get()
@@ -539,12 +569,9 @@ class LSPConnection:
                 break
 
     def request(self, method, params, transform=None):
-        """Send a request, returning its id so the caller can match a reply.
-
-        transform, if given, is applied to the result on the READER thread
-        before the reply is queued, so heavy post-processing never lands on the
-        editor's main thread. It must be pure and touch no N10X.Editor API.
-        Registered before the write so a fast reply can't beat it."""
+        """Send a request, returning its id. `transform` runs on the READER
+        thread before the reply is queued - keep it pure, no N10X.Editor. It is
+        registered before the write so a fast reply cannot beat it."""
         rid = self._next_id
         self._next_id += 1
         if transform is not None:
@@ -559,10 +586,9 @@ class LSPConnection:
             return self._transforms.pop(rid, None)
 
     def _apply_transform(self, msg):
-        """Reader thread: turn a reply's raw result into whatever the caller
-        actually wants, before the main thread ever sees it. A transform that
-        raises becomes an error reply rather than passing raw data through -
-        the handler is written against the transformed shape."""
+        """Reader thread: reshape a reply before the main thread sees it. A
+        transform that raises becomes an error reply, never raw data - handlers
+        are written against the transformed shape."""
         rid = msg.get("id")
         if rid is None or "result" not in msg or "method" in msg:
             return msg
@@ -590,6 +616,9 @@ class LSPConnection:
     # -- incoming ----------------------------------------------------------
 
     def _read_loop(self):
+        # Below normal: this parses replies and builds symbol rows, which on a
+        # big project is sustained CPU the editor should always outrank.
+        lower_thread_priority()
         stream = self.proc.stdout
         try:
             while True:
@@ -631,14 +660,9 @@ class LSPConnection:
             self.incoming.put({"__lsp_internal__": "exited"})
 
     def _drain_oversize(self, stream, length):
-        """Throw away a response too big to parse, without ever holding it.
-
-        Parsing one costs several times its wire size in Python objects and
-        seconds of CPU, which is how a huge project turns a symbol dump into a
-        stalled editor. The bytes still have to come off the pipe or the stream
-        desyncs, so read past them in fixed blocks and keep only enough of the
-        head to work out which request died - the waiting handler has to be
-        failed rather than left pending forever."""
+        """Throw away a response too big to parse, without ever holding it. The
+        bytes must still leave the pipe or the stream desyncs; the head is kept
+        only to fail the handler waiting on it."""
         head, got = b"", 0
         while got < length:
             chunk = stream.read(min(1 << 20, length - got))
@@ -658,6 +682,7 @@ class LSPConnection:
         self.incoming.put({"__lsp_oversize__": {"id": rid, "length": length}})
 
     def _stderr_loop(self):
+        lower_thread_priority(_PRIORITY_LOWEST)
         # Runs on a background thread, so it must not call any N10X.Editor API
         # (those are main-thread only). Hand lines to the main thread via the
         # incoming queue, where they are logged from pump().
@@ -850,21 +875,30 @@ class LanguageServerClient:
         self._symbol_dump_tries = 0      # empty dump replies seen so far
         # Project-wide documentSymbol scan (see _start_document_scan).
         self._scan_active = False
-        self._scan_queue = []            # files still to visit
+        self._scan_gen = 0               # bumped on abort; stale readers stop
+        self._scan_reader_done = False   # the prefetch thread reached the end
         self._scan_rows = []             # rows gathered so far
         self._scan_opened = set()        # uris we opened and must close again
         self._scan_inflight = 0
         self._scan_total = 0
         self._scan_done = 0              # files whose reply has come back
         self._scan_started = 0.0
-        self._scan_ready = None          # queue of (path, text) from the reader
+        self._scan_progress = 0.0        # last time the scan moved at all
+        self._scan_ready = None          # bounded queue of (path, uri, text)
         # Off-main-thread work, delivered back through _drain_background().
         self._bg_results = queue.Queue()
         self._bg_busy = set()            # tags with a job in flight
         self._symbol_warm_due = 0.0      # time.time() to (re)try filling it
-        self._slow_ms_flag = 8.0         # cached SlowMainThreadMs
+        self._slow_ms_flag = 0.0         # cached SlowMainThreadMs; 0 = off
         self._slow_stats = {}            # handler -> [calls over, worst ms, last log]
         self._tick_phases = {}           # phase -> ms, for the last update tick
+        self._argv_cache = None          # (Command setting, resolved argv)
+        # Set once we know which thread the editor calls us on - NOT here:
+        # 10x runs the script on one thread and dispatches CallOnMainThread and
+        # the hooks on another, so __init__'s thread is the wrong answer.
+        self._main_thread = None
+        self._warned_off_thread = False
+        self._spawn_gen = 0              # bumped on teardown; stale spawns drop
         self._registered = False         # register() wired the editor hooks up
         self._hooks = None               # (add, remove, handler) for those hooks
 
@@ -874,7 +908,15 @@ class LanguageServerClient:
         _log(self.name, msg)
 
     def setting(self, key, default=""):
-        # N10X.Editor.* is main-thread only; never call this from a worker thread.
+        """Read "<name>.<key>". Main thread only: off-thread this corrupts the
+        interpreter's error state rather than raising, so workers must be handed
+        setting values by their caller."""
+        if self._main_thread is not None and threading.get_ident() != self._main_thread:
+            if not self._warned_off_thread:
+                self._warned_off_thread = True
+                self.log(f"BUG: setting('{key}') read off the main thread; "
+                         f"pass the value in from the caller instead")
+            return default
         val = N10X.Editor.GetSetting(f"{self.name}.{key}")
         return val if val else default
 
@@ -882,9 +924,9 @@ class LanguageServerClient:
         """Refresh cached settings that hot paths read. Main thread only."""
         self._verbose_flag = self.setting("LogVerbose") == "true"
         try:
-            self._slow_ms_flag = max(0.0, float(self.setting("SlowMainThreadMs", "8")))
+            self._slow_ms_flag = max(0.0, float(self.setting("SlowMainThreadMs", "0")))
         except (TypeError, ValueError):
-            self._slow_ms_flag = 8.0
+            self._slow_ms_flag = 0.0
 
     def _verbose(self):
         # Returns the cached flag so it is safe to call from any thread (e.g. the
@@ -893,12 +935,8 @@ class LanguageServerClient:
 
     def _timed(self, name, fn):
         """Wrap an editor callback so it reports when it overruns its budget.
-
-        Everything the editor calls us on runs on its main thread, so anything
-        slow here is a stutter the user sees. 10x only instruments callbacks
-        passed to CallOnMainThread, which leaves the update tick and the input
-        hooks - the ones that fire constantly - unmeasured. Two perf_counter
-        calls per invocation is a price worth paying to know."""
+        10x only times CallOnMainThread callbacks, leaving the update tick and
+        input hooks - the ones that fire constantly - unmeasured."""
         def wrapper(*args, **kwargs):
             if not self._slow_ms_flag:
                 return fn(*args, **kwargs)
@@ -935,18 +973,29 @@ class LanguageServerClient:
 
     # -- lifecycle ---------------------------------------------------------
 
-    def _server_argv(self):
-        cmd = self.setting("Command").strip()
+    def _resolve_argv(self, cmd):
+        """Resolve the configured command to an argv. Worker-safe: takes the
+        setting's value rather than reading it, since the PATH scan is slow
+        enough to want off the main thread."""
         if cmd:
             return cmd.split()
         parts = self.default_command.split()
-        if parts:
-            exe = shutil.which(parts[0])
-            if exe:
-                return [exe] + parts[1:]
+        exe = shutil.which(parts[0]) if parts else None
+        if exe:
+            return [exe] + parts[1:]
         if self.fallback_argv:
             return list(self.fallback_argv)
         return parts
+
+    def _server_argv(self):
+        """The resolved argv, cached. Only for callers that can afford a PATH
+        scan; startup resolves on a worker instead (see ensure_started)."""
+        cmd = self.setting("Command").strip()
+        if self._argv_cache is not None and self._argv_cache[0] == cmd:
+            return list(self._argv_cache[1])
+        argv = self._resolve_argv(cmd)
+        self._argv_cache = (cmd, list(argv))
+        return argv
 
     def is_enabled(self):
         """Whether this client is turned on. Opt-in: a server stays off (and has
@@ -1018,11 +1067,8 @@ class LanguageServerClient:
 
     @staticmethod
     def _editor_workspace_root():
-        """The directory of the workspace 10x has open, or "" if none.
-
-        GetWorkspaceFilename gives the workspace/solution file the user actually
-        opened (10x's own ".10x", or a ".sln"), so its directory is the project
-        being worked on."""
+        """The directory of the workspace 10x has open, or "" if none - the
+        project the user actually opened, unlike a walk up from a file."""
         try:
             ws = (N10X.Editor.GetWorkspaceFilename() or "").strip()
         except Exception:
@@ -1033,51 +1079,84 @@ class LanguageServerClient:
         return d if os.path.isdir(d) else ""
 
     def _resolve_root(self, root_hint):
-        """Where to root the language server.
-
-        10x's own workspace wins whenever the file we're starting for lives
-        inside it. Walking up from that file instead stops at the innermost
-        marker, which roots a nested crate or .csproj at itself and hides the
-        rest of the project from workspace/symbol - and since the root is fixed
-        at startup, whichever file you happened to open first would decide what
-        find-symbol can ever see. A file outside the workspace (a dependency's
-        source, say) still falls back to the walk."""
+        """Where to root the server: 10x's workspace when the file is inside it,
+        else a marker walk up from the file. The walk stops at the innermost
+        marker, which would root a nested crate at itself."""
         ws = self._editor_workspace_root()
         if ws and path_within(ws, root_hint):
             return ws
         return find_project_root(root_hint, self.root_markers)
 
     def ensure_started(self, root_hint):
+        """Make sure the server is coming up; True only once connected. The
+        spawn runs on a worker, so this returns False meanwhile - callers treat
+        that as "not yet" and _on_initialized opens the files."""
         if self.conn and self.conn.alive:
             return True
         if not self.is_enabled():
             return False
+        if "spawn" in self._bg_busy:
+            return False                 # already on its way
 
+        # Settings and editor state have to be read here, on the main thread.
+        # Resolving them against the filesystem does not, so that goes below.
         self.root_path = self._resolve_root(root_hint)
         self.root_uri = path_to_uri(self.root_path)
-        argv = self._server_argv()
-        if not argv:
-            self.log("no server command configured; set " + self.name + ".Command")
-            return False
+        cmd = self.setting("Command").strip()
+        cached = (list(self._argv_cache[1])
+                  if self._argv_cache is not None and self._argv_cache[0] == cmd
+                  else None)
         cwd = self._resolve_server_cwd()
         env = self._resolve_server_env()
-        try:
-            self.conn = LSPConnection(argv, cwd, log=self.log,
-                                      verbose=self._verbose, env=env)
-        except FileNotFoundError:
-            self.log(f"could not launch server: '{argv[0]}' not found. "
-                     f"Install it or set {self.name}.Command.")
-            self.conn = None
-            self.disable()
-            return False
-        except Exception as e:
-            self.log(f"failed to start server: {e}")
-            self.conn = None
-            return False
+        log, verbose, gen = self.log, self._verbose, self._spawn_gen
 
+        def spawn():
+            # Worker thread: no N10X.Editor here. Both the PATH scan and the
+            # process launch happen out here; the exception comes back as data
+            # so the main thread can decide what to do about it.
+            try:
+                argv = cached if cached is not None else self._resolve_argv(cmd)
+                if not argv:
+                    return None, None, None
+                return LSPConnection(argv, cwd, log=log, verbose=verbose,
+                                     env=env), None, argv
+            except Exception as e:
+                return None, e, None
+
+        self._run_off_thread(
+            "spawn", spawn, lambda res: self._on_server_spawned(res, cmd, gen))
+        return False
+
+    def _on_server_spawned(self, result, cmd, gen):
+        """Main thread: adopt the server the worker launched, or report why it
+        could not be."""
+        conn, err, argv = result
+        if err is None and conn is None:
+            self.log("no server command configured; set " + self.name + ".Command")
+            return
+        if argv:
+            self._argv_cache = (cmd, list(argv))
+        if err is not None:
+            if isinstance(err, FileNotFoundError):
+                self.log(f"could not launch server: "
+                         f"'{(argv or [cmd or self.default_command])[0]}' not "
+                         f"found. Install it or set {self.name}.Command.")
+                self.disable()
+            else:
+                self.log(f"failed to start server: {err}")
+            return
+        # A restart or shutdown while we were launching leaves this one orphaned.
+        stale = (gen != self._spawn_gen or not self.is_enabled()
+                 or (self.conn and self.conn.alive))
+        if stale:
+            try:
+                conn.shutdown()
+            except Exception:
+                pass
+            return
+        self.conn = conn
         self.log(f"started '{' '.join(argv)}' (root: {self.root_path})")
         self._send_initialize()
-        return True
 
     def _send_initialize(self):
         params = {
@@ -1197,10 +1276,14 @@ class LanguageServerClient:
     def restart(self):
         self._teardown()
         fn = N10X.Editor.GetCurrentFilename()
-        if self.handles(fn) and self.ensure_started(fn):
-            self.log("restarted")
+        if self.handles(fn):
+            # Comes up on a worker thread; _on_server_spawned logs when it does.
+            self.ensure_started(fn)
 
     def _teardown(self):
+        # Any spawn still in flight belongs to the previous generation now.
+        self._spawn_gen += 1
+        self._argv_cache = None
         if self.conn:
             self.conn.shutdown()
         self.conn = None
@@ -1232,8 +1315,10 @@ class LanguageServerClient:
         self._symbol_dump_tries = 0
         self._symbol_warm_due = 0.0
         # The connection is gone, so nothing to close - just drop the state.
+        self._scan_gen += 1
         self._scan_active = False
-        self._scan_queue = []
+        self._scan_ready = None
+        self._scan_reader_done = False
         self._scan_rows = []
         self._scan_opened = set()
         self._scan_inflight = 0
@@ -1306,12 +1391,9 @@ class LanguageServerClient:
                              {"textDocument": {"uri": uri}})
 
     def _buffer_may_have_changed(self, doc):
-        """Whether it is worth reading the whole buffer again.
-
-        GetFileText costs time proportional to the file - tens of milliseconds
-        on a large one - and sync_current runs several times a second, so doing
-        it unconditionally spends most of a frame on re-reading text that has
-        not changed. These signals are all O(1)-ish by comparison."""
+        """Whether it is worth reading the whole buffer again. GetFileText
+        costs time proportional to the file and this runs several times a
+        second, so these cheaper signals gate it."""
         if self._buffer_dirty:
             return True
         try:
@@ -1336,11 +1418,9 @@ class LanguageServerClient:
         return (time.time() - doc.get("synced_at", 0.0)) >= self._sync_safety
 
     def sync_current(self, force=False):
-        """Push the current buffer to the server as a full didChange if changed.
-
-        `force` means the caller is about to ask a content-sensitive question,
-        not that the buffer must be re-read: when nothing suggests an edit the
-        server's copy is already right and reading it again is wasted work."""
+        """Push the current buffer to the server as a didChange if it changed.
+        `force` means the caller wants current content, not that the buffer must
+        be re-read - unchanged means the server's copy is already right."""
         if not self._ready():
             return
         filename = N10X.Editor.GetCurrentFilename()
@@ -1543,9 +1623,11 @@ class LanguageServerClient:
                     self._last_watch_scan = time.time()
                     # Seeded off-thread: on a few thousand files the walk is a
                     # quarter of a second, and this fires during startup.
-                    self._run_off_thread("watch-scan",
-                                         self._snapshot_watched_files,
-                                         self._on_watch_baseline)
+                    ignore = self._all_ignore_dirs()
+                    self._run_off_thread(
+                        "watch-scan",
+                        lambda ig=ignore: self._snapshot_watched_files(ig),
+                        self._on_watch_baseline)
                 if self._verbose():
                     self.log("file watching enabled (server registered "
                              "workspace/didChangeWatchedFiles)")
@@ -1570,15 +1652,14 @@ class LanguageServerClient:
         names = {p.strip() for p in re.split(r"[;,]", extra) if p.strip()}
         return self.ignore_dirs | names
 
-    def _snapshot_watched_files(self):
-        """Map every workspace file we handle to its mtime. Cheap enough to run
-        on a few-second cadence; heavy/irrelevant directories are skipped. Used
-        as the baseline for detecting create/change/delete between scans."""
+    def _snapshot_watched_files(self, ignore):
+        """Map every workspace file we handle to its mtime, as the baseline for
+        detecting changes. Runs on a worker, so `ignore` must come from the
+        caller - resolving it reads a setting."""
         snap = {}
         root = self.root_path
         if not root or not os.path.isdir(root):
             return snap
-        ignore = self._all_ignore_dirs()
         for dirpath, dirnames, filenames in os.walk(root):
             # Prune noisy directories in place so os.walk never descends them.
             dirnames[:] = [d for d in dirnames if d not in ignore]
@@ -1593,19 +1674,17 @@ class LanguageServerClient:
         return snap
 
     def _scan_watched_files(self, now):
-        """Diff the workspace against the last snapshot and tell the server
-        about any created/changed/deleted files it cares about. This is what
-        keeps ols's index correct for files edited while not open (e.g. a
-        project-wide rename touching an unopened definition file).
-
-        The walk itself runs on a worker thread - on a few thousand files it is
-        hundreds of milliseconds, and this runs every couple of seconds."""
+        """Tell the server about files created/changed/deleted on disk, which
+        keeps its index right for files edited while not open. The walk runs on
+        a worker: it is slow and this fires every couple of seconds."""
         if not (self._watch_enabled and self._ready() and self._watch_baseline):
             return
         if now - self._last_watch_scan < self._watch_interval:
             return
         self._last_watch_scan = now
-        self._run_off_thread("watch-scan", self._snapshot_watched_files,
+        ignore = self._all_ignore_dirs()
+        self._run_off_thread("watch-scan",
+                             lambda ig=ignore: self._snapshot_watched_files(ig),
                              self._on_watch_snapshot)
 
     def _on_watch_baseline(self, new):
@@ -2471,29 +2550,21 @@ class LanguageServerClient:
             self._present_symbols(items, "function")
 
     def _symbol_items(self, result):
-        """A workspace/symbol result as sorted (name, path, line, char) tuples -
-        the shape the find-symbol panel takes.
-
-        Runs on the READER thread as a request transform, because on a large
-        project this is hundreds of milliseconds of work and the editor must
-        never wait for it. Keep it pure: no self state, no N10X.Editor calls.
-
-        It returns a flat SymbolInformation[] (or, in LSP 3.17, a
-        WorkspaceSymbol[]); both carry a "location". A WorkspaceSymbol may give
-        only {"uri": ...} with no range (it expects a workspaceSymbol/resolve
-        round-trip) - we just land at the top of that file in that case. Every
-        symbol kind is kept here (this is the project-wide index), unlike
-        list_functions which is functions only."""
+        """A workspace/symbol reply as sorted (name, path, line, char) rows.
+        Runs on the READER thread as a request transform - keep it pure. A
+        WorkspaceSymbol may carry no range, in which case we land at line 0."""
         seen, items = set(), []
         for sym in result or []:
             loc = sym.get("location", {}) or {}
-            path = uri_to_path(loc.get("uri", ""))
+            # Anything that is not a real file on disk is dropped - see
+            # file_uri_path. A bad filename here can crash the editor.
+            path = file_uri_path(loc.get("uri", ""))
             if not path:
                 continue
             rng = loc.get("range", {}) or {}
             start = rng.get("start", {})
-            line = start.get("line", 0)
-            index = start.get("character", 0)
+            line = max(0, start.get("line", 0) or 0)
+            index = max(0, start.get("character", 0) or 0)
             key = (path, line, index)
             if key in seen:
                 continue
@@ -2570,11 +2641,9 @@ class LanguageServerClient:
         self._note_dump_filled(items)
 
     def _note_dump_too_large(self, error):
-        """Give up on whole-workspace dumps when one came back too big to parse.
-
-        _symbol_dump is the "this server won't hand over the workspace" flag, and
-        a project too big to parse is the same situation from here: the panel
-        falls back to searching for a term, which is bounded."""
+        """Give up on whole-workspace dumps when one came back too big to
+        parse. Reuses _symbol_dump: from here it is the same situation as a
+        server that will not dump, and the fallback term search is bounded."""
         if (error or {}).get("code") != ERR_RESPONSE_TOO_LARGE:
             return
         self._symbol_dump = False
@@ -2589,21 +2658,9 @@ class LanguageServerClient:
             f"'{self.name} symbols <text>'")
 
     def _symbol_cache_enabled(self):
-        """"<name>.SymbolCache" (default true): whether we keep a project-wide
-        symbol list for the find-symbol panel at all.
-
-        Turning it off is the way to opt out of the whole feature - the list is
-        a copy of every symbol in the project, refreshed in the background, and
-        on a big project that is real memory and real server work. The panel
-        cannot work without it (it filters the list it is handed), so
-        find-symbol goes with it - we still claim the FindSymbol command and
-        say why, rather than let 10x fall back to its own panel, which has
-        nothing of value for a file the server handles. The explicit
-        "<name> symbols <text>" search still works, being a one-shot server
-        query that keeps nothing.
-
-        Drops whatever is cached when it sees the setting turned off, so the
-        memory goes back without waiting for a restart."""
+        """"<name>.SymbolCache" (default true). Off means no cached list, and
+        find-symbol goes with it since the panel filters what it is handed;
+        "<name> symbols <text>" still works. Drops the cache when turned off."""
         on = self.setting("SymbolCache", "true").strip().lower() != "false"
         if not on and self._symbol_cache:
             self._symbol_cache = []
@@ -2646,6 +2703,7 @@ class LanguageServerClient:
         self._bg_busy.add(tag)
 
         def work():
+            lower_thread_priority(_PRIORITY_LOWEST)   # nothing waits on these
             try:
                 res, err = fn(), None
             except Exception as e:                # noqa: BLE001 - reported below
@@ -2680,18 +2738,21 @@ class LanguageServerClient:
     # in whatever file it is asked about. The cost is a request per file, and
     # the file has to be open on the server first, so the scan is paced across
     # update ticks and closes each file behind it.
-    _SCAN_POPS_PER_TICK = 8            # files considered per tick, sent or skipped
-    _SCAN_MAX_INFLIGHT = 4             # documentSymbol requests outstanding
-    _SCAN_BYTES_PER_TICK = 256 * 1024  # ceiling on file reading per tick
+    _SCAN_POPS_PER_TICK = 8            # files handed to the server per tick
+    # Requests outstanding. Kept low: each one is a file open on the server,
+    # and a wider window drives its peak memory up sharply.
+    _SCAN_MAX_INFLIGHT = 4
+    # Files read ahead of the main thread, bounded so our own peak memory does
+    # not scale with the project.
+    _SCAN_PREFETCH = 32
+    # Give up if nothing moves for this long. A server that drops a reply would
+    # otherwise leave the scan running for ever, and no later one could start.
+    _SCAN_STALL_SECONDS = 60.0
 
     def _symbol_source(self):
-        """"<name>.SymbolSource": where the find-symbol list comes from.
-
-        "workspace" asks the server (one request, subject to whatever its
-        project index covers); "documents" scans the project's files with
-        documentSymbol, which sees everything but costs a request per file;
-        "auto" uses workspace/symbol and falls back to the scan once the
-        server's index proves empty. Default per client (see symbol_source)."""
+        """"<name>.SymbolSource": "workspace" (one workspace/symbol request),
+        "documents" (documentSymbol per file - complete, a request each), or
+        "auto" (workspace/symbol, falling back to the scan when it is empty)."""
         val = (self.setting("SymbolSource", self.symbol_source)
                or "auto").strip().lower()
         return val if val in ("auto", "workspace", "documents") else "auto"
@@ -2699,9 +2760,8 @@ class LanguageServerClient:
     @staticmethod
     def _document_symbol_rows(result, default_path):
         """One file's documentSymbol reply as (name, path, line, char) rows,
-        children included - the shape 10x's find-symbol panel takes, so the
-        cached list can be handed over without touching it again. Runs on the
-        READER thread as a request transform: keep it pure."""
+        children included - the shape the panel takes, so the cache needs no
+        further work. Runs on the READER thread: keep it pure."""
         rows = []
 
         def walk(nodes, container=""):
@@ -2709,7 +2769,7 @@ class LanguageServerClient:
                 name = node.get("name") or ""
                 if "location" in node:            # SymbolInformation
                     loc = node.get("location", {}) or {}
-                    path = uri_to_path(loc.get("uri", "")) or default_path
+                    path = file_uri_path(loc.get("uri", "")) or default_path
                     rng = loc.get("range") or {}
                     cont = node.get("containerName") or container
                 else:                             # DocumentSymbol
@@ -2717,10 +2777,11 @@ class LanguageServerClient:
                     rng = node.get("selectionRange") or node.get("range") or {}
                     cont = container
                 start = rng.get("start", {})
-                line = start.get("line", 0)
-                ch = start.get("character", 0)
-                rows.append((LanguageServerClient._qualified_name(name, cont),
-                             path, line, ch))
+                line = max(0, start.get("line", 0) or 0)
+                ch = max(0, start.get("character", 0) or 0)
+                if path:
+                    rows.append((LanguageServerClient._qualified_name(name, cont),
+                                 path, line, ch))
                 # Members are qualified by the type/namespace holding them.
                 walk(node.get("children") or [], name)
 
@@ -2729,9 +2790,8 @@ class LanguageServerClient:
 
     def _start_document_scan(self, reason=""):
         """Begin walking the project, asking each file for its symbols.
-
-        Enumerating the workspace and reading the files both happen on worker
-        threads; the main thread only sends the requests and collects rows."""
+        Enumerating and reading happen on workers; the main thread only sends
+        requests and collects rows."""
         if self._scan_active or not self._ready():
             return
         if self.server_caps and not self.server_caps.get("documentSymbolProvider"):
@@ -2742,61 +2802,94 @@ class LanguageServerClient:
         # not touch N10X.Editor, and both of these are settings lookups.
         limit = self._max_file_bytes()
         already_open = set(self.docs) | set(self._skipped_docs)
+        ignore = self._all_ignore_dirs()
         self._scan_active = True
         self._scan_started = time.time()
+        self._scan_progress = self._scan_started
         self._scan_reason = reason
         # None means "enumerating": the pump must not mistake an empty queue
         # for a finished scan before the file list has arrived.
-        self._scan_queue = None
+        self._scan_ready = None
+        self._scan_reader_done = False
         self._scan_done = 0
         self._scan_total = 0
+        self._scan_gen += 1
+        gen = self._scan_gen
         self._run_off_thread(
             "scan-enumerate",
-            lambda: self._collect_scan_files(limit, already_open),
-            self._on_scan_files)
+            lambda: self._collect_scan_files(ignore),
+            lambda paths: self._on_scan_files(paths, limit, already_open, gen))
 
-    def _collect_scan_files(self, limit, already_open):
-        """Worker thread: enumerate the project and read every file we will
-        need, so the main thread only has to hand them to the server."""
-        files = sorted(self._snapshot_watched_files())
-        ready = []
-        for path in files:
+    def _collect_scan_files(self, ignore):
+        """Worker thread: just the file list. Reading them is the prefetch
+        thread's job, so we never hold the whole project's text at once."""
+        return sorted(self._snapshot_watched_files(ignore))
+
+    def _scan_reader(self, paths, limit, already_open, gen):
+        """Prefetch thread: read files a little ahead of the main thread. The
+        bounded queue parks this when the editor is not consuming, so peak
+        memory does not scale with the project."""
+        lower_thread_priority(_PRIORITY_LOWEST)   # background indexing only
+        q = self._scan_ready
+        queued = 0
+        for path in paths:
+            if not self._scan_active or gen != self._scan_gen:
+                return
             uri = path_to_uri(path)
             if uri in already_open:
-                ready.append((path, uri, None))   # server already has it
-                continue
-            try:
-                with open(path, encoding="utf-8", errors="replace") as fh:
-                    text = fh.read()
-            except OSError:
-                continue
-            if limit and len(text.encode("utf-8", "ignore")) > limit:
-                continue
-            ready.append((path, uri, text))
-        return ready
+                item = (path, uri, None)      # the server already has this one
+            else:
+                try:
+                    with open(path, encoding="utf-8", errors="replace") as fh:
+                        text = fh.read()
+                except OSError:
+                    continue
+                if limit and len(text.encode("utf-8", "ignore")) > limit:
+                    continue
+                item = (path, uri, text)
+            while True:
+                if not self._scan_active or gen != self._scan_gen:
+                    return
+                try:
+                    q.put(item, timeout=0.2)
+                    queued += 1
+                    break
+                except queue.Full:
+                    continue
+        try:
+            # The count is what was really queued: files skipped as unreadable
+            # or oversized never reach the editor, so paths would overstate it.
+            q.put(("__end__", queued), timeout=2.0)
+        except Exception:
+            pass
 
-    def _on_scan_files(self, ready):
-        if not self._scan_active:
+    def _on_scan_files(self, paths, limit, already_open, gen):
+        if not self._scan_active or gen != self._scan_gen:
             return                      # aborted while we were enumerating
-        if not ready:
+        if not paths:
             self._scan_active = False
             return
-        self._scan_queue = ready
-        self._scan_queue.reverse()      # popped from the end, so keep file order
         self._scan_rows = []
         self._scan_inflight = 0
         self._scan_done = 0
-        self._scan_total = len(ready)
+        self._scan_total = len(paths)
+        self._scan_reader_done = False
+        self._scan_ready = queue.Queue(maxsize=self._SCAN_PREFETCH)
+        threading.Thread(
+            target=self._scan_reader,
+            args=(paths, limit, already_open, gen), daemon=True).start()
         reason = getattr(self, "_scan_reason", "")
-        self.log(f"scanning {len(ready)} file(s) for project symbols"
+        self.log(f"scanning {len(paths)} file(s) for project symbols"
                  f"{' (' + reason + ')' if reason else ''}")
 
     def _abort_document_scan(self):
         self._scan_reason = ""
+        self._scan_gen += 1             # tells the prefetch thread to stop
         for uri in list(self._scan_opened):
             self._close_scanned(uri)
         self._scan_active = False
-        self._scan_queue = []
+        self._scan_ready = None
+        self._scan_reader_done = False
         self._scan_rows = []
         self._scan_inflight = 0
 
@@ -2810,7 +2903,7 @@ class LanguageServerClient:
             self.conn.notify("textDocument/didClose",
                              {"textDocument": {"uri": uri}})
 
-    def _scan_one(self, entry, order):
+    def _scan_one(self, entry):
         """Hand one already-read file to the server. Editor/IO work is done:
         this is a notify and a request, nothing more."""
         path, uri, text = entry
@@ -2821,7 +2914,7 @@ class LanguageServerClient:
             self._scan_opened.add(uri)
         rid = self._send_request(
             "textDocument/documentSymbol", {"textDocument": {"uri": uri}},
-            lambda r, e, u=uri, o=order: self._on_scan_symbols(r, e, u, o),
+            lambda r, e, u=uri: self._on_scan_symbols(r, e, u),
             transform=lambda r, pth=path: self._document_symbol_rows(r, pth))
         if rid is None:
             self._close_scanned(uri)
@@ -2832,38 +2925,54 @@ class LanguageServerClient:
     def _pump_document_scan(self):
         """Advance the scan a little. The files are already read, so all this
         does is send - kept rationed anyway so a tick stays predictable."""
-        if not self._scan_active or self._scan_queue is None:
+        if not self._scan_active or self._scan_ready is None:
             return
         if not self._ready():
             self._abort_document_scan()
             return
         for _ in range(self._SCAN_POPS_PER_TICK):
-            if (not self._scan_queue
-                    or self._scan_inflight >= self._SCAN_MAX_INFLIGHT):
+            if self._scan_inflight >= self._SCAN_MAX_INFLIGHT:
                 break
-            order = self._scan_total - len(self._scan_queue)
-            self._scan_one(self._scan_queue.pop(), order)
-        if not self._scan_queue and not self._scan_inflight:
+            try:
+                item = self._scan_ready.get_nowait()
+            except queue.Empty:
+                break                   # the reader has not caught up yet
+            if item and item[0] == "__end__":
+                self._scan_reader_done = True
+                self._scan_total = item[1]
+                break
+            self._scan_one(item)
+            self._scan_progress = time.time()
+        if (self._scan_reader_done and not self._scan_inflight
+                and self._scan_ready.empty()):
             self._finish_document_scan()
+        elif time.time() - self._scan_progress > self._SCAN_STALL_SECONDS:
+            self.log(f"symbol scan stalled with {self._scan_inflight} request(s) "
+                     f"outstanding; giving up so a later one can run")
+            self._abort_document_scan()
 
-    def _on_scan_symbols(self, result, error, uri, order=0):
+    def _on_scan_symbols(self, result, error, uri):
         self._scan_inflight = max(0, self._scan_inflight - 1)
         self._close_scanned(uri)
         self._scan_done += 1
+        self._scan_progress = time.time()
         if not error and result:
             # Appended as each file lands, so finishing costs nothing. Files go
             # out in order with only a few requests in flight, so the list ends
             # up in roughly file order; the panel filters on what you type, so
             # exact ordering does not matter enough to sort for.
             self._scan_rows.extend(result)
-        if self._scan_active and not self._scan_queue and not self._scan_inflight:
+        if (self._scan_active and self._scan_reader_done
+                and not self._scan_inflight
+                and self._scan_ready is not None and self._scan_ready.empty()):
             self._finish_document_scan()
 
     def _finish_document_scan(self):
         rows, total = self._scan_rows, self._scan_total
         took = time.time() - self._scan_started
         self._scan_active = False
-        self._scan_queue = []
+        self._scan_ready = None
+        self._scan_reader_done = False
         self._scan_rows = []
         self._scan_inflight = 0
         if not rows:
@@ -2877,11 +2986,9 @@ class LanguageServerClient:
                  f"in {took:.1f}s")
 
     def _note_dump_filled(self, items):
-        """Record a successful whole-workspace dump.
-
-        While the symbol count is still climbing, line up another pass: the
-        server keeps indexing after it first answers, and without this an early
-        partial list sits there until something else happens to refresh it."""
+        """Record a successful dump, and while the symbol count is still
+        climbing line up another pass - servers keep indexing after they first
+        answer, so an early list is usually partial."""
         grew = len(items) > len(self._symbol_cache)
         self._symbol_dump = True
         self._symbol_dump_tries = 0
@@ -2915,11 +3022,8 @@ class LanguageServerClient:
                      f"retrying in {delay:.0f}s")
 
     def _warm_symbol_cache(self, delay=1.5):
-        """Fill the find-symbol cache in the background, without being asked.
-
-        The panel is only useful if it already knows the project, so the first
-        FindSymbol should not be the thing that goes and fetches it - nor should
-        the user have to run RefreshSymbols by hand."""
+        """Fill the find-symbol cache in the background, so the first
+        FindSymbol opens on a full list instead of triggering the fetch."""
         if not self._symbol_cache_enabled() or not self._symbol_cache_seconds():
             return
         self._symbol_warm_due = time.time() + delay
@@ -3035,9 +3139,11 @@ class LanguageServerClient:
                      f"{self._slow_ms_flag:.0f} ms")
             for name, (count, peak, _last) in worst[:5]:
                 self.log(f"      {name:<24} {count:>5} overrun(s), worst {peak:.0f} ms")
+        elif not self._slow_ms_flag:
+            self.log(f"  main-thread     : not measured (set "
+                     f"{self.name}.SlowMainThreadMs: 8 to report stutters)")
         else:
-            self.log(f"  main-thread     : nothing over {self._slow_ms_flag:.0f} ms"
-                     f"{' (guard off)' if not self._slow_ms_flag else ''}")
+            self.log(f"  main-thread     : nothing over {self._slow_ms_flag:.0f} ms")
         self.log(f"  symbol source   : {self._symbol_source()}"
                  f"{f' (scanning {self._scan_done}/{self._scan_total})' if self._scan_active else ''}")
         if not self._symbol_cache_enabled():
@@ -3486,6 +3592,9 @@ class LanguageServerClient:
             pass
 
     def _on_update(self, *args):
+        # The editor calls this every frame, so it is the authority on which
+        # thread is "the main thread" - cheaper than being wrong.
+        self._main_thread = threading.get_ident()
         # Phase timings, so an overrun says which part was slow rather than
         # just that the tick was. perf_counter is ~50ns; only phases that
         # actually cost something are recorded.
@@ -3494,6 +3603,8 @@ class LanguageServerClient:
         mark = [time.perf_counter()]
 
         def lap(label):
+            if not self._slow_ms_flag:
+                return
             t = time.perf_counter()
             ms = (t - mark[0]) * 1000.0
             mark[0] = t
@@ -3803,6 +3914,9 @@ class LanguageServerClient:
         a client the user hasn't turned on has zero impact - no event hooks, no
         server, no command/intercept handlers. Enabling it takes effect on the
         next 10x restart (when this runs again)."""
+        # This arrives via CallOnMainThread, so it is the editor's thread.
+        # Claim it before the first setting read below.
+        self._main_thread = threading.get_ident()
         if not self.is_enabled():
             self.log(f"disabled; set {self.name}.Enabled: true to turn it on "
                      f"(then restart 10x)")
@@ -3851,7 +3965,10 @@ class LanguageServerClient:
                 self.did_open(cur)
         except Exception:
             pass
-        self.log(f"registered (server: {' '.join(self._server_argv())})")
+        # The configured command, not the resolved path: resolving means a
+        # PATH scan, and _on_server_spawned logs the full argv anyway.
+        self.log(f"registered (server: "
+                 f"{self.setting('Command').strip() or self.default_command})")
 
     def unregister(self):
         """Undo register(): drop the editor hooks and shut the server down."""
