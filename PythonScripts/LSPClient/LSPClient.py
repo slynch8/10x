@@ -910,12 +910,16 @@ class LanguageServerClient:
         self._funclist_token = 0         # newest ListFunctions request
         self._funclist_file = ""         # file the function panel is showing
         self._funclist_rows = (None, [])  # (file, rows) for the open panel
+        self._funclist_filter = ""       # what is typed in that panel now
+        self._funclist_asked = None      # file we have a fetch outstanding for
         # Live find-symbol filtering (the panel's filter callback).
         self._getsym_token = 0           # newest workspace/symbol query
         self._getsym_sent = None         # query we last asked the server for
         self._getsym_rows = (None, [])   # (query, rows) most recent answer
         self._getsym_seen = 0.0          # last time the panel asked us
         self._getsym_forced = ""         # query from "<name> symbols <text>"
+        self._getsym_indexed = False     # has this server ever answered with rows
+        self._getsym_retry = ("", 0, 0.0)  # (query, attempts, when to re-ask)
         self._panel_file = ""            # file the panel was opened from
         self._argv_cache = None          # (Command setting, resolved argv)
         # Set once we know which thread the editor calls us on - NOT here:
@@ -1336,6 +1340,8 @@ class LanguageServerClient:
         self._symbol_cache = []
         self._symbol_cache_time = 0.0
         self._symbol_cache_inflight = False
+        self._getsym_indexed = False
+        self._getsym_retry = ("", 0, 0.0)
         self._symbol_dump = None
         self._symbol_dump_tries = 0
         self._symbol_warm_due = 0.0
@@ -2477,12 +2483,17 @@ class LanguageServerClient:
             if path_to_uri(filename) in self._skipped_docs:
                 return
             self._funclist_file = filename
-            # The file's functions cannot change while the panel is up, so
-            # answer later keystrokes from what the first one fetched.
-            got_file, got_rows = self._funclist_rows
-            if got_file == filename:
-                self._present_functions(got_rows)
+            self._funclist_filter = (filter_text or "").strip()
+            # The list itself cannot change while the panel is up, so fetch
+            # once and re-filter it here on every keystroke.
+            if self._funclist_rows[0] == filename:
+                self._present_functions(
+                    self._match_rows(self._funclist_rows[1],
+                                     self._funclist_filter))
                 return
+            if self._funclist_asked == filename:
+                return          # already asked; the reply will fill the panel
+            self._funclist_asked = filename
             self.sync_current(force=True)
             self._funclist_token += 1
             token = self._funclist_token
@@ -2520,6 +2531,10 @@ class LanguageServerClient:
             return
         if error or not result:
             N10X.Editor.SetStatusBarText(f"{self.name}: no symbols found")
+            # Record the (empty) answer, or the fetch guard blocks every later
+            # keystroke in this session.
+            self._funclist_rows = (filename, [])
+            self._funclist_asked = None
             return
         # textDocument/documentSymbol returns either a nested DocumentSymbol[]
         # (each with a "range"/"selectionRange" and possibly "children") or a
@@ -2569,7 +2584,8 @@ class LanguageServerClient:
         # SymbolInformation only) rather than jump to the wrong line.
         rows = [it for it in items if it[1] == default_path]
         self._funclist_rows = (filename, rows)
-        self._present_functions(rows)
+        self._funclist_asked = None
+        self._present_functions(self._match_rows(rows, self._funclist_filter))
 
     def _symbol_items(self, result):
         """A workspace/symbol reply as sorted (name, path, line, char) rows.
@@ -3203,6 +3219,8 @@ class LanguageServerClient:
             return
         self._funclist_file = filename
         self._funclist_rows = (None, [])     # this session re-fetches once
+        self._funclist_filter = ""
+        self._funclist_asked = None
         # 10x asks us for the list on open and on every filter change, so the
         # panel never waits on us.
         try:
@@ -3222,6 +3240,7 @@ class LanguageServerClient:
         # last one, so previous answers for a filter are not to be trusted.
         self._getsym_sent = None
         self._getsym_rows = (None, [])
+        self._getsym_retry = ("", 0, 0.0)
         # A query typed as "<Name> symbols <text>" seeds the panel until the
         # user types their own filter.
         self._getsym_forced = (query or "").strip()
@@ -3524,6 +3543,7 @@ class LanguageServerClient:
                 if self._ready():
                     action()
                 lap("retry")
+            self._pump_symbol_retry(now)
             # Collect anything a worker thread finished, then feed the scan.
             self._drain_background()
             lap("background")
@@ -3776,7 +3796,10 @@ class LanguageServerClient:
     # -- live find-symbol filtering ----------------------------------------
 
     _GETSYM_LIMIT = 300              # rows handed back for one filter
-    _GETSYM_FRESH = 5.0              # how long "the panel is open" stays true
+    # How long after the panel last asked us we still consider it open. Only a
+    # guard against writing into a panel the user closed; the setter does not
+    # open one, so err generous - a slow server must not lose its answer.
+    _GETSYM_FRESH = 60.0
 
     def _on_get_symbols(self, filter_text=None, symbols=None, *args):
         """10x asks us for symbols each time the find-symbol filter changes.
@@ -3804,9 +3827,8 @@ class LanguageServerClient:
                 # Results are pushed when they arrive - nothing to wait for.
                 self._query_symbols(query)
             if not rows:
-                # Nothing yet - say so rather than looking like "no matches".
-                rows = self._pending_row(self._waiting_message())
-                how = "waiting"
+                rows = self._status_rows(query)
+                how = "status"
             rows = rows[:self._GETSYM_LIMIT]
             self._set_symbol_rows(rows)
             symbols.extend(rows)
@@ -3845,12 +3867,30 @@ class LanguageServerClient:
             return []
         return [(message, path, 0, 0)]
 
-    def _waiting_message(self):
+    def _waiting_message(self, query=""):
         """What to say while there is nothing to show yet."""
         if self._scan_active and self._scan_total:
             return (f"[{self.name}] scanning project - {self._scan_done} of "
                     f"{self._scan_total} files...")
-        return f"[{self.name}] searching project symbols, please wait..."
+        if query:
+            return f"[{self.name}] searching for '{query}'..."
+        return f"[{self.name}] searching project, please wait..."
+
+    def _status_rows(self, query):
+        """The row to show when there are no symbols: still searching, or the
+        server answered and found none. Never push an empty list - the panel
+        then shows nothing at all and does not redraw until the filter
+        changes."""
+        answered, _rows = self._getsym_rows
+        if query and answered == query:
+            if self._getsym_retry[0] == query:
+                # Empty so far, but the server has never returned a symbol -
+                # it is most likely still indexing, so keep asking.
+                return self._pending_row(f"[{self.name}] indexing - no matches "
+                                         f"for '{query}' yet...")
+            return self._pending_row(f"[{self.name}] no symbols matching "
+                                     f"'{query}'")
+        return self._pending_row(self._waiting_message(query))
 
     def _owns_symbol_panel(self):
         """Whether this client should answer for the panel now. Several clients
@@ -3864,16 +3904,96 @@ class LanguageServerClient:
         # the one it was opened from is the best answer we have.
         return self.handles(cur or self._panel_file)
 
+    @staticmethod
+    def _rank_rows(rows, query):
+        """Best matches first, using the same scoring as completion: a prefix
+        beats a word start beats mid-word. Servers do not rank for us -
+        rust-analyzer returns MovingSphere before Sphere for "sphere"."""
+        if not query:
+            return rows
+        q = query.lower()
+        ranked = []
+        for row in rows:
+            score = fuzzy_score(row[0], q)
+            # Rows the server matched some other way go last, in their order.
+            ranked.append(((0,) + score if score else (1, 0, 0), row))
+        ranked.sort(key=lambda pair: pair[0])
+        return [row for _key, row in ranked]
+
+    # Most we collect for one keystroke, and the largest cache we will run the
+    # subsequence pass over. The cache is sorted by name, so bounding either
+    # pass by position would hide whole stretches of the alphabet - the dear
+    # pass is skipped outright instead.
+    _MATCH_CANDIDATES = 1500
+    _FUZZY_MAX_ROWS = 20000
+
+    @staticmethod
+    def _match_rows(rows, query):
+        """Rows matching `query`, best first. Substring hits are collected
+        first because that test runs at C speed; the subsequence scan only runs
+        when they are too few to be worth showing."""
+        if not query:
+            return rows
+        q = query.lower()
+        cap = LanguageServerClient._MATCH_CANDIDATES
+        hits = []
+        for r in rows:
+            if q in r[0].lower():
+                hits.append(r)
+                if len(hits) >= cap:
+                    break
+        if len(hits) < 50 and len(rows) <= LanguageServerClient._FUZZY_MAX_ROWS:
+            seen = {id(r) for r in hits}
+            for r in rows:
+                if id(r) not in seen and fuzzy_score(r[0], q):
+                    hits.append(r)
+                    if len(hits) >= cap:
+                        break
+        return LanguageServerClient._rank_rows(hits, query)
+
     def _rows_for_query(self, query):
         """Best rows we can produce for `query` without waiting on the server:
         the last answer if it was for this query, else the cache filtered."""
         got_q, got_rows = self._getsym_rows
         if query and got_q == query:
             return got_rows
-        if not query:
-            return self._symbol_cache
-        needle = query.lower()
-        return [r for r in self._symbol_cache if needle in r[0].lower()]
+        return self._match_rows(self._symbol_cache, query)
+
+    # A server still building its index answers at once with nothing, and the
+    # panel only calls us again when the filter text changes.
+    _GETSYM_RETRIES = (1.0, 2.0, 4.0, 8.0, 15.0)
+
+    def _schedule_symbol_retry(self, query, got_rows):
+        """Arrange to re-ask an empty query, until the server proves indexed."""
+        if got_rows:
+            self._getsym_indexed = True
+            self._getsym_retry = ("", 0, 0.0)
+            return
+        # A filled cache is equally good proof that the index is up.
+        if self._getsym_indexed or self._symbol_cache:
+            return                      # indexed and empty means empty
+        prev_q, tries, _due = self._getsym_retry
+        tries = tries + 1 if query == prev_q else 1
+        if tries > len(self._GETSYM_RETRIES):
+            self._getsym_retry = ("", 0, 0.0)   # out of patience; empty it is
+            return
+        self._getsym_retry = (query, tries,
+                              time.time() + self._GETSYM_RETRIES[tries - 1])
+
+    def _pump_symbol_retry(self, now):
+        query, tries, due = self._getsym_retry
+        if not query or not due or now < due:
+            return
+        self._getsym_retry = (query, tries, 0.0)
+        if now - self._getsym_seen > self._GETSYM_FRESH or not self._ready():
+            return
+        if self._getsym_sent != query:
+            # The user typed on; that query owns the panel and will arrange its
+            # own retry if it also comes back empty.
+            self._getsym_retry = ("", 0, 0.0)
+            return
+        self._getsym_sent = None        # or the repeat query is skipped
+        self._query_symbols(query)
 
     def _query_symbols(self, query):
         """Ask the server for symbols matching `query`, superseding any older
@@ -3886,17 +4006,25 @@ class LanguageServerClient:
         self._send_request(
             "workspace/symbol", {"query": query},
             lambda r, e: self._on_symbol_query(r, e, query, token),
-            transform=self._symbol_items)
+            transform=lambda res, q=query: self._rank_rows(
+                self._symbol_items(res), q))
 
     def _on_symbol_query(self, result, error, query, token):
         if error or token != self._getsym_token:
             return
         rows = result or []
         self._getsym_rows = (query, rows)
+        self._schedule_symbol_retry(query, bool(rows))
         # Only while the panel is plainly still up, so a late reply cannot
         # write into one the user has closed.
-        if time.time() - self._getsym_seen <= self._GETSYM_FRESH:
-            self._set_symbol_rows(rows[:self._GETSYM_LIMIT])
+        if time.time() - self._getsym_seen > self._GETSYM_FRESH:
+            return
+        self._set_symbol_rows(rows[:self._GETSYM_LIMIT]
+                              if rows else self._status_rows(query))
+        if self._verbose():
+            self.log(f"pushed {len(rows)} row(s) for {query!r} "
+                     f"{(time.time() - self._getsym_seen):.2f}s after the panel "
+                     f"last asked")
 
     def _on_mouse_hover(self, pos):
         self.hover(pos)
