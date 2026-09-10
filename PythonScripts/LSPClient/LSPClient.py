@@ -83,10 +83,7 @@
 #                           file but costs a request per file (paced across
 #                           update ticks, files closed again behind it);
 #                           "auto" - workspace/symbol, falling back to the scan
-#                           once the server's index proves empty. The default
-#                           is per language (Odin ships "documents": OLS omits
-#                           the root package from its index and caps results at
-#                           100).
+#                           once the server's index proves empty (default).
 #     <name>.SymbolCache    "true"/"false" - keep a project-wide symbol cache
 #                           for the find-symbol panel (default true). The panel
 #                           filters the list it is given, so it has to be handed
@@ -2721,13 +2718,9 @@ class LanguageServerClient:
 
     # -- project-wide documentSymbol scan ---------------------------------
     #
-    # workspace/symbol is one request, but it is only as good as the server's
-    # project index - OLS, for one, leaves the root package out of its index
-    # entirely and caps results at 100, so a single-package Odin project gets
-    # nothing at all. documentSymbol has no such gap: it reports every symbol
-    # in whatever file it is asked about. The cost is a request per file, and
-    # the file has to be open on the server first, so the scan is paced across
-    # update ticks and closes each file behind it.
+    # workspace/symbol is only as good as the server's index, and servers cap
+    # it (OLS at 100). documentSymbol has no cap but needs the file open on the
+    # server, so the scan is paced across ticks and closes each file behind it.
     _SCAN_POPS_PER_TICK = 8            # files handed to the server per tick
     # Requests outstanding. Kept low: each one is a file open on the server,
     # and a wider window drives its peak memory up sharply.

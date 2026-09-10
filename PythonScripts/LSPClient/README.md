@@ -74,16 +74,15 @@ when their `Enabled` setting is `true`.
 
   **Where the list comes from** is `SymbolSource`. `workspace/symbol` is one
   request, but it only ever returns what the server's project index holds, and
-  that varies a lot: OLS omits the workspace root package entirely and caps
-  results at 100, so a single-package Odin project gets nothing from it. The
+  servers cap how much of it they return (OLS: 100 results). The
   `documents` source instead asks each file in the project for its own symbols
   (`textDocument/documentSymbol`), which has neither gap. It costs a request per
   file, so the scan is paced across update ticks - a few files at a time, at
   most four requests outstanding, and a cap on how much file text is read per
   tick - and files the scan opened are closed again behind it. Files you have
-  open are left alone. Odin defaults to `documents`; everything else defaults to
-  `auto`, which uses `workspace/symbol` and falls back to the scan only if that
-  turns out to be empty.
+  open are left alone. Every language defaults to `auto`, which uses
+  `workspace/symbol` and falls back to the scan only if that turns out to be
+  empty.
 
   Servers index in the background and answer as soon as they have *something*,
   so early replies are partial or empty. Both cases are handled: an empty reply
@@ -161,7 +160,7 @@ the client you're configuring (`PythonLSP`, `RustLSP`, `OdinLSP`, `JaiLSP`,
 | `<name>.ServerEnv`          | `KEY=VALUE; KEY2=VALUE2`        | *(none)*           | Environment variables for the server process, merged over the editor's environment. Mainly for tuning servers that run on a VM - see [memory use](#memory-use). |
 | `<name>.SlowMainThreadMs`   | integer (ms)                    | `0` (off)          | Diagnostic. Set to a millisecond budget (`8` is half a 60fps frame) and the client logs any of its editor callbacks that overran it, naming the phase of the update tick responsible. `<Name> status` lists the worst offenders seen. Off by default; useful when the editor feels stuttery and you want to know whether the LSP client is the cause. |
 | `<name>.SymbolFilterMinChars` | integer                      | `3`                | Only ask the server once the filter is this long; shorter filters are answered from the cache, so the blocking wait is spent only on queries selective enough to be worth it. Ignored when there is no cache to fall back on. |
-| `<name>.SymbolSource`       | `auto` / `workspace` / `documents` | *(per language)* | Where the find-symbol list comes from. `workspace` = one `workspace/symbol` request, limited to whatever the server's project index holds. `documents` = scan the project's files with `documentSymbol`, which sees every symbol in every file but costs a request per file. `auto` = try `workspace/symbol`, fall back to the scan when its index proves empty. Defaults to `auto` except **Odin**, which ships `documents`. |
+| `<name>.SymbolSource`       | `auto` / `workspace` / `documents` | `auto` | Where the find-symbol list comes from. `workspace` = one `workspace/symbol` request, limited to whatever the server's project index holds. `documents` = scan the project's files with `documentSymbol`, which sees every symbol in every file but costs a request per file. `auto` = try `workspace/symbol`, fall back to the scan when its index proves empty. |
 | `<name>.SymbolCache`        | `true` / `false`                | `true`             | Keep a project-wide symbol cache for the find-symbol panel. The panel filters the list it is handed, so it needs every symbol in the project each time it opens - hence the cache. Set `false` to skip that memory and the background refreshes; **find-symbol turns off with it** - `FindSymbol` is still intercepted (so 10x doesn't open its own empty-looking panel) but, like `ListSymbols` / `RefreshSymbols`, only says so in the status bar. `<Name> symbols <text>` still works. |
 | `<name>.SymbolCacheSeconds` | integer (seconds)               | `60`               | How long that cache stays fresh. Once older than this the panel is still served instantly, then the cache refreshes in the background (a save refreshes it too). `0` keeps find-symbol working but holds nothing between opens - every open then waits on the server, and `RefreshSymbols` has nothing to rebuild. Ignored when `SymbolCache` is `false`. |
 | `<name>.LogVerbose`         | `true` / `false`                | `false`            | Log server traffic to the output panel. |
