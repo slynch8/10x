@@ -1,7 +1,6 @@
 '''
 RemedyBG debugger integration for 10x (10xeditor.com) 
 RemedyBG: https://remedybg.handmade.network/ (should be above 0.3.8)
-Version: 0.13.0
 Original Script author: septag@discord / septag@pm.me
 
 SETUP:
@@ -42,6 +41,9 @@ RemedyBG sessions:
     and it will load that next time instead of starting a new session
 
 History:
+  0.13.2
+    - Removed VisualStudioSync setting override
+
   0.13.1
     - Quotes are now stripped of the value in DebuggerExe, inaddition to spaces
     
@@ -259,13 +261,6 @@ class RDBG_Options():
         else:
             print('RDBG: RemedyBG debugging is disabled, because no valid debugger is found for "DebuggerExe" setting')
             
-        gOptionsOverride = True
-        if self.hook_calls:
-            Editor.OverrideSetting('VisualStudioSync', 'false')
-        else:
-            Editor.RemoveSettingOverride('VisualStudioSync')
-        gOptionsOverride = False
-
         keep_session = Editor.GetSetting("RemedyBG.KeepSessionOnActiveChange")
         if keep_session and keep_session.lower() == 'true':
             self.keep_session = True
@@ -943,7 +938,6 @@ class RDBG_Session:
 
     def update(self)->bool:
         global gOptions
-        global gOptionsOverride
         global gProcessCache
 
         tm:float = time.time()
@@ -1138,11 +1132,9 @@ def RDBG_StopDebugging():
 
 def RDBG_Reset():
     global gSession
-    global gOptionsOverride
     
     Editor.ClearStatusBarColour()
     Editor.ClearDebuggerStepLine()
-    gOptionsOverride = False
 
     if gSession is not None:
         gSession.stop()
@@ -1245,8 +1237,7 @@ def _RDBG_Update():
 
 def _RDBG_SettingsChanged():
     global gOptions
-    if not gOptionsOverride:
-        gOptions = RDBG_Options()
+    gOptions = RDBG_Options()
 
 def _RDBG_StartDebugging()->bool:
     if gOptions.hook_calls:
