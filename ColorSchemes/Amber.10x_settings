@@ -223,6 +223,12 @@ Editor.BraceDepth5:                               224, 192, 132
 # Brace/bracket colour at depth 6
 Editor.BraceDepth6:                               160, 158, 150
 
+# Error underline colour
+Editor.ErrorUnderline:                            default
+
+# Warning underline colour
+Editor.WarningUnderline:                          default
+
 # Build error
 Build.BuildError:                                 220, 130, 110
 
@@ -249,6 +255,12 @@ Html.Operator:                                    160, 158, 150
 
 # false setting valuea in a 10x settings file
 10x.Setting.False:                                226, 92, 72
+
+# Terminal background colour
+Terminal.Background:                              default
+
+# Terminal foreground colour
+Terminal.Foreground:                              default
 
 # Text editor text colour
 Language.Text:                                    175, 173, 165
@@ -393,3 +405,4 @@ Language.CodeBlock:                               175, 173, 165
 
 # 10x settings file keywords
 10x.Setting.Keyword:                              236, 150, 48
+

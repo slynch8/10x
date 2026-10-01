@@ -256,6 +256,12 @@ Html.Operator:                                    190, 180, 165
 # false setting valuea in a 10x settings file
 10x.Setting.False:                                220, 90, 70
 
+# Terminal background colour
+Terminal.Background:                              42, 26, 18
+
+# Terminal foreground colour
+Terminal.Foreground:                              230, 220, 205
+
 # Text editor text colour
 Language.Text:                                    230, 220, 205
 
@@ -400,8 +406,3 @@ Language.CodeBlock:                               140, 210, 210
 # 10x settings file keywords
 10x.Setting.Keyword:                              165, 215, 140
 
-# Terminal background colour
-Terminal.Background:							  42, 26, 18
-
-# Terminal foreground colour
-Terminal.Foreground:							  230, 220, 205
