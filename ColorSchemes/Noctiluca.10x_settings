@@ -269,7 +269,7 @@ Language.Text:                                    230, 242, 250
 Language.Background:                              6, 4, 10
 
 # Number
-Language.Number:                                  255, 100, 180
+Language.Number:                                  200, 140, 255
 
 # Language Keyword
 Language.Keyword:                                 90, 225, 255
@@ -284,7 +284,7 @@ Language.NewDeleteKeyword:                        255, 110, 120
 Language.UsingKeyword:                            90, 225, 255
 
 # Language literal keyword
-Language.LiteralKeyword:                          255, 100, 180
+Language.LiteralKeyword:                          200, 140, 255
 
 # Language Type
 Language.Type:                                    95, 205, 200
