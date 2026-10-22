@@ -41,6 +41,9 @@ RemedyBG sessions:
     and it will load that next time instead of starting a new session
 
 History:
+  0.13.3 
+    - Fix version checking
+
   0.13.2
     - Removed VisualStudioSync setting override
 
@@ -1304,16 +1307,40 @@ def _RDBG_OpenCurrentFileInDebugger(filename, line)->bool:
     else:
         return False
 
+def _RDBG_CheckVersion(version, min_version):
+    version_split = version.split('.')
+    min_version_split = min_version.split('.')
+
+    major_min = int(min_version_split[0])
+    minor_min = int(min_version_split[1])
+    patch_min = int(min_version_split[2])
+
+    major = int(version_split[0])
+    minor = int(version_split[1])
+    patch = int(version_split[2])
+
+    if major < major_min:
+        return False
+    elif major > major_min:
+        return True
+
+    if minor < minor_min:
+        return False
+    elif minor > minor_min:
+        return True
+
+    if (patch < patch_min):
+        return False
+    else:
+        return True
+        
+
 def InitialiseRemedy():
     global gOptions
     gOptions = RDBG_Options()
 
-    version = Editor.GetVersion().split('.')
-    min_version = RDBG_MIN_10x_VERSION.split('.')
-    if  (int(version[0]) < int(min_version[0])) or \
-        (int(version[1]) < int(min_version[1])) or \
-        (int(version[2]) < int(min_version[2])):
-        Editor.ShowMessageBox(RDBG_TITLE, "This version of RemedyBG plugin doesn't meet the minimum version requirement for 10x (v{})".format(RDBG_MIN_10x_VERSION))
+    if not _RDBG_CheckVersion(Editor.GetVersion(), RDBG_MIN_10x_VERSION):
+        Editor.ShowMessageBox(RDBG_TITLE, "This version of RemedyBG plugin doesn't meet the minimum version requirement for 10x (v{} < v{})".format(Editor.GetVersion(), RDBG_MIN_10x_VERSION))
 
     Editor.AddBreakpointAddedFunction(_RDBG_AddBreakpoint)
     Editor.AddBreakpointRemovedFunction(_RDBG_RemoveBreakpoint)
