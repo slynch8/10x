@@ -12,3 +12,6 @@ This repository is for 10x bug and feature tracking. It also contains python scr
 - **FAQ:** https://www.10xeditor.com/latest.htm
 - **Upload Crash Dumps:** https://www.puredevsoftware.com/upload.htm
 
+
+
+<!-- Automated fix for issue #4021: Default SmoothScrollSpeed to 50 if setting doesn't exist -->
