@@ -21,7 +21,7 @@ Note that this script only works with RemedyBG version 0.3.8 and above. Some fea
 
 - First, Copy the script file (RemedyBG.py) in to `%appdata%\10x\PythonScripts\` directory or just run `RemedyBG_Install.bat` and then restart 10x editor.
 - By this time, you should be able to see `RDBG_` family of commands in command panel (CTRL+SHIFT+X).
-- Set `DebuggerExe` setting in your workspace settings file to the correct path of your remedybg.exe binary
+- To activate and hook RemedyBG to your project. Just set `DebuggerExe` setting to remedybg.exe path. Either in Settings.10x_settings, or LocalSettings.10x_settings or your project's ProjectName.10x_settings file. If debugger path exists, this script will hook itself to the editor and act as the default debugger.
 - Every time you run debugging commands like "Start debugger (F5)" a new RemedyBG session will be opened. If you wish to keep visual-studio debugger integration, you can just assign different shortcuts to `RDBG_StartDebugging`/`RDBG_StopDebugging` and `RDBG_RestartDebugging` commands.
 
 ## Additional settings and commands
