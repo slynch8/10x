@@ -1867,6 +1867,8 @@ class LanguageServerClient:
         """
         if self.setting("Diagnostics") == "false":
             return
+        if N10X.Editor.GetBuildStatus()[0] == "started":
+            return
         try:
             N10X.Editor.ClearBuildOutput()
         except AttributeError:
